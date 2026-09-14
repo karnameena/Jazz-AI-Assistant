@@ -15,11 +15,18 @@ function App() {
   const [messages, setMessages] = useState<Message[]>(initialMessages);
   const [input, setInput] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const sendMessage = () => {
+  const sendMessage = async () => {
     const value = input.trim(); if (!value) return;
     const time = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
     setMessages(current => [...current, { id: Date.now(), sender: "user", text: value, time }]); setInput("");
-    setTimeout(() => setMessages(current => [...current, { id: Date.now() + 1, sender: "jazz", text: "I received your message, Mama. I'm still being connected to my AI brain.", time: new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) }]), 700);
+    try {
+      const response = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: value }) });
+      if (!response.ok) throw new Error("API request failed");
+      const data = await response.json();
+      setMessages(current => [...current, { id: Date.now() + 1, sender: "jazz", text: data.assistant || "Jazz is ready.", time: new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) }]);
+    } catch {
+      setMessages(current => [...current, { id: Date.now() + 1, sender: "jazz", text: "I couldn't reach the Jazz API. Start the API service on port 8787 and try again.", time: new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) }]);
+    }
   };
   return <div className="jazz-app">
     <div className="background-glow glow-one" /><div className="background-glow glow-two" />
