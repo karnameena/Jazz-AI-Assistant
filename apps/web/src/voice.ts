@@ -9,7 +9,7 @@ export class JazzVoice {
   private recognition: any = null;
   private callbacks: VoiceCallbacks;
   private wakeEnabled = true;
-  private preferredVoice: SpeechSynthesisVoice | null = null;
+  private selectedVoice: SpeechSynthesisVoice | null = null;
 
   constructor(callbacks: VoiceCallbacks = {}) {
     this.callbacks = callbacks;
@@ -24,17 +24,10 @@ export class JazzVoice {
     this.recognition.interimResults = true;
     this.recognition.continuous = false;
 
-    if ("speechSynthesis" in window) {
-      this.loadFriendlyFemaleVoice();
-      window.speechSynthesis.addEventListener("voiceschanged", this.loadFriendlyFemaleVoice);
-    }
-
     this.recognition.onstart = () => this.callbacks.onState?.("listening");
     this.recognition.onend = () => this.callbacks.onState?.("idle");
     this.recognition.onerror = (event: any) => {
-      if (event?.error !== "aborted") {
-        this.callbacks.onError?.(event?.error || "Voice recognition failed");
-      }
+      if (event?.error !== "aborted") this.callbacks.onError?.(event?.error || "Voice recognition failed");
       this.callbacks.onState?.("idle");
     };
     this.recognition.onresult = (event: any) => {
@@ -48,95 +41,57 @@ export class JazzVoice {
       if (interim) this.callbacks.onInterim?.(interim.trim());
       if (finalText.trim()) this.callbacks.onFinal?.(this.stripWakePhrase(finalText.trim()));
     };
+
+    this.refreshVoice();
+    if ("speechSynthesis" in window) window.speechSynthesis.addEventListener("voiceschanged", () => this.refreshVoice());
   }
 
-  isSupported() {
-    return Boolean(this.recognition);
+  private refreshVoice() {
+    if (!("speechSynthesis" in window)) return;
+    const voices = window.speechSynthesis.getVoices();
+    const english = voices.filter(voice => /^(en|en[-_])/i.test(voice.lang));
+    const preferred = english.find(voice => /female|samantha|zira|aria|jenny|susan|google us english|google uk english/i.test(voice.name));
+    this.selectedVoice = preferred || english.find(voice => /en[-_]IN|india/i.test(voice.lang) || /google/i.test(voice.name)) || english[0] || voices[0] || null;
   }
 
-  setWakePhraseEnabled(enabled: boolean) {
-    this.wakeEnabled = enabled;
-  }
+  isSupported() { return Boolean(this.recognition); }
+  setWakePhraseEnabled(enabled: boolean) { this.wakeEnabled = enabled; }
 
   start() {
     if (!this.recognition) {
       this.callbacks.onError?.("Speech recognition is not supported by this browser.");
       return;
     }
-    try {
-      this.recognition.start();
-    } catch {
-      // Browsers throw when start() is called while recognition is already active.
-    }
+    try { this.recognition.start(); } catch { /* recognition is already active */ }
   }
 
-  stop() {
-    this.recognition?.stop();
-  }
+  stop() { this.recognition?.stop(); }
 
   speak(text: string) {
     if (!("speechSynthesis" in window)) {
       this.callbacks.onError?.("Speech output is not supported by this browser.");
       return;
     }
-
+    this.refreshVoice();
     window.speechSynthesis.cancel();
-    this.loadFriendlyFemaleVoice();
-
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = "en-IN";
+    utterance.voice = this.selectedVoice;
+    utterance.lang = this.selectedVoice?.lang || "en-IN";
     utterance.rate = 0.96;
     utterance.pitch = 1.08;
     utterance.volume = 1;
-    if (this.preferredVoice) utterance.voice = this.preferredVoice;
-
     utterance.onstart = () => this.callbacks.onState?.("speaking");
     utterance.onend = () => this.callbacks.onState?.("idle");
-    utterance.onerror = () => this.callbacks.onState?.("idle");
     window.speechSynthesis.speak(utterance);
   }
 
-  cancelSpeech() {
-    window.speechSynthesis?.cancel();
-  }
-
-  private loadFriendlyFemaleVoice = () => {
-    if (!("speechSynthesis" in window)) return;
-
-    const voices = window.speechSynthesis.getVoices();
-    if (!voices.length) return;
-
-    const english = voices.filter(voice => /^en(-|_)/i.test(voice.lang));
-    const candidates = english.length ? english : voices;
-
-    const preferredNames = [
-      "Microsoft Jenny Online (Natural)",
-      "Microsoft Jenny",
-      "Microsoft Aria Online (Natural)",
-      "Microsoft Aria",
-      "Google UK English Female",
-      "Google US English",
-      "Samantha",
-      "Karen",
-      "Moira",
-      "Tessa",
-      "Zira"
-    ];
-
-    this.preferredVoice =
-      candidates.find(voice => preferredNames.some(name => voice.name.toLowerCase() === name.toLowerCase())) ||
-      candidates.find(voice => /female|woman|jenny|aria|samantha|karen|moira|tessa|zira/i.test(voice.name)) ||
-      candidates.find(voice => /en[-_]IN/i.test(voice.lang)) ||
-      candidates[0] ||
-      null;
-  };
+  cancelSpeech() { window.speechSynthesis?.cancel(); }
 
   private stripWakePhrase(text: string) {
     if (!this.wakeEnabled) return text;
     const normalized = text.replace(/[,.!?]/g, "").trim();
     const wake = /^hey\s+jazz\b\s*/i;
-    if (wake.test(normalized)) return normalized.replace(wake, "").trim();
-    return normalized;
+    return wake.test(normalized) ? normalized.replace(wake, "").trim() : normalized;
   }
 }
 
