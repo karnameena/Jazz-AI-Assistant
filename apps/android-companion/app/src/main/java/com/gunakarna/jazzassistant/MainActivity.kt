@@ -1,18 +1,18 @@
 package com.gunakarna.jazzassistant
 
+import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.provider.Settings
+import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
-import android.widget.Button
-import androidx.appcompat.app.AppCompatActivity
 import java.util.UUID
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : Activity() {
     private val prefs by lazy { getSharedPreferences("jazz", Context.MODE_PRIVATE) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
