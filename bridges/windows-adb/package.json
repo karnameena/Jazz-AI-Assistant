@@ -1,0 +1,6 @@
+{
+  "name": "@jazz/windows-adb-bridge",
+  "private": true,
+  "type": "module",
+  "scripts": {"start": "node adb-bridge.mjs"}
+}
