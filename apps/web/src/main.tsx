@@ -9,6 +9,7 @@ import {
 import { createRoot } from "react-dom/client";
 import { JazzVoice } from "./voice";
 import "./styles.css";
+import "./chat-overrides.css";
 
 interface Message { id: number; sender: "user" | "jazz"; text: string; time: string; }
 interface ReminderItem { id: string; title: string; time: string; }
