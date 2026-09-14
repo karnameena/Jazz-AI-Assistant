@@ -6,6 +6,7 @@ const memories = [];
 const reminders = [];
 
 const tools = [
+  { name: "time", description: "Get the current server/local time", requiresConfirmation: false },
   { name: "weather", description: "Get weather from an approved provider", requiresConfirmation: false },
   { name: "android", description: "Execute an explicitly authorized Android action through the configured bridge", requiresConfirmation: true },
   { name: "pc", description: "Execute an explicitly authorized PC action", requiresConfirmation: true }
@@ -31,11 +32,24 @@ function parseJson(req) {
   });
 }
 
+function getCurrentTime() {
+  return new Intl.DateTimeFormat("en-IN", {
+    timeZone: "Asia/Kolkata",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true
+  }).format(new Date());
+}
+
 function assistantReply(message) {
   const text = String(message).trim();
   const lower = text.toLowerCase();
 
   if (!text) return "Tell me what you need, Mama.";
+  if (/\b(what('?s| is)?\s+the\s+)?time\b/.test(lower) || /\bcurrent\s+time\b/.test(lower)) {
+    return `Mama, the current time in India is ${getCurrentTime()}.`;
+  }
   if (lower.includes("weather")) {
     return "Weather integration is ready for an approved provider. Connect a weather provider next and Jazz can return live conditions.";
   }
@@ -65,7 +79,7 @@ const server = http.createServer(async (req, res) => {
 
   try {
     if (req.method === "GET" && req.url === "/health") {
-      sendJson(res, 200, { ok: true, service: "jazz-api", version: "0.3.0" });
+      sendJson(res, 200, { ok: true, service: "jazz-api", version: "0.4.0" });
       return;
     }
 
@@ -76,6 +90,11 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && req.url === "/api/devices") {
       sendJson(res, 200, { ok: true, items: devices });
+      return;
+    }
+
+    if (req.method === "GET" && req.url === "/api/time") {
+      sendJson(res, 200, { ok: true, time: getCurrentTime(), timeZone: "Asia/Kolkata" });
       return;
     }
 
