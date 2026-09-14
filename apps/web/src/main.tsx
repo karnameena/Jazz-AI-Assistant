@@ -1,59 +1,31 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
-  Bell,
-  CalendarDays,
-  Check,
-  ChevronDown,
-  FileText,
-  Globe,
-  Laptop,
-  Menu,
-  MessageSquare,
-  Mic,
-  MoreVertical,
-  Paperclip,
-  Phone,
-  Plus,
-  Send,
-  Settings,
-  Smartphone,
-  Sun,
-  Volume2,
-  Zap
+  Bell, CalendarDays, Check, ChevronDown, FileText, Globe, Laptop, Menu,
+  MessageSquare, Mic, Moon, Paperclip, Phone, Plus, Send, Settings,
+  Smartphone, Sun, Volume2, Zap
 } from "lucide-react";
 import { JazzVoice } from "./voice";
 import "./styles.css";
 
-interface Message {
-  id: number;
-  sender: "user" | "jazz";
-  text: string;
-  time: string;
+interface Message { id: number; sender: "user" | "jazz"; text: string; time: string; }
+interface ReminderItem { id: string; title: string; time: string; }
+interface DeviceItem { id: string; name: string; kind: string; status: string; bridge: boolean; }
+type DayMode = "morning" | "afternoon" | "evening" | "night";
+
+function getDayMode(hour = new Date().getHours()): DayMode {
+  if (hour >= 5 && hour < 12) return "morning";
+  if (hour >= 12 && hour < 17) return "afternoon";
+  if (hour >= 17 && hour < 21) return "evening";
+  return "night";
 }
-
-interface ReminderItem {
-  id: string;
-  title: string;
-  time: string;
+function greetingFor(mode: DayMode) {
+  if (mode === "morning") return { title: "Good Morning, Mama 👋", subtitle: "How can I help you today?" };
+  if (mode === "afternoon") return { title: "Good Afternoon, Mama 👋", subtitle: "How is your day going? What can I do for you?" };
+  if (mode === "evening") return { title: "Good Evening, Mama 👋", subtitle: "I’m here with you. What would you like to do?" };
+  return { title: "Good Night, Mama 👋", subtitle: "I’m still here. What do you need before you rest?" };
 }
-
-interface DeviceItem {
-  id: string;
-  name: string;
-  kind: string;
-  status: string;
-  bridge: boolean;
-}
-
-const initialMessages: Message[] = [
-  { id: 1, sender: "jazz", text: "Hey Mama 👋 I’m ready. Tap the microphone or say “Hey Jazz” and I’ll listen.", time: "Now" }
-];
-
-function nowTime() {
-  return new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-}
-
+function nowTime() { return new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }); }
 async function apiJson(path: string, options?: RequestInit) {
   const response = await fetch(path, options);
   const data = await response.json();
@@ -62,175 +34,135 @@ async function apiJson(path: string, options?: RequestInit) {
 }
 
 function App() {
-  const [messages, setMessages] = useState<Message[]>(initialMessages);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [reminders, setReminders] = useState<ReminderItem[]>([]);
   const [devices, setDevices] = useState<DeviceItem[]>([]);
   const [input, setInput] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [voiceState, setVoiceState] = useState<"idle" | "listening" | "speaking" | "unsupported">("idle");
+  const [voiceTranscript, setVoiceTranscript] = useState("");
+  const [profileImage, setProfileImage] = useState<string>(() => localStorage.getItem("jazz-profile-image") || "");
+  const [dayMode, setDayMode] = useState<DayMode>(() => getDayMode());
   const voiceRef = useRef<JazzVoice | null>(null);
+  const messagesRef = useRef<HTMLDivElement | null>(null);
+  const profileInputRef = useRef<HTMLInputElement | null>(null);
+  const greeting = greetingFor(dayMode);
 
   useEffect(() => {
+    const timer = window.setInterval(() => setDayMode(getDayMode()), 30_000);
     apiJson("/api/reminders").then(data => setReminders(data.items || [])).catch(() => setReminders([]));
     apiJson("/api/devices").then(data => setDevices(data.items || [])).catch(() => setDevices([]));
-
     const voice = new JazzVoice({
-      onState: state => setVoiceState(state),
-      onInterim: text => setInput(text),
-      onFinal: text => {
-        const value = text.trim();
-        if (!value) return;
-        setInput(value);
-        void sendMessage(value, voice);
-      },
+      onState: state => { setVoiceState(state); if (state === "idle") setVoiceTranscript(""); },
+      onInterim: text => { setVoiceTranscript(text); setInput(text); },
+      onFinal: text => { const value = text.trim(); setVoiceTranscript(value); if (value) { setInput(value); void sendMessage(value, voice); } },
       onError: message => addJazzMessage(message)
     });
     voiceRef.current = voice;
-    return () => voice.stop();
+    setMessages([{ id: Date.now(), sender: "jazz", text: "Hey Mama 👋 I’m ready. Tap the microphone or say “Hey Jazz” and I’ll listen.", time: "Now" }]);
+    return () => { window.clearInterval(timer); voice.stop(); };
   }, []);
 
-  const addJazzMessage = (text: string) => {
-    setMessages(current => [...current, { id: Date.now() + Math.random(), sender: "jazz", text, time: nowTime() }]);
-  };
+  useEffect(() => {
+    messagesRef.current?.scrollTo({ top: messagesRef.current.scrollHeight, behavior: "smooth" });
+  }, [messages]);
 
+  const addJazzMessage = (text: string) => setMessages(current => [...current, { id: Date.now() + Math.random(), sender: "jazz", text, time: nowTime() }]);
   const speak = (text: string) => voiceRef.current?.speak(text.replace(/[*_#]/g, ""));
 
   const sendMessage = async (valueOverride?: string, voice?: JazzVoice) => {
     const value = (valueOverride ?? input).trim();
     if (!value) return;
     setMessages(current => [...current, { id: Date.now(), sender: "user", text: value, time: nowTime() }]);
-    setInput("");
+    setInput(""); setVoiceTranscript("");
     try {
-      const data = await apiJson("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: value })
-      });
-      const reply = data.assistant || "Jazz is ready.";
-      addJazzMessage(reply);
-      (voice || voiceRef.current)?.speak(reply);
+      const data = await apiJson("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: value }) });
+      const reply = data.assistant || "Jazz is ready."; addJazzMessage(reply); (voice || voiceRef.current)?.speak(reply);
     } catch {
-      const reply = "I couldn't reach the Jazz API. Start the API service on port 8787 and try again.";
-      addJazzMessage(reply);
-      (voice || voiceRef.current)?.speak(reply);
+      const reply = "I couldn't reach the Jazz API. Start the API service on port 8787 and try again."; addJazzMessage(reply); (voice || voiceRef.current)?.speak(reply);
     }
   };
-
   const toggleVoice = () => {
-    if (!voiceRef.current?.isSupported()) {
-      addJazzMessage("Voice recognition is not supported in this browser. Chrome or Edge is recommended.");
-      return;
-    }
-    if (voiceState === "listening") voiceRef.current.stop();
-    else voiceRef.current.start();
+    if (!voiceRef.current?.isSupported()) { addJazzMessage("Voice recognition is not supported in this browser. Chrome or Edge is recommended."); return; }
+    if (voiceState === "listening") voiceRef.current.stop(); else voiceRef.current.start();
   };
-
   const newChat = () => setMessages([{ id: Date.now(), sender: "jazz", text: "New chat started, Mama. I’m listening.", time: nowTime() }]);
 
   const takeNote = async () => {
-    const content = window.prompt("What should Jazz remember?")?.trim();
-    if (!content) return;
-    try {
-      await apiJson("/api/memory", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content })
-      });
-      addJazzMessage("✅ Saved that note to Jazz memory for this session.");
-    } catch (error) {
-      addJazzMessage(`I couldn't save the note: ${error instanceof Error ? error.message : "request failed"}`);
-    }
+    const content = window.prompt("What should Jazz remember?")?.trim(); if (!content) return;
+    try { await apiJson("/api/memory", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content }) }); addJazzMessage("✅ Saved that note to Jazz memory for this session."); }
+    catch (error) { addJazzMessage(`I couldn't save the note: ${error instanceof Error ? error.message : "request failed"}`); }
   };
-
   const setReminder = async () => {
-    const title = window.prompt("Reminder text")?.trim();
-    if (!title) return;
-    const time = window.prompt("Reminder time", "Today, 7:00 PM")?.trim();
-    if (!time) return;
-    try {
-      const data = await apiJson("/api/reminders", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, time })
-      });
-      setReminders(current => [...current, data.item]);
-      addJazzMessage(`✅ Reminder set: ${title} — ${time}`);
-    } catch (error) {
-      addJazzMessage(`I couldn't create the reminder: ${error instanceof Error ? error.message : "request failed"}`);
-    }
+    const title = window.prompt("Reminder text")?.trim(); if (!title) return;
+    const time = window.prompt("Reminder time", "Today, 7:00 PM")?.trim(); if (!time) return;
+    try { const data = await apiJson("/api/reminders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title, time }) }); setReminders(current => [...current, data.item]); addJazzMessage(`✅ Reminder set: ${title} — ${time}`); }
+    catch (error) { addJazzMessage(`I couldn't create the reminder: ${error instanceof Error ? error.message : "request failed"}`); }
   };
-
   const openCalendar = () => window.open("https://calendar.google.com/", "_blank", "noopener,noreferrer");
   const searchWeb = () => window.open(`https://www.google.com/search?q=${encodeURIComponent(input || "Jazz AI Assistant")}`, "_blank", "noopener,noreferrer");
 
   const runDeviceAction = async (device: DeviceItem) => {
-    const action = window.prompt(`Authorized action for ${device.name}`, "device_info")?.trim();
-    if (!action) return;
-    const approved = window.confirm(`Allow Jazz to send “${action}” to ${device.name}?`);
-    if (!approved) return;
-
+    const action = window.prompt(`Authorized action for ${device.name}`, "device_info")?.trim(); if (!action) return;
+    if (!window.confirm(`Allow Jazz to send “${action}” to ${device.name}?`)) return;
     let args: Record<string, unknown> = {};
-    if (action === "open_url") {
-      const url = window.prompt("https:// URL")?.trim();
-      if (!url) return;
-      args = { url };
-    } else if (action === "launch_app") {
-      const packageName = window.prompt("Android package name (example: com.android.settings)")?.trim();
-      if (!packageName) return;
-      args = { packageName };
-    } else if (action === "speak") {
-      const text = window.prompt("Text for the Android device to speak")?.trim();
-      if (!text) return;
-      args = { text };
-    }
-
-    try {
-      const data = await apiJson("/api/device-command", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ deviceId: device.id, action, args, approved: true })
-      });
-      addJazzMessage(data.message || `Command sent to ${device.name}.`);
-      speak(data.message || `Command sent to ${device.name}.`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Device command failed";
-      addJazzMessage(`I couldn't control ${device.name}: ${message}`);
-    }
+    if (action === "open_url") { const url = window.prompt("https:// URL")?.trim(); if (!url) return; args = { url }; }
+    else if (action === "launch_app") { const packageName = window.prompt("Android package name")?.trim(); if (!packageName) return; args = { packageName }; }
+    else if (action === "speak") { const text = window.prompt("Text for the Android device to speak")?.trim(); if (!text) return; args = { text }; }
+    try { const data = await apiJson("/api/device-command", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ deviceId: device.id, action, args, approved: true }) }); addJazzMessage(data.message || `Command sent to ${device.name}.`); speak(data.message || `Command sent to ${device.name}.`); }
+    catch (error) { addJazzMessage(`I couldn't control ${device.name}: ${error instanceof Error ? error.message : "Device command failed"}`); }
   };
 
-  return <div className="jazz-app">
-    <div className="background-glow glow-one" /><div className="background-glow glow-two" />
+  const onProfileSelected = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]; if (!file || !file.type.startsWith("image/")) return;
+    const reader = new FileReader(); reader.onload = () => { const result = typeof reader.result === "string" ? reader.result : ""; if (result) { setProfileImage(result); localStorage.setItem("jazz-profile-image", result); } }; reader.readAsDataURL(file);
+  };
+
+  return <div className={`jazz-app mode-${dayMode}`}>
+    <div className="background-glow glow-one" /><div className="background-glow glow-two" /><div className="background-stars" />
     {sidebarOpen && <div className="mobile-overlay" onClick={() => setSidebarOpen(false)} />}
     <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
       <div className="brand"><div className="brand-logo"><Wave /></div><div className="brand-name"><span>Jazz</span><strong>AI Assistant</strong></div></div>
       <button className="new-chat-button" onClick={newChat}><Plus size={21} /> <span>New Chat</span></button>
-      <nav className="navigation">
-        <NavItem icon={<MessageSquare size={20} />} text="Chat" active />
-        <NavItem icon={<FileText size={20} />} text="Memory" />
-        <NavItem icon={<FileText size={20} />} text="Knowledge Base" />
-        <NavItem icon={<Check size={20} />} text="Tasks" />
-        <NavItem icon={<Bell size={20} />} text="Reminders" />
-        <NavItem icon={<CalendarDays size={20} />} text="Calendar" />
-        <NavItem icon={<Laptop size={20} />} text="Devices" dropdown />
-        <NavItem icon={<Settings size={20} />} text="Settings" />
-      </nav>
+      <nav className="navigation"><NavItem icon={<MessageSquare size={20} />} text="Chat" active /><NavItem icon={<FileText size={20} />} text="Memory" /><NavItem icon={<FileText size={20} />} text="Knowledge Base" /><NavItem icon={<Check size={20} />} text="Tasks" /><NavItem icon={<Bell size={20} />} text="Reminders" /><NavItem icon={<CalendarDays size={20} />} text="Calendar" /><NavItem icon={<Laptop size={20} />} text="Devices" dropdown /><NavItem icon={<Settings size={20} />} text="Settings" /></nav>
       <div className="sidebar-bottom"><div className="assistant-card"><div className="assistant-card-title"><span>Jazz</span> AI Assistant</div><p>Voice + authorized device control</p><div className="assistant-orb"><div className="orb-ring ring-one" /><div className="orb-ring ring-two" /><div className="orb-core"><MiniWave /></div></div></div></div>
     </aside>
     <main className="main-content">
-      <header className="top-header"><button className="mobile-menu" onClick={() => setSidebarOpen(true)}><Menu size={23} /></button><div className="greeting"><h1>Good Morning, Mama <span>👋</span></h1><p>{voiceState === "listening" ? "I’m listening…" : voiceState === "speaking" ? "Jazz is speaking…" : "How can I help you today?"}</p></div><div className="header-actions"><button className={`icon-button microphone-button ${voiceState === "listening" ? "voice-active" : ""}`} title="Talk to Jazz" onClick={toggleVoice}><Mic size={21} /></button><button className="icon-button notification-button"><Bell size={20} /><span className="notification-count">3</span></button><button className="icon-button"><Sun size={20} /></button><div className="profile"><div className="profile-avatar">M</div><div className="profile-info"><strong>Gunakarna</strong><span><i />Online</span></div></div></div></header>
+      <header className="top-header">
+        <button className="mobile-menu" onClick={() => setSidebarOpen(true)}><Menu size={23} /></button>
+        <div className="greeting"><h1>{greeting.title}</h1><p>{voiceState === "listening" ? "I’m listening to you…" : voiceState === "speaking" ? "Jazz is speaking…" : greeting.subtitle}</p></div>
+        <div className="header-actions">
+          <button className={`icon-button microphone-button ${voiceState === "listening" ? "voice-active" : ""}`} title="Talk to Jazz" onClick={toggleVoice}><Mic size={21} /></button>
+          <button className="icon-button notification-button"><Bell size={20} /><span className="notification-count">3</span></button>
+          <div className="theme-chip" title={`Jazz ${dayMode} mode`}>{dayMode === "night" ? <Moon size={17} /> : <Sun size={17} />}<span>{dayMode}</span></div>
+          <div className="profile clickable" onClick={() => profileInputRef.current?.click()} title="Change profile picture">
+            {profileImage ? <img src={profileImage} alt="Profile" className="profile-image" /> : <div className="profile-avatar">M</div>}
+            <div className="profile-info"><strong>Gunakarna</strong><span><i />Online</span></div>
+          </div>
+          <input ref={profileInputRef} type="file" accept="image/*" onChange={onProfileSelected} hidden />
+        </div>
+      </header>
       <div className="dashboard-grid">
-        <section className="chat-panel"><div className="chat-messages">{messages.map(message => <ChatMessage key={message.id} message={message} />)}</div><div className="message-area"><div className="message-input"><button className="input-icon"><Paperclip size={20} /></button><input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === "Enter" && void sendMessage()} placeholder={voiceState === "listening" ? "Listening…" : "Type a message or use the microphone…"}/><button className={`input-icon ${voiceState === "listening" ? "voice-active" : ""}`} onClick={toggleVoice} title="Talk to Jazz"><Mic size={20} /></button></div><button className="send-button" onClick={() => void sendMessage()}><Send size={21} /></button></div></section>
+        <section className="chat-panel">
+          <div className="chat-messages" ref={messagesRef}>{messages.map(message => <ChatMessage key={message.id} message={message} />)}</div>
+          {voiceState === "listening" && <VoiceListeningBubble transcript={voiceTranscript} />}
+          <div className="message-area"><div className="message-input"><button className="input-icon"><Paperclip size={20} /></button><input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === "Enter" && void sendMessage()} placeholder={voiceState === "listening" ? "Listening…" : "Type a message or use the microphone…"}/><button className={`input-icon ${voiceState === "listening" ? "voice-active" : ""}`} onClick={toggleVoice} title="Talk to Jazz"><Mic size={20} /></button></div><button className="send-button" onClick={() => void sendMessage()}><Send size={21} /></button></div>
+        </section>
         <aside className="right-panel">
           <DashboardCard icon={<Zap size={20} />} title="Quick Actions"><div className="quick-actions"><QuickAction icon={<FileText />} label="Take a Note" onClick={takeNote} /><QuickAction icon={<Bell />} label="Set Reminder" onClick={setReminder} /><QuickAction icon={<CalendarDays />} label="Open Calendar" onClick={openCalendar} /><QuickAction icon={<Globe />} label="Search Web" onClick={searchWeb} /></div></DashboardCard>
           <DashboardCard icon={<Smartphone size={20} />} title="Devices" action="See all"><div className="device-list">{devices.length ? devices.map(device => <Device key={device.id} icon={device.kind === "android" ? <Smartphone /> : <Laptop />} device={device} onClick={() => void runDeviceAction(device)} />) : <Device icon={<Smartphone />} device={{ id: "", name: "Android devices", kind: "android", status: "loading", bridge: false }} onClick={() => addJazzMessage("No device bridge is configured yet.")} />}</div></DashboardCard>
           <DashboardCard icon={<Bell size={20} />} title="Upcoming Reminders" action="See all"><div className="reminder-list">{reminders.length ? reminders.map(item => <Reminder key={item.id} icon={<Phone />} title={item.title} date={item.time} />) : <Reminder icon={<Phone />} title="No reminders yet" date="Use Set Reminder" />}</div></DashboardCard>
-          <div className="status-card"><div className="status-header"><div className="status-title"><div className="status-icon"><Zap size={19} /></div><strong>Jazz Status</strong></div><span className="online-badge">{voiceState === "unsupported" ? "Voice unavailable" : "Online"}</span></div><p>Voice assistant ready • Android bridges protected</p><div className="status-wave">{Array.from({length: 10}, (_, i) => <span key={i} />)}</div></div>
+          <div className="status-card"><div className="status-header"><div className="status-title"><div className="status-icon"><Zap size={19} /></div><strong>Jazz Status</strong></div><span className="online-badge">{voiceState === "unsupported" ? "Voice unavailable" : "Online"}</span></div><p>Voice assistant ready • {dayMode} mode</p><div className="status-wave">{Array.from({length: 10}, (_, i) => <span key={i} />)}</div></div>
         </aside>
-      </div><footer>Jazz AI Assistant v1.1.0</footer>
+      </div>
+      <footer>Jazz AI Assistant v1.2.0 • {dayMode} mode</footer>
     </main>
   </div>;
 }
 
+function VoiceListeningBubble({ transcript }: { transcript: string }) {
+  return <div className="voice-listening-layer" aria-live="polite"><div className="voice-listening-bubble"><div className="voice-orb"><Mic size={21} /></div><div className="voice-copy"><strong>Jazz is listening</strong><span>{transcript || "Speak naturally… I’m picking you up."}</span></div><div className="voice-bars">{Array.from({ length: 9 }, (_, i) => <i key={i} style={{ animationDelay: `${i * 70}ms` }} />)}</div></div></div>;
+}
 function Wave() { return <div className="brand-wave">{[1,2,3,4,5].map(i => <span key={i} />)}</div>; }
 function MiniWave() { return <div className="mini-wave">{[1,2,3,4,5].map(i => <span key={i} />)}</div>; }
 function NavItem({ icon, text, active=false, dropdown=false }: { icon: React.ReactNode; text: string; active?: boolean; dropdown?: boolean }) { return <button className={`nav-item ${active ? "active" : ""}`}>{icon}<span>{text}</span>{dropdown && <ChevronDown size={17} className="nav-dropdown" />}</button>; }
