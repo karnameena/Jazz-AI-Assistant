@@ -5,12 +5,12 @@ plugins {
 
 android {
     namespace = "com.gunakarna.jazzassistant"
-    compileSdk = 36
+    compileSdk = 34
 
     defaultConfig {
         applicationId = "com.gunakarna.jazzassistant"
         minSdk = 26
-        targetSdk = 36
+        targetSdk = 34
         versionCode = 1
         versionName = "0.1.0"
     }
