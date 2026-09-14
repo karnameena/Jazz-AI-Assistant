@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Jazz Android Companion</string>
+    <string name="accessibility_description">Jazz uses accessibility features to perform user-requested navigation, gestures, and visible UI actions on this device.</string>
+</resources>
