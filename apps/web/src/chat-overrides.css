@@ -1,0 +1,44 @@
+/* Clean ChatGPT-style composer + command-bar layout */
+
+/* Remove the Activity Overview section while keeping the bottom Quick Voice Command bar. */
+.analytics-row{display:none!important}
+
+/* Keep the center chat area large and let the conversation breathe. */
+.chat-panel{height:clamp(520px,calc(100vh - 190px),900px)!important;min-height:0!important}
+.chat-messages{padding-bottom:125px!important}
+
+/* Hide the extra suggestion chips so the composer feels like a single ChatGPT-style input. */
+.suggestion-row{display:none!important}
+
+/* Full-width rounded composer pinned to the bottom of the chat panel. */
+.composer-wrap{left:0!important;right:0!important;bottom:0!important;padding:14px 18px 16px!important;background:linear-gradient(180deg,rgba(5,10,20,0),rgba(5,10,20,.88) 28%,rgba(5,10,20,.99) 72%)!important}
+.composer{width:100%!important;height:58px!important;min-height:58px!important;padding:0 50px 0 10px!important;border-radius:30px!important;background:rgba(10,17,30,.97)!important;border:1px solid rgba(255,255,255,.12)!important;box-shadow:0 8px 28px rgba(0,0,0,.25),inset 0 1px 0 rgba(255,255,255,.025)!important}
+.composer input{font-size:14px!important;padding:0 10px!important}
+.composer-icon{width:40px!important;height:40px!important}
+.composer-icon:first-child{color:#9aa5b8!important}
+.composer-icon:first-child:hover{color:#fff!important;background:rgba(255,255,255,.06)!important}
+
+/* Put the send button inside the right side of the composer, like ChatGPT. */
+.send-button{position:absolute!important;right:27px;top:50%;transform:translateY(-50%)!important;width:42px!important;height:42px!important;border-radius:50%!important;z-index:3;box-shadow:0 6px 18px rgba(83,57,255,.3)!important}
+.send-button:hover{transform:translateY(-50%) translateY(-1px)!important}
+
+/* Keep listening UI above the composer. */
+.voice-listening-layer{bottom:86px!important}
+
+/* Preserve the Quick Voice Command section exactly as a separate bottom toolbar. */
+.command-bar{position:relative!important;z-index:12!important}
+
+@media(max-width:950px){
+  .chat-panel{height:calc(100vh - 180px)!important}
+  .composer-wrap{padding-left:12px!important;padding-right:12px!important;padding-bottom:12px!important}
+  .send-button{right:21px}
+}
+
+@media(max-width:650px){
+  .chat-panel{height:calc(100vh - 150px)!important}
+  .composer{height:54px!important;min-height:54px!important;padding-right:48px!important}
+  .composer input{font-size:13px!important}
+  .composer-icon{width:36px!important;height:36px!important}
+  .send-button{right:17px;width:38px!important;height:38px!important}
+  .voice-listening-layer{bottom:77px!important}
+}
