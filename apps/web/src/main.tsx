@@ -1,10 +1,10 @@
 import React, { useEffect, useRef, useState } from "react";
-import { createRoot } from "react-dom/client";
 import {
   Bell, CalendarDays, Check, ChevronDown, FileText, Globe, Laptop, Menu,
   MessageSquare, Mic, Moon, Paperclip, Phone, Plus, Send, Settings,
   Smartphone, Sun, Volume2, Zap
 } from "lucide-react";
+import { createRoot } from "react-dom/client";
 import { JazzVoice } from "./voice";
 import "./styles.css";
 
@@ -55,7 +55,15 @@ function App() {
     const voice = new JazzVoice({
       onState: state => { setVoiceState(state); if (state === "idle") setVoiceTranscript(""); },
       onInterim: text => { setVoiceTranscript(text); setInput(text); },
-      onFinal: text => { const value = text.trim(); setVoiceTranscript(value); if (value) { setInput(value); void sendMessage(value, voice); } },
+      onFinal: text => {
+        const value = text.trim();
+        setVoiceTranscript(value);
+        if (value) {
+          voice.stop();
+          setInput(value);
+          void sendMessage(value, voice);
+        }
+      },
       onError: message => addJazzMessage(message)
     });
     voiceRef.current = voice;
@@ -73,15 +81,21 @@ function App() {
   const sendMessage = async (valueOverride?: string, voice?: JazzVoice) => {
     const value = (valueOverride ?? input).trim();
     if (!value) return;
+    voice?.stop();
     setMessages(current => [...current, { id: Date.now(), sender: "user", text: value, time: nowTime() }]);
     setInput(""); setVoiceTranscript("");
     try {
       const data = await apiJson("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: value }) });
-      const reply = data.assistant || "Jazz is ready."; addJazzMessage(reply); (voice || voiceRef.current)?.speak(reply);
+      const reply = data.assistant || "Jazz is ready.";
+      addJazzMessage(reply);
+      (voice || voiceRef.current)?.speak(reply);
     } catch {
-      const reply = "I couldn't reach the Jazz API. Start the API service on port 8787 and try again."; addJazzMessage(reply); (voice || voiceRef.current)?.speak(reply);
+      const reply = "I couldn't reach the Jazz API. Start the API service on port 8787 and try again.";
+      addJazzMessage(reply);
+      (voice || voiceRef.current)?.speak(reply);
     }
   };
+
   const toggleVoice = () => {
     if (!voiceRef.current?.isSupported()) { addJazzMessage("Voice recognition is not supported in this browser. Chrome or Edge is recommended."); return; }
     if (voiceState === "listening") voiceRef.current.stop(); else voiceRef.current.start();
@@ -171,5 +185,4 @@ function DashboardCard({ icon, title, action, children }: { icon: React.ReactNod
 function QuickAction({ icon, label, onClick }: { icon: React.ReactNode; label: string; onClick: () => void }) { return <button className="quick-action" onClick={onClick}><span>{icon}</span>{label}</button>; }
 function Device({ icon, device, onClick }: { icon: React.ReactNode; device: DeviceItem; onClick: () => void }) { return <div className="device"><button className="device-main" onClick={onClick}><div className="device-icon">{icon}</div><div className="device-info"><strong>{device.name}</strong><span><i />{device.bridge ? "Bridge ready" : device.status}</span></div></button><button className="more-button" onClick={onClick} title="Control device"><Volume2 size={18} /></button></div>; }
 function Reminder({ icon, title, date }: { icon: React.ReactNode; title: string; date: string }) { return <div className="reminder"><div className="reminder-icon">{icon}</div><div><strong>{title}</strong><span>{date}</span></div></div>; }
-
 createRoot(document.getElementById("root")!).render(<React.StrictMode><App /></React.StrictMode>);
