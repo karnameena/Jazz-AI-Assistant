@@ -1,0 +1,13 @@
+{
+  "name": "jazz-ai-assistant",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Modular personal AI assistant platform",
+  "packageManager": "pnpm@12.3.4",
+  "scripts": {
+    "dev": "pnpm --recursive --if-present dev",
+    "build": "pnpm --recursive --if-present build",
+    "test": "pnpm --recursive --if-present test",
+    "lint": "pnpm --recursive --if-present lint"
+  }
+}
