@@ -1,7 +1,10 @@
 {
   "name": "@jazz/api",
-  "version": "0.1.0",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
-  "scripts": {"dev": "node src/server.mjs"}
+  "scripts": {
+    "dev": "node src/server.mjs",
+    "tts:check": "node -e \"import('./src/tts.mjs').then(async m => { const c=m.ttsConfig(); console.log(c); }).catch(e => { console.error(e); process.exit(1); })\""
+  }
 }
