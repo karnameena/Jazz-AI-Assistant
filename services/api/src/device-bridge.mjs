@@ -14,20 +14,31 @@ export const devices = Object.values(targets).map(device => ({
 
 export function getDevice(id) { return devices.find(device => device.id === id) || null; }
 
+async function bridgePost(path, payload) {
+  const response = await fetch(`${windowsBridgeUrl.replace(/\/$/, "")}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  const text = await response.text();
+  let data;
+  try { data = JSON.parse(text); } catch { data = { message: text }; }
+  if (!response.ok) throw new Error(data?.error || "Windows ADB bridge request failed");
+  return data;
+}
+
 export async function sendAndroidCommand(deviceId, action, args = {}) {
   const target = targets[deviceId];
   const device = getDevice(deviceId);
   if (!device || !target) throw new Error("Unknown device");
   if (!target.serial) return { ok: false, status: "device_not_configured", message: `${device.name} serial is not configured.` };
+  return bridgePost("/command", { deviceId, action, args });
+}
 
-  const response = await fetch(`${windowsBridgeUrl.replace(/\/$/, "")}/command`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ deviceId, action, args })
-  });
-  const text = await response.text();
-  let data;
-  try { data = JSON.parse(text); } catch { data = { message: text }; }
-  if (!response.ok) throw new Error(data?.error || `${device.name} ADB bridge request failed`);
-  return data;
+export async function sendAndroidScript(deviceId, scriptName, args = {}) {
+  const target = targets[deviceId];
+  const device = getDevice(deviceId);
+  if (!device || !target) throw new Error("Unknown device");
+  if (!target.serial) return { ok: false, status: "device_not_configured", message: `${device.name} serial is not configured.` };
+  return bridgePost("/script", { deviceId, scriptName, args });
 }
