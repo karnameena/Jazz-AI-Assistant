@@ -4,37 +4,38 @@ import { basename, resolve } from "node:path";
 const scriptRoot = resolve(process.env.JAZZ_SCRIPT_ROOT || "scripts/android");
 
 // Explicit allow-list. Jazz never executes an arbitrary path supplied by the LLM/user.
+// Add future Mama-owned scripts here with an exact filename and aliases.
 export const scripts = {
-  paymom: {
-    file: "paymom.sh",
-    description: "Run Mama's approved Mom payment preparation workflow",
-    aliases: ["pay mom", "pay my mom", "pay mom something", "pay mom money"],
-    requiresConfirmation: true,
-    category: "financial"
-  },
-  unlock: {
-    file: "unlock.sh",
-    description: "Run Mama's approved device wake/unlock workflow",
+  unlockmobile: {
+    file: "unlockmobile.ps1",
+    description: "Run Mama's approved Android wake/unlock workflow",
     aliases: ["unlock my mobile", "unlock my phone", "unlock phone"],
     requiresConfirmation: true,
     category: "device"
   },
+  paymom: {
+    file: "paymom.ps1",
+    description: "Mama-owned payment workflow",
+    aliases: ["pay mom", "pay my mom", "send money to mom", "send money to my mom"],
+    requiresConfirmation: true,
+    category: "financial"
+  },
   instagram: {
-    file: "insta.sh",
+    file: "instagram.ps1",
     description: "Run Mama's approved Instagram automation",
     aliases: ["run instagram automation", "instagram automation", "open instagram"],
     requiresConfirmation: false,
     category: "social"
   },
   youtube: {
-    file: "youtube.sh",
+    file: "youtube.ps1",
     description: "Run Mama's approved YouTube automation",
     aliases: ["play youtube", "open youtube", "play tamil songs", "tamil songs on youtube"],
     requiresConfirmation: false,
     category: "media"
   },
   screenshot: {
-    file: "screenshot.sh",
+    file: "screenshot.ps1",
     description: "Run Mama's approved Android screenshot workflow",
     aliases: ["take a screenshot", "take screenshot", "screenshot my phone"],
     requiresConfirmation: false,
