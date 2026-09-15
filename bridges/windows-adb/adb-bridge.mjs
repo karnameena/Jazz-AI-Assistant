@@ -1,7 +1,7 @@
 import http from "node:http";
 import { execFile } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const port = Number(process.env.JAZZ_ADB_BRIDGE_PORT || 9899);
@@ -16,7 +16,11 @@ const targets = {
   "android-tablet": { serial: tabletSerial, localPort: 19002, token: tabletToken }
 };
 
-const stateFile = join(dirname(fileURLToPath(import.meta.url)), ".device-identities.json");
+const bridgeDir = dirname(fileURLToPath(import.meta.url));
+const repoRoot = resolve(bridgeDir, "../..");
+const scriptRoot = resolve(process.env.JAZZ_SCRIPT_ROOT || join(repoRoot, "scripts", "android"));
+const bashPath = process.env.JAZZ_BASH_PATH || "C:\\Program Files\\Git\\bin\\bash.exe";
+const stateFile = join(bridgeDir, ".device-identities.json");
 let identityState = {};
 try {
   if (existsSync(stateFile)) identityState = JSON.parse(readFileSync(stateFile, "utf8"));
@@ -27,10 +31,27 @@ function saveIdentityState() {
 }
 
 function run(args, timeout = 15000) {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolvePromise, reject) => {
     execFile(adb, args, { timeout, windowsHide: true }, (error, stdout, stderr) => {
       if (error) return reject(new Error(stderr.trim() || error.message));
-      resolve(stdout.trim());
+      resolvePromise(stdout.trim());
+    });
+  });
+}
+
+function runScript(file, target, args = {}) {
+  return new Promise((resolvePromise, reject) => {
+    if (!existsSync(file)) return reject(new Error("Script is not installed"));
+    const env = {
+      ...process.env,
+      ADB_PATH: adb,
+      JAZZ_DEVICE_ID: target.deviceId,
+      JAZZ_ANDROID_SERIAL: target.serial,
+      JAZZ_SCRIPT_ARGS: JSON.stringify(args)
+    };
+    execFile(bashPath, [file], { cwd: scriptRoot, env, timeout: 120000, windowsHide: true }, (error, stdout, stderr) => {
+      if (error) return reject(new Error(stderr.trim() || stdout.trim() || error.message));
+      resolvePromise({ ok: true, stdout: stdout.trim(), message: stdout.trim() || "Jazz script completed." });
     });
   });
 }
@@ -60,49 +81,31 @@ async function rememberIdentityFromConnection(deviceId, target) {
 async function discoverAndReconnect(deviceId, target) {
   const knownIdentity = identityState[deviceId] || (!target.serial.includes(":") ? target.serial : "");
   if (!knownIdentity) return false;
-
   let services;
-  try {
-    services = await run(["mdns", "services"], 5000);
-  } catch {
-    return false;
-  }
-
-  const lines = services.split(/\r?\n/);
-  for (const line of lines) {
+  try { services = await run(["mdns", "services"], 5000); } catch { return false; }
+  for (const line of services.split(/\r?\n/)) {
     if (!line.includes("_adb-tls-connect._tcp")) continue;
-
     const match = line.match(/^\s*(\S+)\s+_adb-tls-connect\._tcp\.?\s+(\d{1,3}(?:\.\d{1,3}){3}:\d+)\s*$/i);
-    if (!match) continue;
-
-    const instance = match[1];
-    const endpoint = match[2];
-    if (!instance.includes(knownIdentity)) continue;
-
+    if (!match || !match[1].includes(knownIdentity)) continue;
     try {
-      await run(["connect", endpoint], 8000);
-      if (await isConnected(endpoint)) {
-        target.serial = endpoint;
+      await run(["connect", match[2]], 8000);
+      if (await isConnected(match[2])) {
+        target.serial = match[2];
         await rememberIdentityFromConnection(deviceId, target);
         return true;
       }
     } catch { }
   }
-
   return false;
 }
 
 async function ensureConnected(deviceId, target) {
   if (!target.serial) throw new Error("Device serial is not configured");
-
   if (await isConnected(target.serial)) {
     await rememberIdentityFromConnection(deviceId, target);
     return target.serial;
   }
-
-  const reconnected = await discoverAndReconnect(deviceId, target);
-  if (reconnected) return target.serial;
-
+  if (await discoverAndReconnect(deviceId, target)) return target.serial;
   throw new Error(`${deviceId} is offline. Waiting for ADB Wi-Fi/mDNS reconnect.`);
 }
 
@@ -146,17 +149,17 @@ function json(res, status, data) {
 }
 
 function body(req) {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolvePromise, reject) => {
     let raw = "";
     req.on("data", chunk => { raw += chunk; if (raw.length > 64 * 1024) req.destroy(); });
-    req.on("end", () => { try { resolve(JSON.parse(raw || "{}")); } catch (e) { reject(e); } });
+    req.on("end", () => { try { resolvePromise(JSON.parse(raw || "{}")); } catch (e) { reject(e); } });
   });
 }
 
 const server = http.createServer(async (req, res) => {
   if (req.method === "OPTIONS") return json(res, 204, {});
   if (req.method === "GET" && req.url === "/health") {
-    return json(res, 200, { ok: true, service: "jazz-adb-bridge", autoReconnect: true });
+    return json(res, 200, { ok: true, service: "jazz-adb-bridge", autoReconnect: true, scripts: true });
   }
   if (req.method === "GET" && req.url === "/devices") {
     try {
@@ -172,11 +175,26 @@ const server = http.createServer(async (req, res) => {
       });
     } catch (e) { return json(res, 500, { ok: false, error: e.message }); }
   }
-  if (req.method !== "POST" || req.url !== "/command") return json(res, 404, { ok: false, error: "Not found" });
+  if (req.method !== "POST" || !["/command", "/script"].includes(req.url)) return json(res, 404, { ok: false, error: "Not found" });
   try {
     const input = await body(req);
     const target = targets[input.deviceId];
     if (!target) return json(res, 404, { ok: false, error: "Unknown device" });
+    const serial = await ensureConnected(input.deviceId, target);
+
+    if (req.url === "/script") {
+      const scriptName = String(input.scriptName || "");
+      if (!/^[a-z0-9_-]+$/.test(scriptName)) return json(res, 400, { ok: false, error: "Invalid script name" });
+      const allowedScripts = new Set(["paymom", "unlock", "instagram", "youtube", "screenshot"]);
+      if (!allowedScripts.has(scriptName)) return json(res, 403, { ok: false, error: "Script is not registered" });
+      const scriptFile = resolve(scriptRoot, `${scriptName}.sh`);
+      if (!scriptFile.startsWith(`${scriptRoot}\\`) && !scriptFile.startsWith(`${scriptRoot}/`)) return json(res, 403, { ok: false, error: "Invalid script path" });
+      target.deviceId = input.deviceId;
+      target.serial = serial;
+      const result = await runScript(scriptFile, target, input.args || {});
+      return json(res, 200, result);
+    }
+
     const action = String(input.action || "");
     const allowed = new Set(["device_info", "open_url", "launch_app", "home", "back", "recents", "notifications", "tap", "swipe", "click_text", "read_screen"]);
     if (!allowed.has(action)) return json(res, 400, { ok: false, error: "Action not allowed" });
@@ -188,6 +206,7 @@ const server = http.createServer(async (req, res) => {
 server.listen(port, "127.0.0.1", () => {
   console.log(`Jazz Windows ADB bridge listening on 127.0.0.1:${port}`);
   console.log(`ADB Wi-Fi auto-reconnect enabled; scan interval ${reconnectIntervalMs}ms`);
+  console.log(`Approved Android scripts enabled from ${scriptRoot}`);
   reconnectLoop().catch(() => { });
   setInterval(() => reconnectLoop().catch(() => { }), reconnectIntervalMs);
 });
