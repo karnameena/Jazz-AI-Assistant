@@ -58,7 +58,8 @@ export function scriptPath(name) {
   if (!script) return null;
   const file = basename(script.file);
   const path = resolve(scriptRoot, file);
-  if (!path.startsWith(`${scriptRoot}\`) && !path.startsWith(`${scriptRoot}/`)) return null;
+  const rootPrefix = `${scriptRoot}${process.platform === "win32" ? "\\" : "/"}`;
+  if (!path.startsWith(rootPrefix)) return null;
   return existsSync(path) ? path : null;
 }
 
