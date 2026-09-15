@@ -7,7 +7,7 @@
 .chat-panel{height:clamp(520px,calc(100vh - 190px),900px)!important;min-height:0!important}
 .chat-messages{padding-bottom:125px!important}
 
-/* Hide the extra suggestion chips so the composer feels like a single ChatGPT-style input. */
+/* Hide the extra suggestion chips so the chat stays clean. */
 .suggestion-row{display:none!important}
 
 /* Full-width rounded composer pinned to the bottom of the chat panel. */
@@ -22,11 +22,86 @@
 .send-button{position:absolute!important;right:27px;top:50%;transform:translateY(-50%)!important;width:42px!important;height:42px!important;border-radius:50%!important;z-index:3;box-shadow:0 6px 18px rgba(83,57,255,.3)!important}
 .send-button:hover{transform:translateY(-50%) translateY(-1px)!important}
 
-/* Keep listening UI above the composer. */
-.voice-listening-layer{bottom:86px!important}
-
-/* Preserve the Quick Voice Command section exactly as a separate bottom toolbar. */
+/* Preserve the Quick Voice Command section as a separate bottom toolbar. */
 .command-bar{position:relative!important;z-index:12!important}
+
+/* -------------------------------------------------------------------------- */
+/* Reactive Jazz voice visualizer                                              */
+/* -------------------------------------------------------------------------- */
+
+/* The old rectangular listening bubble is replaced by the central heart. */
+.voice-listening-layer{display:none!important}
+
+.chat-panel::before,
+.chat-panel::after{
+  position:absolute;
+  left:50%;
+  top:43%;
+  pointer-events:none;
+  z-index:6;
+  opacity:0;
+  transition:opacity .22s ease,background .35s ease,box-shadow .35s ease;
+}
+
+/* Outer holographic rings. */
+.chat-panel::before{
+  content:"";
+  width:164px;
+  height:164px;
+  border-radius:50%;
+  transform:translate(-50%,-50%) scale(var(--jazz-voice-scale,.82));
+  background:
+    radial-gradient(circle,transparent 54%,rgba(108,193,255,.07) 55%,transparent 57%),
+    conic-gradient(from 0deg,transparent 0 12%,rgba(94,193,255,.78) 18%,transparent 25% 44%,rgba(159,83,255,.78) 50%,transparent 58% 78%,rgba(73,230,255,.72) 85%,transparent 92%);
+  -webkit-mask:radial-gradient(circle,transparent 0 55%,#000 56% 58%,transparent 59% 100%);
+  mask:radial-gradient(circle,transparent 0 55%,#000 56% 58%,transparent 59% 100%);
+  filter:drop-shadow(0 0 10px rgba(72,166,255,.7));
+  animation:jazz-ring-spin 5s linear infinite;
+}
+
+/* Glowing heart core. */
+.chat-panel::after{
+  content:"♥";
+  width:84px;
+  height:84px;
+  display:grid;
+  place-items:center;
+  transform:translate(-50%,-50%) scale(var(--jazz-voice-scale,.82));
+  border-radius:50%;
+  color:#fff;
+  font-size:47px;
+  line-height:1;
+  font-family:"Segoe UI Symbol","Arial Unicode MS",sans-serif;
+  background:radial-gradient(circle,rgba(255,255,255,.18),rgba(255,255,255,.035) 42%,transparent 72%);
+  text-shadow:0 0 7px rgba(255,255,255,.95),0 0 19px var(--jazz-voice-glow,rgba(89,210,255,.95)),0 0 42px var(--jazz-voice-glow,rgba(89,210,255,.65));
+  box-shadow:0 0 18px var(--jazz-voice-glow,rgba(89,210,255,.55)),0 0 54px var(--jazz-voice-glow-soft,rgba(89,210,255,.24)),inset 0 0 25px rgba(255,255,255,.08);
+  animation:jazz-heart-breathe 1.45s ease-in-out infinite;
+}
+
+/* Listening = cyan/blue energy. */
+html[data-jazz-voice-state="listening"] .chat-panel::before,
+html[data-jazz-voice-state="listening"] .chat-panel::after{opacity:1}
+html[data-jazz-voice-state="listening"] .chat-panel{--jazz-voice-glow:rgba(64,201,255,.95);--jazz-voice-glow-soft:rgba(72,122,255,.25)}
+
+/* Jazz speaking = pink/purple energy. */
+html[data-jazz-voice-state="speaking"] .chat-panel::before,
+html[data-jazz-voice-state="speaking"] .chat-panel::after{opacity:1}
+html[data-jazz-voice-state="speaking"] .chat-panel{--jazz-voice-glow:rgba(244,66,255,.98);--jazz-voice-glow-soft:rgba(140,57,255,.3)}
+html[data-jazz-voice-state="speaking"] .chat-panel::before{
+  background:
+    radial-gradient(circle,transparent 54%,rgba(255,71,230,.08) 55%,transparent 57%),
+    conic-gradient(from 0deg,transparent 0 12%,rgba(255,86,235,.9) 18%,transparent 25% 44%,rgba(157,73,255,.85) 50%,transparent 58% 78%,rgba(255,54,196,.82) 85%,transparent 92%);
+  filter:drop-shadow(0 0 13px rgba(255,55,220,.78));
+}
+
+/* Keep the conversation readable while the voice core is active. */
+html[data-jazz-voice-state="listening"] .chat-messages,
+html[data-jazz-voice-state="speaking"] .chat-messages{opacity:.78;transition:opacity .2s ease}
+html[data-jazz-voice-state="listening"] .composer{border-color:rgba(104,190,255,.35)!important;box-shadow:0 0 0 3px rgba(77,178,255,.06),0 8px 28px rgba(0,0,0,.25)!important}
+html[data-jazz-voice-state="speaking"] .composer{border-color:rgba(238,83,255,.35)!important;box-shadow:0 0 0 3px rgba(226,69,255,.055),0 8px 28px rgba(0,0,0,.25)!important}
+
+@keyframes jazz-ring-spin{to{transform:translate(-50%,-50%) scale(var(--jazz-voice-scale,.82)) rotate(360deg)}}
+@keyframes jazz-heart-breathe{0%,100%{filter:brightness(.96);box-shadow:0 0 18px var(--jazz-voice-glow,rgba(89,210,255,.55)),0 0 54px var(--jazz-voice-glow-soft,rgba(89,210,255,.24)),inset 0 0 25px rgba(255,255,255,.08)}50%{filter:brightness(1.18);box-shadow:0 0 28px var(--jazz-voice-glow,rgba(89,210,255,.72)),0 0 75px var(--jazz-voice-glow-soft,rgba(89,210,255,.34)),inset 0 0 30px rgba(255,255,255,.13)}}
 
 @media(max-width:950px){
   .chat-panel{height:calc(100vh - 180px)!important}
@@ -40,5 +115,4 @@
   .composer input{font-size:13px!important}
   .composer-icon{width:36px!important;height:36px!important}
   .send-button{right:17px;width:38px!important;height:38px!important}
-  .voice-listening-layer{bottom:77px!important}
 }
