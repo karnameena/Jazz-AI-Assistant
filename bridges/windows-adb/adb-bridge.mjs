@@ -164,14 +164,20 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "GET" && req.url === "/devices") {
     try {
       await reconnectLoop();
+      const targetEntries = await Promise.all(
+        Object.entries(targets).map(async ([id, target]) => [
+          id,
+          {
+            serial: target.serial,
+            identity: identityState[id] || null,
+            connected: target.serial ? await isConnected(target.serial) : false
+          }
+        ])
+      );
       return json(res, 200, {
         ok: true,
         adb: await run(["devices", "-l"]),
-        targets: Object.fromEntries(Object.entries(targets).map(([id, target]) => [id, {
-          serial: target.serial,
-          identity: identityState[id] || null,
-          connected: target.serial ? await isConnected(target.serial) : false
-        }]))
+        targets: Object.fromEntries(targetEntries)
       });
     } catch (e) { return json(res, 500, { ok: false, error: e.message }); }
   }
