@@ -191,8 +191,21 @@ const server = http.createServer(async (req, res) => {
     if (req.url === "/script") {
       const scriptName = String(input.scriptName || "");
       if (!/^[a-z0-9_-]+$/.test(scriptName)) return json(res, 400, { ok: false, error: "Invalid script name" });
-      const allowedScripts = new Set(["paymom", "unlock", "instagram", "youtube", "screenshot"]);
-      if (!allowedScripts.has(scriptName)) return json(res, 403, { ok: false, error: "Script is not registered" });
+
+      // Keep credential-entry workflows explicitly registered so Jazz can explain
+      // why they are unavailable, but never execute them through the bridge.
+      const registeredScripts = new Set(["paymom", "unlock", "unlockmobile", "instagram", "youtube", "screenshot"]);
+      const credentialScripts = new Set(["unlock", "unlockmobile"]);
+      if (!registeredScripts.has(scriptName)) return json(res, 403, { ok: false, error: "Script is not registered" });
+      if (credentialScripts.has(scriptName)) {
+        return json(res, 403, {
+          ok: false,
+          status: "credential_action_requires_manual_entry",
+          error: "Credential-entry scripts cannot be executed automatically by the Jazz bridge.",
+          scriptName
+        });
+      }
+
       const scriptFile = resolve(scriptRoot, `${scriptName}.sh`);
       if (!scriptFile.startsWith(`${scriptRoot}\\`) && !scriptFile.startsWith(`${scriptRoot}/`)) return json(res, 403, { ok: false, error: "Invalid script path" });
       target.deviceId = input.deviceId;
