@@ -7,7 +7,7 @@ export type VoiceCallbacks = {
 
 type VoiceState = "idle" | "listening" | "speaking" | "unsupported";
 
-/** Jazz voice engine: SpeechRecognition input + local Piper neural TTS output. */
+/** Jazz voice engine: SpeechRecognition input + low-latency local Piper PCM streaming output. */
 export class JazzVoice {
   private recognition: any = null;
   private callbacks: VoiceCallbacks;
@@ -21,11 +21,11 @@ export class JazzVoice {
   private micSource: MediaStreamAudioSourceNode | null = null;
   private levelFrame: number | null = null;
   private levelData: Uint8Array | null = null;
-  private outputSource: MediaElementAudioSourceNode | null = null;
   private outputAnalyser: AnalyserNode | null = null;
   private outputData: Uint8Array | null = null;
   private outputFrame: number | null = null;
-  private currentAudio: HTMLAudioElement | null = null;
+  private outputSources = new Set<AudioBufferSourceNode>();
+  private streamPlaying = false;
   private speechRunId = 0;
 
   constructor(callbacks: VoiceCallbacks = {}) {
@@ -159,29 +159,23 @@ export class JazzVoice {
     this.micStream = null;
   }
 
-  /** Attach a fresh analyser to every Piper audio element without delaying playback. */
-  private startOutputMonitor(audio: HTMLAudioElement) {
-    void this.ensureAudioContext().then(context => {
-      if (!context || this.currentAudio !== audio) return;
-      try {
-        this.stopOutputMonitor();
-        this.outputSource = context.createMediaElementSource(audio);
-        this.outputAnalyser = context.createAnalyser();
-        this.outputAnalyser.fftSize = 512;
-        this.outputAnalyser.smoothingTimeConstant = 0.58;
-        this.outputSource.connect(this.outputAnalyser);
-        this.outputAnalyser.connect(context.destination);
-        this.outputData = new Uint8Array(this.outputAnalyser.fftSize);
-        this.readOutputLevel();
-      } catch {
-        // Audio can still play if browser analyser attachment is unavailable.
-      }
-    });
+  /** Prepare a Web Audio analyser for streamed PCM output. */
+  private async startOutputMonitor() {
+    const context = await this.ensureAudioContext();
+    if (!context) return null;
+    this.stopOutputMonitor(false);
+    this.outputAnalyser = context.createAnalyser();
+    this.outputAnalyser.fftSize = 512;
+    this.outputAnalyser.smoothingTimeConstant = 0.58;
+    this.outputAnalyser.connect(context.destination);
+    this.outputData = new Uint8Array(this.outputAnalyser.fftSize);
+    this.readOutputLevel();
+    return context;
   }
 
-  /** Drive the holographic heart from actual output RMS + frequency energy. */
+  /** Drive the holographic heart from actual streamed PCM RMS + frequency energy. */
   private readOutputLevel = () => {
-    if (!this.outputAnalyser || !this.outputData || !this.currentAudio || this.currentAudio.paused) {
+    if (!this.outputAnalyser || !this.outputData || !this.streamPlaying) {
       this.outputFrame = null;
       return;
     }
@@ -202,14 +196,19 @@ export class JazzVoice {
     this.outputFrame = window.requestAnimationFrame(this.readOutputLevel);
   };
 
-  private stopOutputMonitor() {
+  private stopOutputMonitor(stopSources = true) {
     if (this.outputFrame !== null) window.cancelAnimationFrame(this.outputFrame);
     this.outputFrame = null;
     this.outputData = null;
-    this.outputSource?.disconnect();
-    this.outputSource = null;
+    if (stopSources) {
+      for (const source of this.outputSources) {
+        try { source.stop(); } catch { /* already stopped */ }
+      }
+    }
+    this.outputSources.clear();
     this.outputAnalyser?.disconnect();
     this.outputAnalyser = null;
+    this.streamPlaying = false;
   }
 
   private scheduleRestart(delay: number) {
@@ -244,7 +243,6 @@ export class JazzVoice {
     this.restartAttempts = 0;
     this.setVisualState("listening");
     this.setLevel(0.12);
-    // Warm the audio context from the user's mic interaction so later Piper playback has no context-start delay.
     void this.ensureAudioContext();
     if (this.restartTimer !== null) { window.clearTimeout(this.restartTimer); this.restartTimer = null; }
     try { this.recognition.start(); } catch { /* already running */ }
@@ -254,13 +252,8 @@ export class JazzVoice {
     this.listeningRequested = false;
     if (this.restartTimer !== null) { window.clearTimeout(this.restartTimer); this.restartTimer = null; }
     this.stopMicMonitor();
-    this.stopOutputMonitor();
+    this.stopOutputMonitor(true);
     this.speechRunId += 1;
-    if (this.currentAudio) {
-      this.currentAudio.pause();
-      this.currentAudio.src = "";
-      this.currentAudio = null;
-    }
     window.speechSynthesis?.cancel();
     try { this.recognition?.stop(); } catch { /* already stopped */ }
     this.setVisualState("idle");
@@ -274,48 +267,109 @@ export class JazzVoice {
     const runId = ++this.speechRunId;
     window.speechSynthesis?.cancel();
     this.stopMicMonitor();
-    this.stopOutputMonitor();
+    this.stopOutputMonitor(true);
     this.setVisualState("speaking");
     this.callbacks.onState?.("speaking");
     this.setLevel(0.04);
 
     try {
-      // Start Piper immediately when the text response is available. Do not wait for any UI animation.
-      const response = await fetch("/api/tts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: clean })
-      });
-      if (!response.ok) throw new Error("Piper TTS unavailable");
-      const blob = await response.blob();
+      const ok = await this.playPiperStream(clean, runId);
       if (runId !== this.speechRunId) return;
-      await this.playAudioBlob(blob, runId);
+      if (!ok) throw new Error("Piper TTS unavailable");
+      this.finishSpeaking();
     } catch {
       if (runId !== this.speechRunId) return;
+      this.stopOutputMonitor(true);
       this.speakBrowserFallback(clean, runId);
     }
   }
 
-  private async playAudioBlob(blob: Blob, runId: number) {
-    const url = URL.createObjectURL(blob);
-    const audio = new Audio(url);
-    audio.preload = "auto";
-    this.currentAudio = audio;
+  private async playPiperStream(text: string, runId: number) {
+    const context = await this.startOutputMonitor();
+    if (!context) return false;
 
-    // Critical latency fix: start playback immediately. AudioContext/analyser setup happens in parallel.
-    this.startOutputMonitor(audio);
-
-    await new Promise<void>(resolve => {
-      audio.onended = () => resolve();
-      audio.onerror = () => resolve();
-      void audio.play().catch(() => resolve());
+    const response = await fetch("/api/tts/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text })
     });
+    if (!response.ok || !response.body) return false;
 
-    URL.revokeObjectURL(url);
-    if (runId !== this.speechRunId) return;
-    this.currentAudio = null;
-    this.stopOutputMonitor();
-    this.finishSpeaking();
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let eventName = "";
+    let nextAudioTime = context.currentTime + 0.025;
+    let scheduled = 0;
+    let streamDone = false;
+    let streamError: Error | null = null;
+
+    const handleEvent = async (name: string, payload: string) => {
+      if (!payload) return;
+      let data: any;
+      try { data = JSON.parse(payload); } catch { return; }
+      if (runId !== this.speechRunId) return;
+      if (name === "meta") {
+        return;
+      }
+      if (name === "error") {
+        streamError = new Error(data?.error || "Piper streaming failed");
+        return;
+      }
+      if (name === "audio" && typeof data?.data === "string") {
+        const bytes = Uint8Array.from(atob(data.data), char => char.charCodeAt(0));
+        if (!bytes.length) return;
+        const sampleCount = Math.floor(bytes.byteLength / 2);
+        const samples = new Float32Array(sampleCount);
+        const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+        for (let i = 0; i < sampleCount; i += 1) {
+          samples[i] = Math.max(-1, Math.min(1, view.getInt16(i * 2, true) / 32768));
+        }
+        const audioBuffer = context.createBuffer(1, sampleCount, 22050);
+        audioBuffer.copyToChannel(samples, 0);
+        const source = context.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(this.outputAnalyser!);
+        this.outputSources.add(source);
+        const startAt = Math.max(nextAudioTime, context.currentTime + 0.01);
+        source.start(startAt);
+        const duration = sampleCount / 22050;
+        nextAudioTime = startAt + duration;
+        scheduled += sampleCount;
+        this.streamPlaying = true;
+        source.onended = () => {
+          this.outputSources.delete(source);
+          if (streamDone && this.outputSources.size === 0) this.streamPlaying = false;
+        };
+      }
+      if (name === "done") streamDone = true;
+    };
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        if (line.startsWith("event:")) eventName = line.slice(6).trim();
+        else if (line.startsWith("data:")) await handleEvent(eventName, line.slice(5).trim());
+      }
+    }
+    buffer += decoder.decode();
+    if (buffer.trim()) {
+      for (const line of buffer.split(/\r?\n/)) {
+        if (line.startsWith("event:")) eventName = line.slice(6).trim();
+        else if (line.startsWith("data:")) await handleEvent(eventName, line.slice(5).trim());
+      }
+    }
+
+    if (streamError || scheduled === 0 || runId !== this.speechRunId) throw streamError || new Error("Piper returned no audio");
+    streamDone = true;
+    const remainingMs = Math.max(0, (nextAudioTime - context.currentTime) * 1000);
+    await new Promise(resolve => window.setTimeout(resolve, remainingMs + 25));
+    this.streamPlaying = false;
+    return true;
   }
 
   private speakBrowserFallback(text: string, runId: number) {
