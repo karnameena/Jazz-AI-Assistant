@@ -9,7 +9,7 @@ export const scripts = {
   unlockmobile: {
     file: "unlockmobile.ps1",
     description: "Run Mama's approved Android wake/unlock workflow",
-    aliases: ["unlock my mobile", "unlock my phone", "unlock phone"],
+    aliases: ["unlock mobile", "unlock my mobile", "unlock my phone", "unlock phone"],
     requiresConfirmation: true,
     category: "device"
   },
