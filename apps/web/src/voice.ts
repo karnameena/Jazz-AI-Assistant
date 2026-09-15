@@ -19,6 +19,9 @@ export class JazzVoice {
   private levelFrame: number | null = null;
   private speakingFrame: number | null = null;
   private levelData: Uint8Array | null = null;
+  private speechQueue: SpeechSynthesisUtterance[] = [];
+  private speechIndex = 0;
+  private speechRunId = 0;
 
   constructor(callbacks: VoiceCallbacks = {}) {
     this.callbacks = callbacks;
@@ -169,8 +172,11 @@ export class JazzVoice {
     const started = performance.now();
     const animate = (now: number) => {
       const elapsed = (now - started) / 1000;
-      const pulse = 0.18 + Math.pow((Math.sin(elapsed * 7.2) + 1) / 2, 2) * 0.72;
-      this.setLevel(pulse);
+      // Human-like breathing/pulsing rather than a perfectly regular computer-style beat.
+      const pulseA = (Math.sin(elapsed * 8.4) + 1) / 2;
+      const pulseB = (Math.sin(elapsed * 13.7 + 1.4) + 1) / 2;
+      const pulse = 0.16 + pulseA * 0.44 + pulseB * 0.22;
+      this.setLevel(Math.min(1, pulse));
       this.speakingFrame = window.requestAnimationFrame(animate);
     };
     this.speakingFrame = window.requestAnimationFrame(animate);
@@ -208,9 +214,36 @@ export class JazzVoice {
   private refreshVoice() {
     if (!("speechSynthesis" in window)) return;
     const voices = window.speechSynthesis.getVoices();
+    if (!voices.length) return;
+
     const english = voices.filter(voice => /^(en|en[-_])/i.test(voice.lang));
-    const preferred = english.find(voice => /female|samantha|zira|aria|jenny|susan|google us english|google uk english/i.test(voice.name));
-    this.selectedVoice = preferred || english.find(voice => /en[-_]IN|india/i.test(voice.lang) || /google/i.test(voice.name)) || english[0] || voices[0] || null;
+    const pool = english.length ? english : voices;
+
+    // Prefer natural-sounding female voices. Browser voice names differ by OS,
+    // so this intentionally uses several common Google/Microsoft/Apple names.
+    const femaleNatural = [
+      /jenny/i,
+      /aria/i,
+      /zira/i,
+      /samantha/i,
+      /susan/i,
+      /sara/i,
+      /sonia/i,
+      /libby/i,
+      /hazel/i,
+      /ava/i,
+      /emma/i,
+      /google us english female/i,
+      /google uk english female/i,
+      /female/i,
+    ];
+
+    const femaleMatch = pool.find(voice => femaleNatural.some(pattern => pattern.test(voice.name)));
+    const indiaMatch = pool.find(voice => /en[-_]IN/i.test(voice.lang) && /female|jenny|aria|sara|google|microsoft/i.test(voice.name));
+    const naturalMatch = pool.find(voice => /online|natural|neural|enhanced/i.test(voice.name));
+    const googleMatch = pool.find(voice => /google/i.test(voice.name));
+
+    this.selectedVoice = femaleMatch || indiaMatch || naturalMatch || googleMatch || pool[0] || null;
   }
 
   isSupported() { return Boolean(this.recognition); }
@@ -247,58 +280,129 @@ export class JazzVoice {
     }
     this.stopMicMonitor();
     this.stopSpeakingAnimation();
+    this.speechRunId += 1;
+    this.speechQueue = [];
+    this.speechIndex = 0;
+    window.speechSynthesis?.cancel();
     try { this.recognition?.stop(); } catch { /* already stopped */ }
     this.setVisualState("idle");
     this.setLevel(0);
     this.callbacks.onState?.("idle");
   }
 
+  /**
+   * Speaks in short conversational thought-groups. This keeps Jazz responsive
+   * and lets punctuation create natural micro-pauses instead of one long,
+   * slow computer-style utterance.
+   */
   speak(text: string) {
     if (!("speechSynthesis" in window)) {
       this.callbacks.onError?.("Speech output is not supported by this browser.");
       return;
     }
 
+    const clean = this.cleanForSpeech(text);
+    if (!clean) return;
+
     this.refreshVoice();
+    const runId = ++this.speechRunId;
     window.speechSynthesis.cancel();
     this.stopMicMonitor();
+    this.speechQueue = this.makeSpeechQueue(clean, runId);
+    this.speechIndex = 0;
     this.setVisualState("speaking");
     this.startSpeakingAnimation();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.voice = this.selectedVoice;
-    utterance.lang = this.selectedVoice?.lang || "en-IN";
-    utterance.rate = 0.96;
-    utterance.pitch = 1.08;
-    utterance.volume = 1;
-    utterance.onstart = () => {
-      this.setVisualState("speaking");
-      this.callbacks.onState?.("speaking");
-    };
-    utterance.onend = () => {
-      this.stopSpeakingAnimation();
-      if (this.listeningRequested) {
-        this.setVisualState("listening");
-        this.callbacks.onState?.("listening");
-        void this.startMicMonitor();
+    this.callbacks.onState?.("speaking");
+    this.speakNext(runId);
+  }
+
+  private makeSpeechQueue(text: string, runId: number) {
+    const groups = text
+      .replace(/\s+/g, " ")
+      .split(/(?<=[.!?])\s+/)
+      .map(part => part.trim())
+      .filter(Boolean);
+
+    // Avoid tiny one-word utterances, which can create unnatural gaps.
+    const merged: string[] = [];
+    for (const group of groups) {
+      if (merged.length && group.length < 28 && !/[!?]$/.test(merged[merged.length - 1])) {
+        merged[merged.length - 1] += ` ${group}`;
       } else {
-        this.setVisualState("idle");
-        this.setLevel(0);
-        this.callbacks.onState?.("idle");
+        merged.push(group);
       }
-    };
-    utterance.onerror = () => {
-      this.stopSpeakingAnimation();
-      this.setVisualState("idle");
-      this.setLevel(0);
-      this.callbacks.onState?.("idle");
-    };
+    }
+
+    return merged.map((group, index) => {
+      const utterance = new SpeechSynthesisUtterance(group);
+      utterance.voice = this.selectedVoice;
+      utterance.lang = this.selectedVoice?.lang || "en-IN";
+      // Slightly faster than default, with a light, youthful pitch.
+      utterance.rate = index % 3 === 1 ? 1.06 : 1.03;
+      utterance.pitch = 1.14;
+      utterance.volume = 1;
+      utterance.onend = () => {
+        if (runId !== this.speechRunId) return;
+        this.speechIndex += 1;
+        if (this.speechIndex < this.speechQueue.length) {
+          window.setTimeout(() => this.speakNext(runId), 35);
+        } else {
+          this.finishSpeaking();
+        }
+      };
+      utterance.onerror = () => {
+        if (runId !== this.speechRunId) return;
+        this.finishSpeaking();
+      };
+      return utterance;
+    });
+  }
+
+  private speakNext(runId: number) {
+    if (runId !== this.speechRunId) return;
+    const utterance = this.speechQueue[this.speechIndex];
+    if (!utterance) {
+      this.finishSpeaking();
+      return;
+    }
+    this.setVisualState("speaking");
     window.speechSynthesis.speak(utterance);
   }
 
+  private finishSpeaking() {
+    this.stopSpeakingAnimation();
+    this.speechQueue = [];
+    this.speechIndex = 0;
+    if (this.listeningRequested) {
+      this.setVisualState("listening");
+      this.callbacks.onState?.("listening");
+      void this.startMicMonitor();
+    } else {
+      this.setVisualState("idle");
+      this.setLevel(0);
+      this.callbacks.onState?.("idle");
+    }
+  }
+
+  private cleanForSpeech(text: string) {
+    return text
+      .replace(/```[\s\S]*?```/g, "")
+      .replace(/`([^`]+)`/g, "$1")
+      .replace(/https?:\/\/\S+/g, "")
+      .replace(/https?:\/\/\S+/g, "")
+      .replace(/[*_#>]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
   cancelSpeech() {
+    this.speechRunId += 1;
+    this.speechQueue = [];
+    this.speechIndex = 0;
     window.speechSynthesis?.cancel();
     this.stopSpeakingAnimation();
     this.setVisualState(this.listeningRequested ? "listening" : "idle");
+    this.setLevel(0);
   }
 
   private stripWakePhrase(text: string) {
