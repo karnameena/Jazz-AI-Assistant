@@ -67,6 +67,39 @@ function runPiper(text, outputFile, config) {
 }
 
 /**
+ * Warm the Piper executable/model once when the API process starts.
+ * This does not play anything in the browser. It moves the expensive
+ * executable/model/disk-cache work out of Mama's first spoken reply.
+ */
+let prewarmPromise = null;
+export async function prewarmPiper() {
+  if (process.env.JAZZ_PIPER_PREWARM === "false") return false;
+  if (prewarmPromise) return prewarmPromise;
+
+  prewarmPromise = (async () => {
+    const config = ttsConfig();
+    await validatePiper(config);
+    const file = path.join(os.tmpdir(), `jazz-tts-prewarm-${crypto.randomUUID()}.wav`);
+    try {
+      await runPiper("Jazz ready.", file, config);
+      return true;
+    } finally {
+      await fs.rm(file, { force: true }).catch(() => {});
+    }
+  })().catch(error => {
+    // Prewarming is an optimization only. Never make API startup fail because
+    // Piper is missing; the normal TTS request will report the real error.
+    console.warn(`Jazz Piper prewarm skipped: ${error instanceof Error ? error.message : String(error)}`);
+    return false;
+  });
+
+  return prewarmPromise;
+}
+
+// Start model/executable warm-up as soon as the TTS module is loaded.
+void prewarmPiper();
+
+/**
  * Stream Piper's raw PCM16LE output as it is generated.
  * The browser can consume these chunks immediately through Web Audio.
  */
