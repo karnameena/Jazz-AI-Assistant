@@ -1,6 +1,7 @@
 import http from "node:http";
 import { devices, getDevice, sendAndroidCommand, sendAndroidScript } from "./device-bridge.mjs";
 import { findScriptForMessage, getScript, listScripts } from "./script-registry.mjs";
+import { synthesizeWithPiper } from "./tts.mjs";
 
 const port = Number(process.env.PORT || 8787);
 const memories = [];
@@ -12,7 +13,8 @@ const tools = [
   { name: "weather", description: "Get weather from an approved provider", requiresConfirmation: false },
   { name: "android", description: "Execute an explicitly authorized Android action through the configured bridge", requiresConfirmation: true },
   { name: "scripts", description: "Execute explicitly registered Mama-owned Android scripts", requiresConfirmation: false },
-  { name: "pc", description: "Execute an explicitly authorized PC action", requiresConfirmation: true }
+  { name: "pc", description: "Execute an explicitly authorized PC action", requiresConfirmation: true },
+  { name: "tts", description: "Speak Jazz replies with the configured local Piper voice", requiresConfirmation: false }
 ];
 
 function sendJson(res, status, payload) {
@@ -22,6 +24,16 @@ function sendJson(res, status, payload) {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
   res.end(JSON.stringify(payload));
+}
+
+function sendAudio(res, status, buffer) {
+  res.statusCode = status;
+  res.setHeader("Content-Type", "audio/wav");
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  res.end(buffer);
 }
 
 function parseJson(req) {
@@ -76,16 +88,13 @@ async function callConfiguredLLM(message) {
 async function handleScriptIntent(message) {
   const match = findScriptForMessage(message);
   if (!match) return null;
-
   const [scriptName, script] = match;
   const deviceId = deviceForMessage(message);
   const device = getDevice(deviceId);
   if (!device) return { assistant: `I don't know the ${deviceId} device yet.`, scriptName };
   if (!script) return null;
-
   const amount = extractAmount(message);
   const args = { amount, request: message };
-
   if (!script.requiresConfirmation) {
     try {
       const result = await sendAndroidScript(deviceId, scriptName, args);
@@ -95,21 +104,15 @@ async function handleScriptIntent(message) {
       return { assistant: `I found ${script.file}, but it couldn't run on ${device.name}: ${error.message}`, scriptName };
     }
   }
-
   pendingSensitiveAction = { scriptName, deviceId, args, description: script.description };
   const detail = amount !== null ? ` for ₹${amount}` : "";
-  return {
-    assistant: `I found your approved ${script.file} workflow${detail}. Because this action can change device state or move money, I need one final confirmation before executing it. Say “confirm” when you want me to run it on ${device.name}.`,
-    scriptName,
-    confirmationRequired: true
-  };
+  return { assistant: `I found your approved ${script.file} workflow${detail}. Because this action can change device state or move money, I need one final confirmation before executing it. Say “confirm” when you want me to run it on ${device.name}.`, scriptName, confirmationRequired: true };
 }
 
 async function assistantReply(message) {
   const text = String(message).trim();
   const lower = text.toLowerCase();
   if (!text) return { assistant: "Tell me what you need, Mama." };
-
   if (/^(confirm|yes confirm|confirm it|do it|go ahead)$/i.test(text) && pendingSensitiveAction) {
     const action = pendingSensitiveAction;
     pendingSensitiveAction = null;
@@ -121,49 +124,39 @@ async function assistantReply(message) {
       return { assistant: `I couldn't execute ${action.scriptName}.sh: ${error.message}` };
     }
   }
-
   const scripted = await handleScriptIntent(text);
   if (scripted) return scripted;
-
-  if (/\b(what('?s| is)?\s+the\s+)?time\b/.test(lower) || /\bcurrent\s+time\b/.test(lower)) {
-    return { assistant: `Mama, the current time in India is ${getCurrentTime()}.` };
-  }
-  if (/\b(where are you|where r u|where are u|where're you)\b/i.test(text)) {
-    return { assistant: "I'm right here with you, Mama 👋 I'm online, listening, and ready for whatever you want to do." };
-  }
-  if (/^(hi|hello|hey)(\s+jazz)?[!. ]*$/i.test(text)) {
-    return { assistant: "Hey Mama 👋 I'm here. What are we doing?" };
-  }
-  if (lower.includes("weather")) {
-    return { assistant: "I can handle weather once a live weather provider is connected. Tell me the city you want." };
-  }
-  if (lower.includes("remember") || lower.includes("memory")) {
-    return { assistant: "Absolutely, Mama. Tell me what you want Jazz to remember." };
-  }
-  if (lower.includes("remind") || lower.includes("reminder")) {
-    return { assistant: "Sure. Tell me what I should remind you about and when." };
-  }
-
+  if (/\b(what('?s| is)?\s+the\s+)?time\b/.test(lower) || /\bcurrent\s+time\b/.test(lower)) return { assistant: `Mama, the current time in India is ${getCurrentTime()}.` };
+  if (/\b(where are you|where r u|where are u|where're you)\b/i.test(text)) return { assistant: "I'm right here with you, Mama 👋 I'm online, listening, and ready for whatever you want to do." };
+  if (/^(hi|hello|hey)(\s+jazz)?[!. ]*$/i.test(text)) return { assistant: "Hey Mama 👋 I'm here. What are we doing?" };
+  if (lower.includes("weather")) return { assistant: "I can handle weather once a live weather provider is connected. Tell me the city you want." };
+  if (lower.includes("remember") || lower.includes("memory")) return { assistant: "Absolutely, Mama. Tell me what you want Jazz to remember." };
+  if (lower.includes("remind") || lower.includes("reminder")) return { assistant: "Sure. Tell me what I should remind you about and when." };
   try {
     const llmReply = await callConfiguredLLM(text);
     if (llmReply) return { assistant: llmReply, mode: "llm" };
-  } catch (error) {
-    console.warn(error.message);
-  }
-
+  } catch (error) { console.warn(error.message); }
   return { assistant: `I’m here, Mama. I understood: “${text}”. Connect a Jazz LLM provider for full open-ended reasoning and knowledge, and I'll keep using your registered tools for device actions.`, mode: "local-assistant" };
 }
 
 const server = http.createServer(async (req, res) => {
   if (req.method === "OPTIONS") return sendJson(res, 204, {});
-
   try {
-    if (req.method === "GET" && req.url === "/health") return sendJson(res, 200, { ok: true, service: "jazz-api", version: "0.5.0", llm: Boolean(process.env.JAZZ_LLM_API_URL && (process.env.JAZZ_LLM_API_KEY || process.env.OPENAI_API_KEY)) });
+    if (req.method === "GET" && req.url === "/health") return sendJson(res, 200, { ok: true, service: "jazz-api", version: "0.6.0", llm: Boolean(process.env.JAZZ_LLM_API_URL && (process.env.JAZZ_LLM_API_KEY || process.env.OPENAI_API_KEY)) });
     if (req.method === "GET" && req.url === "/api/tools") return sendJson(res, 200, { ok: true, tools });
     if (req.method === "GET" && req.url === "/api/scripts") return sendJson(res, 200, { ok: true, items: listScripts() });
     if (req.method === "GET" && req.url === "/api/devices") return sendJson(res, 200, { ok: true, items: devices });
     if (req.method === "GET" && req.url === "/api/time") return sendJson(res, 200, { ok: true, time: getCurrentTime(), timeZone: "Asia/Kolkata" });
     if (req.method === "GET" && req.url === "/api/memory") return sendJson(res, 200, { ok: true, items: memories });
+    if (req.method === "GET" && req.url === "/api/reminders") return sendJson(res, 200, { ok: true, items: reminders });
+
+    if (req.method === "POST" && req.url === "/api/tts") {
+      const input = await parseJson(req);
+      const text = typeof input.text === "string" ? input.text.trim() : "";
+      if (!text) return sendJson(res, 400, { ok: false, error: "text is required" });
+      const audio = await synthesizeWithPiper(text);
+      return sendAudio(res, 200, audio);
+    }
 
     if (req.method === "POST" && req.url === "/api/memory") {
       const input = await parseJson(req);
@@ -173,8 +166,6 @@ const server = http.createServer(async (req, res) => {
       memories.push(item);
       return sendJson(res, 201, { ok: true, item });
     }
-
-    if (req.method === "GET" && req.url === "/api/reminders") return sendJson(res, 200, { ok: true, items: reminders });
     if (req.method === "POST" && req.url === "/api/reminders") {
       const input = await parseJson(req);
       const title = typeof input.title === "string" ? input.title.trim() : "";
@@ -184,7 +175,6 @@ const server = http.createServer(async (req, res) => {
       reminders.push(item);
       return sendJson(res, 201, { ok: true, item });
     }
-
     if (req.method === "POST" && req.url === "/api/device-command") {
       const input = await parseJson(req);
       const deviceId = typeof input.deviceId === "string" ? input.deviceId : "";
@@ -196,7 +186,6 @@ const server = http.createServer(async (req, res) => {
       const result = await sendAndroidCommand(deviceId, action, input.args && typeof input.args === "object" ? input.args : {});
       return sendJson(res, result.ok === false ? 503 : 200, result);
     }
-
     if (req.method === "POST" && req.url === "/api/script-command") {
       const input = await parseJson(req);
       const scriptName = typeof input.scriptName === "string" ? input.scriptName : "";
@@ -207,13 +196,11 @@ const server = http.createServer(async (req, res) => {
       const result = await sendAndroidScript(deviceId, scriptName, input.args && typeof input.args === "object" ? input.args : {});
       return sendJson(res, result.ok === false ? 503 : 200, result);
     }
-
     if (req.method === "POST" && req.url === "/api/chat") {
       const input = await parseJson(req);
       const result = await assistantReply(typeof input.message === "string" ? input.message : "");
       return sendJson(res, 200, { ok: true, ...result });
     }
-
     return sendJson(res, 404, { ok: false, error: "Not found" });
   } catch (error) {
     return sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : "Invalid request" });
