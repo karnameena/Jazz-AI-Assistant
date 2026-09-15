@@ -1,7 +1,10 @@
 const windowsBridgeUrl = process.env.JAZZ_ADB_BRIDGE_URL || "http://127.0.0.1:9899";
 const targets = {
-  "android-phone": { id: "android-phone", name: "Android Phone", kind: "android", serial: process.env.JAZZ_ANDROID_PHONE_SERIAL || "" },
-  "android-tablet": { id: "android-tablet", name: "Android Tablet", kind: "android", serial: process.env.JAZZ_ANDROID_TABLET_SERIAL || "" }
+  "android-phone": { id: "android-phone", name: "Mobile", kind: "android", serial: process.env.JAZZ_ANDROID_PHONE_SERIAL || "" },
+  "android-tablet": { id: "android-tablet", name: "Tablet", kind: "android", serial: process.env.JAZZ_ANDROID_TABLET_SERIAL || "" },
+  "pc": { id: "pc", name: "PC", kind: "pc", serial: "" },
+  "tv": { id: "tv", name: "TV", kind: "tv", serial: "" },
+  "laptop": { id: "laptop", name: "Laptop", kind: "laptop", serial: "" }
 };
 
 export const devices = Object.values(targets).map(device => ({
