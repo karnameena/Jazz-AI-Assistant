@@ -72,7 +72,7 @@ async function discoverAndReconnect(deviceId, target) {
   for (const line of lines) {
     if (!line.includes("_adb-tls-connect._tcp")) continue;
 
-    const match = line.match(/^\s*(\S*${""})\s+_adb-tls-connect\._tcp\.?\s+(\d{1,3}(?:\.\d{1,3}){3}:\d+)\s*$/i);
+    const match = line.match(/^\s*(\S+)\s+_adb-tls-connect\._tcp\.?\s+(\d{1,3}(?:\.\d{1,3}){3}:\d+)\s*$/i);
     if (!match) continue;
 
     const instance = match[1];
