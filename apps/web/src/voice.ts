@@ -5,6 +5,8 @@ export type VoiceCallbacks = {
   onError?: (message: string) => void;
 };
 
+type VoiceState = "idle" | "listening" | "speaking" | "unsupported";
+
 export class JazzVoice {
   private recognition: any = null;
   private callbacks: VoiceCallbacks;
@@ -54,7 +56,7 @@ export class JazzVoice {
         this.callbacks.onState?.("idle");
         return;
       }
-      this.scheduleRestart(350);
+      this.scheduleRestart(300);
     };
 
     this.recognition.onerror = (event: any) => {
@@ -63,7 +65,7 @@ export class JazzVoice {
       if (code === "aborted" || code === "no-speech") return;
 
       if (code === "network") {
-        this.scheduleRestart(700);
+        this.scheduleRestart(650);
         return;
       }
 
@@ -85,7 +87,7 @@ export class JazzVoice {
         return;
       }
 
-      this.scheduleRestart(900);
+      this.scheduleRestart(850);
     };
 
     this.recognition.onresult = (event: any) => {
@@ -106,7 +108,7 @@ export class JazzVoice {
     }
   }
 
-  private setVisualState(state: "idle" | "listening" | "speaking" | "unsupported") {
+  private setVisualState(state: VoiceState) {
     if (typeof document === "undefined") return;
     document.documentElement.dataset.jazzVoiceState = state;
     if (state === "idle" || state === "unsupported") {
@@ -139,7 +141,7 @@ export class JazzVoice {
       this.levelData = new Uint8Array(this.analyser.fftSize);
       this.readMicLevel();
     } catch {
-      // SpeechRecognition can still work even if the visual level monitor is unavailable.
+      // SpeechRecognition can still work if the visual level monitor is unavailable.
     }
   }
 
@@ -172,10 +174,10 @@ export class JazzVoice {
     const started = performance.now();
     const animate = (now: number) => {
       const elapsed = (now - started) / 1000;
-      // Human-like breathing/pulsing rather than a perfectly regular computer-style beat.
-      const pulseA = (Math.sin(elapsed * 8.4) + 1) / 2;
-      const pulseB = (Math.sin(elapsed * 13.7 + 1.4) + 1) / 2;
-      const pulse = 0.16 + pulseA * 0.44 + pulseB * 0.22;
+      // Slightly irregular layered movement feels more organic than a fixed beat.
+      const breath = (Math.sin(elapsed * 6.7) + 1) / 2;
+      const shimmer = (Math.sin(elapsed * 11.9 + 1.1) + 1) / 2;
+      const pulse = 0.14 + breath * 0.40 + shimmer * 0.24;
       this.setLevel(Math.min(1, pulse));
       this.speakingFrame = window.requestAnimationFrame(animate);
     };
@@ -206,7 +208,7 @@ export class JazzVoice {
       try {
         this.recognition?.start();
       } catch {
-        this.scheduleRestart(Math.min(1500, delay + 200));
+        this.scheduleRestart(Math.min(1400, delay + 180));
       }
     }, delay);
   }
@@ -219,31 +221,27 @@ export class JazzVoice {
     const english = voices.filter(voice => /^(en|en[-_])/i.test(voice.lang));
     const pool = english.length ? english : voices;
 
-    // Prefer natural-sounding female voices. Browser voice names differ by OS,
-    // so this intentionally uses several common Google/Microsoft/Apple names.
-    const femaleNatural = [
-      /jenny/i,
-      /aria/i,
-      /zira/i,
-      /samantha/i,
-      /susan/i,
-      /sara/i,
-      /sonia/i,
-      /libby/i,
-      /hazel/i,
-      /ava/i,
-      /emma/i,
-      /google us english female/i,
-      /google uk english female/i,
-      /female/i,
-    ];
+    // Score voices instead of blindly taking the first "female" match.
+    // This favors modern natural/neural female voices when the browser exposes them.
+    const scored = pool.map(voice => {
+      const name = voice.name.toLowerCase();
+      const lang = voice.lang.toLowerCase();
+      let score = 0;
 
-    const femaleMatch = pool.find(voice => femaleNatural.some(pattern => pattern.test(voice.name)));
-    const indiaMatch = pool.find(voice => /en[-_]IN/i.test(voice.lang) && /female|jenny|aria|sara|google|microsoft/i.test(voice.name));
-    const naturalMatch = pool.find(voice => /online|natural|neural|enhanced/i.test(voice.name));
-    const googleMatch = pool.find(voice => /google/i.test(voice.name));
+      if (/jenny|aria|samantha|zira|sara|sonia|libby|hazel|ava|emma|susan/.test(name)) score += 45;
+      if (/female|woman|girl/.test(name)) score += 28;
+      if (/natural|neural|online|enhanced|premium/.test(name)) score += 38;
+      if (/microsoft|google|apple/.test(name)) score += 8;
+      if (/en-us/.test(lang)) score += 8;
+      if (/en-gb|en-au/.test(lang)) score += 5;
+      if (/en-in/.test(lang)) score += 4;
+      if (voice.localService === false) score += 10;
 
-    this.selectedVoice = femaleMatch || indiaMatch || naturalMatch || googleMatch || pool[0] || null;
+      return { voice, score };
+    });
+
+    scored.sort((a, b) => b.score - a.score);
+    this.selectedVoice = scored[0]?.voice || pool[0] || null;
   }
 
   isSupported() { return Boolean(this.recognition); }
@@ -291,9 +289,9 @@ export class JazzVoice {
   }
 
   /**
-   * Speaks in short conversational thought-groups. This keeps Jazz responsive
-   * and lets punctuation create natural micro-pauses instead of one long,
-   * slow computer-style utterance.
+   * Speak with a relaxed conversational cadence. The browser remains responsible
+   * for the actual voice synthesis, while Jazz controls voice choice, pace,
+   * punctuation and short thought-groups so the delivery feels less robotic.
    */
   speak(text: string) {
     if (!("speechSynthesis" in window)) {
@@ -317,43 +315,78 @@ export class JazzVoice {
   }
 
   private makeSpeechQueue(text: string, runId: number) {
-    const groups = text
+    const normalized = text
       .replace(/\s+/g, " ")
+      .replace(/\s*[:;]\s*/g, ", ")
+      .trim();
+
+    // Prefer complete thoughts. Only split long sentences when needed so the
+    // browser can preserve its own natural prosody instead of sounding choppy.
+    const sentences = normalized
       .split(/(?<=[.!?])\s+/)
       .map(part => part.trim())
       .filter(Boolean);
 
-    // Avoid tiny one-word utterances, which can create unnatural gaps.
-    const merged: string[] = [];
-    for (const group of groups) {
-      if (merged.length && group.length < 28 && !/[!?]$/.test(merged[merged.length - 1])) {
-        merged[merged.length - 1] += ` ${group}`;
-      } else {
-        merged.push(group);
+    const groups: string[] = [];
+    let buffer = "";
+
+    for (const sentence of sentences) {
+      const candidate = buffer ? `${buffer} ${sentence}` : sentence;
+      if (candidate.length <= 260) {
+        buffer = candidate;
+        continue;
+      }
+
+      if (buffer) groups.push(buffer);
+      buffer = sentence;
+
+      if (buffer.length > 300) {
+        const words = buffer.split(" ");
+        buffer = "";
+        let chunk = "";
+        for (const word of words) {
+          const next = chunk ? `${chunk} ${word}` : word;
+          if (next.length > 220 && chunk) {
+            groups.push(chunk);
+            chunk = word;
+          } else {
+            chunk = next;
+          }
+        }
+        buffer = chunk;
       }
     }
 
-    return merged.map((group, index) => {
+    if (buffer) groups.push(buffer);
+
+    return groups.map((group, index) => {
       const utterance = new SpeechSynthesisUtterance(group);
       utterance.voice = this.selectedVoice;
-      utterance.lang = this.selectedVoice?.lang || "en-IN";
-      // Slightly faster than default, with a light, youthful pitch.
-      utterance.rate = index % 3 === 1 ? 1.06 : 1.03;
-      utterance.pitch = 1.14;
+      utterance.lang = this.selectedVoice?.lang || "en-US";
+
+      // A little quicker than the browser default, but not rushed.
+      // Small variation prevents every sentence from having identical timing.
+      const rates = [1.05, 1.07, 1.04, 1.06];
+      utterance.rate = rates[index % rates.length];
+      utterance.pitch = 1.10;
       utterance.volume = 1;
+
       utterance.onend = () => {
         if (runId !== this.speechRunId) return;
         this.speechIndex += 1;
         if (this.speechIndex < this.speechQueue.length) {
-          window.setTimeout(() => this.speakNext(runId), 35);
+          // A tiny breath-like gap, not a long robotic pause.
+          window.setTimeout(() => this.speakNext(runId), 45);
         } else {
           this.finishSpeaking();
         }
       };
+
       utterance.onerror = () => {
         if (runId !== this.speechRunId) return;
         this.finishSpeaking();
       };
+
       return utterance;
     });
   }
@@ -389,8 +422,8 @@ export class JazzVoice {
       .replace(/```[\s\S]*?```/g, "")
       .replace(/`([^`]+)`/g, "$1")
       .replace(/https?:\/\/\S+/g, "")
-      .replace(/https?:\/\/\S+/g, "")
       .replace(/[*_#>]/g, "")
+      .replace(/^\s*[-•]\s+/gm, "")
       .replace(/\s+/g, " ")
       .trim();
   }
