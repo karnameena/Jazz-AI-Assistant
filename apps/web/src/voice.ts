@@ -159,7 +159,7 @@ export class JazzVoice {
     this.micStream = null;
   }
 
-  /** Attach a fresh analyser to every Piper audio element. */
+  /** Attach a fresh analyser to every Piper audio element without delaying playback. */
   private startOutputMonitor(audio: HTMLAudioElement) {
     void this.ensureAudioContext().then(context => {
       if (!context || this.currentAudio !== audio) return;
@@ -244,6 +244,8 @@ export class JazzVoice {
     this.restartAttempts = 0;
     this.setVisualState("listening");
     this.setLevel(0.12);
+    // Warm the audio context from the user's mic interaction so later Piper playback has no context-start delay.
+    void this.ensureAudioContext();
     if (this.restartTimer !== null) { window.clearTimeout(this.restartTimer); this.restartTimer = null; }
     try { this.recognition.start(); } catch { /* already running */ }
   }
@@ -278,6 +280,7 @@ export class JazzVoice {
     this.setLevel(0.04);
 
     try {
+      // Start Piper immediately when the text response is available. Do not wait for any UI animation.
       const response = await fetch("/api/tts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -298,7 +301,8 @@ export class JazzVoice {
     const audio = new Audio(url);
     audio.preload = "auto";
     this.currentAudio = audio;
-    await this.ensureAudioContext();
+
+    // Critical latency fix: start playback immediately. AudioContext/analyser setup happens in parallel.
     this.startOutputMonitor(audio);
 
     await new Promise<void>(resolve => {
