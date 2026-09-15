@@ -7,13 +7,7 @@ export type VoiceCallbacks = {
 
 type VoiceState = "idle" | "listening" | "speaking" | "unsupported";
 
-/**
- * Jazz voice engine.
- *
- * Input: browser SpeechRecognition.
- * Output: local Piper neural TTS through POST /api/tts, with browser
- * speechSynthesis as a graceful fallback when Piper is unavailable.
- */
+/** Jazz voice engine: SpeechRecognition input + local Piper neural TTS output. */
 export class JazzVoice {
   private recognition: any = null;
   private callbacks: VoiceCallbacks;
@@ -21,14 +15,12 @@ export class JazzVoice {
   private listeningRequested = false;
   private restartTimer: number | null = null;
   private restartAttempts = 0;
-
   private audioContext: AudioContext | null = null;
   private micStream: MediaStream | null = null;
   private micAnalyser: AnalyserNode | null = null;
   private micSource: MediaStreamAudioSourceNode | null = null;
   private levelFrame: number | null = null;
   private levelData: Uint8Array | null = null;
-
   private outputSource: MediaElementAudioSourceNode | null = null;
   private outputAnalyser: AnalyserNode | null = null;
   private outputData: Uint8Array | null = null;
@@ -39,14 +31,12 @@ export class JazzVoice {
   constructor(callbacks: VoiceCallbacks = {}) {
     this.callbacks = callbacks;
     this.setVisualState("idle");
-
     const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!Recognition) {
       this.setVisualState("unsupported");
       this.callbacks.onState?.("unsupported");
       return;
     }
-
     this.recognition = new Recognition();
     this.recognition.lang = "en-IN";
     this.recognition.interimResults = true;
@@ -59,7 +49,6 @@ export class JazzVoice {
       this.callbacks.onState?.("listening");
       void this.startMicMonitor();
     };
-
     this.recognition.onend = () => {
       if (!this.listeningRequested) {
         this.stopMicMonitor();
@@ -69,7 +58,6 @@ export class JazzVoice {
       }
       this.scheduleRestart(300);
     };
-
     this.recognition.onerror = (event: any) => {
       const code = String(event?.error || "");
       if (code === "aborted" || code === "no-speech") return;
@@ -92,7 +80,6 @@ export class JazzVoice {
       }
       this.scheduleRestart(850);
     };
-
     this.recognition.onresult = (event: any) => {
       let interim = "";
       let finalText = "";
@@ -143,7 +130,7 @@ export class JazzVoice {
       this.levelData = new Uint8Array(this.micAnalyser.fftSize);
       this.readMicLevel();
     } catch {
-      // Speech recognition remains usable without the visual level monitor.
+      // Speech recognition remains usable without the visual monitor.
     }
   }
 
@@ -172,25 +159,27 @@ export class JazzVoice {
     this.micStream = null;
   }
 
+  /** Attach a fresh analyser to every Piper audio element. */
   private startOutputMonitor(audio: HTMLAudioElement) {
     void this.ensureAudioContext().then(context => {
       if (!context || this.currentAudio !== audio) return;
       try {
-        if (!this.outputSource) this.outputSource = context.createMediaElementSource(audio);
-        this.outputAnalyser?.disconnect();
+        this.stopOutputMonitor();
+        this.outputSource = context.createMediaElementSource(audio);
         this.outputAnalyser = context.createAnalyser();
-        this.outputAnalyser.fftSize = 256;
-        this.outputAnalyser.smoothingTimeConstant = 0.68;
+        this.outputAnalyser.fftSize = 512;
+        this.outputAnalyser.smoothingTimeConstant = 0.58;
         this.outputSource.connect(this.outputAnalyser);
         this.outputAnalyser.connect(context.destination);
         this.outputData = new Uint8Array(this.outputAnalyser.fftSize);
         this.readOutputLevel();
       } catch {
-        // The audio element can still play even if an analyser cannot be attached.
+        // Audio can still play if browser analyser attachment is unavailable.
       }
     });
   }
 
+  /** Drive the holographic heart from actual output RMS + frequency energy. */
   private readOutputLevel = () => {
     if (!this.outputAnalyser || !this.outputData || !this.currentAudio || this.currentAudio.paused) {
       this.outputFrame = null;
@@ -203,7 +192,13 @@ export class JazzVoice {
       sum += sample * sample;
     }
     const rms = Math.sqrt(sum / this.outputData.length);
-    this.setLevel(Math.min(1, Math.max(0, (rms - 0.01) * 8.5)));
+    const frequencyData = new Uint8Array(this.outputAnalyser.frequencyBinCount);
+    this.outputAnalyser.getByteFrequencyData(frequencyData);
+    let frequencySum = 0;
+    for (let i = 0; i < frequencyData.length; i += 1) frequencySum += frequencyData[i];
+    const frequencyLevel = frequencySum / (frequencyData.length * 255);
+    const level = Math.min(1, Math.max(0, (rms - 0.006) * 9 + frequencyLevel * 0.55));
+    this.setLevel(level);
     this.outputFrame = window.requestAnimationFrame(this.readOutputLevel);
   };
 
@@ -211,6 +206,8 @@ export class JazzVoice {
     if (this.outputFrame !== null) window.cancelAnimationFrame(this.outputFrame);
     this.outputFrame = null;
     this.outputData = null;
+    this.outputSource?.disconnect();
+    this.outputSource = null;
     this.outputAnalyser?.disconnect();
     this.outputAnalyser = null;
   }
@@ -269,15 +266,16 @@ export class JazzVoice {
     this.callbacks.onState?.("idle");
   }
 
-  /** Speak using local Piper first, then browser TTS as a fallback. */
   async speak(text: string) {
     const clean = this.cleanForSpeech(text);
     if (!clean) return;
     const runId = ++this.speechRunId;
     window.speechSynthesis?.cancel();
     this.stopMicMonitor();
+    this.stopOutputMonitor();
     this.setVisualState("speaking");
     this.callbacks.onState?.("speaking");
+    this.setLevel(0.04);
 
     try {
       const response = await fetch("/api/tts", {
@@ -289,9 +287,7 @@ export class JazzVoice {
       const blob = await response.blob();
       if (runId !== this.speechRunId) return;
       await this.playAudioBlob(blob, runId);
-      return;
     } catch {
-      // Keep Jazz usable during setup or if Piper is temporarily offline.
       if (runId !== this.speechRunId) return;
       this.speakBrowserFallback(clean, runId);
     }
@@ -302,6 +298,7 @@ export class JazzVoice {
     const audio = new Audio(url);
     audio.preload = "auto";
     this.currentAudio = audio;
+    await this.ensureAudioContext();
     this.startOutputMonitor(audio);
 
     await new Promise<void>(resolve => {
@@ -318,10 +315,7 @@ export class JazzVoice {
   }
 
   private speakBrowserFallback(text: string, runId: number) {
-    if (!("speechSynthesis" in window)) {
-      this.finishSpeaking();
-      return;
-    }
+    if (!("speechSynthesis" in window)) { this.finishSpeaking(); return; }
     const voices = window.speechSynthesis.getVoices();
     const english = voices.filter(v => /^(en|en[-_])/i.test(v.lang));
     const pool = english.length ? english : voices;
@@ -379,6 +373,6 @@ export class JazzVoice {
 
   private stripWakePhrase(text: string) {
     if (!this.wakeEnabled) return text;
-    return text.replace(/^\s*(?:hey\s+)?jazz[\s,!.:-]*/i, "").trim() || text;
+    return text.replace(/^\s*(?:hey\s+)?jazz[,:;.!-]?\s*/i, "").trim() || text;
   }
 }
