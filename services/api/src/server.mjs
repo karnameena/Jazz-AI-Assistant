@@ -1,7 +1,7 @@
 import http from "node:http";
 import { devices, getDevice, sendAndroidCommand, sendAndroidScript } from "./device-bridge.mjs";
 import { findScriptForMessage, getScript, listScripts } from "./script-registry.mjs";
-import { synthesizeWithPiper } from "./tts.mjs";
+import { streamPiperRaw, synthesizeWithPiper } from "./tts.mjs";
 
 const port = Number(process.env.PORT || 8787);
 const memories = [];
@@ -18,13 +18,7 @@ const tools = [
   { name: "web", description: "Search the live web when Gemini web grounding is enabled", requiresConfirmation: false }
 ];
 
-const GEMINI_FALLBACKS = [
-  "gemini-3.8-flash",
-  "gemini-3.7-flash",
-  "gemini-3.6-flash",
-  "gemini-3.5-flash",
-  "gemini-3.1-flash-lite"
-];
+const GEMINI_FALLBACKS = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite"];
 
 function sendJson(res, status, payload) {
   res.statusCode = status;
@@ -109,7 +103,6 @@ function geminiModels() {
 }
 
 function transientGemini(status) { return [408, 429, 500, 502, 503, 504].includes(status); }
-
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 
 function systemPrompt() {
@@ -217,7 +210,9 @@ async function callOpenAICompatibleLLM(message, systemInstruction) {
   const url = process.env.JAZZ_LLM_API_URL || "https://api.openai.com/v1/responses";
   const isResponses = /\/responses(?:$|\?)/i.test(url) || /api\.openai\.com/i.test(url);
   const model = process.env.JAZZ_LLM_MODEL || "gpt-5.6-sol";
-  const body = isResponses ? { model, instructions: systemInstruction, input: message, reasoning: { effort: process.env.JAZZ_REASONING_EFFORT || "high" }, tools: [{ type: "web_search_preview" }], max_output_tokens: 8000 } : { model, messages: [{ role: "system", content: systemInstruction }, { role: "user", content: message }], temperature: 0.7 };
+  const body = isResponses
+    ? { model, instructions: systemInstruction, input: message, reasoning: { effort: process.env.JAZZ_REASONING_EFFORT || "high" }, tools: [{ type: "web_search_preview" }], max_output_tokens: 8000 }
+    : { model, messages: [{ role: "system", content: systemInstruction }, { role: "user", content: message }], temperature: 0.7 };
   const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` }, body: JSON.stringify(body) });
   if (!response.ok) { const detail = await response.text().catch(() => ""); throw new Error(`LLM request failed (${response.status})${detail ? `: ${detail.slice(0, 240)}` : ""}`); }
   const data = await response.json();
@@ -267,7 +262,7 @@ async function localAssistantReply(message) {
   }
   const scripted = await handleScriptIntent(text);
   if (scripted) return scripted;
-  if (/\b(what('?s| is)?\s+the\s+)?time\b/.test(lower) || /\bcurrent\s+time\b/.test(lower)) return { assistant: `Mama, the current time in India is ${getCurrentTime()}.` };
+  if (/^(?:what(?:'s| is)\s+)?(?:the\s+)?(?:current\s+)?time(?:\s+is\s+it)?(?:\s+in\s+india)?[?.! ]*$/i.test(text)) return { assistant: `Mama, the current time in India is ${getCurrentTime()}.` };
   if (/\b(where are you|where r u|where are u|where're you)\b/i.test(text)) return { assistant: "I'm right here with you, Mama 👋 I'm online, listening, and ready for whatever you want to do." };
   if (/^(hi|hello|hey)(\s+jazz)?[!. ]*$/i.test(text)) return { assistant: "Hey Mama 👋 I'm here. What are we doing?" };
   if (lower.includes("weather")) return { assistant: "I can handle weather once a live weather provider is connected. Tell me the city you want." };
@@ -315,21 +310,45 @@ async function streamAssistantReply(message, res) {
   res.end();
 }
 
+async function streamTtsReply(text, res) {
+  sendSse(res, "meta", { mode: "piper", format: "pcm16le", sampleRate: 22050, channels: 1 });
+  let bytes = 0;
+  await streamPiperRaw(text, chunk => {
+    bytes += chunk.length;
+    sendSse(res, "audio", { data: chunk.toString("base64") });
+  });
+  sendSse(res, "done", { bytes, sampleRate: 22050, channels: 1 });
+  res.end();
+}
+
 const server = http.createServer(async (req, res) => {
   if (req.method === "OPTIONS") return sendJson(res, 204, {});
   try {
-    if (req.method === "GET" && req.url === "/health") return sendJson(res, 200, { ok: true, service: "jazz-api", version: "0.9.0", provider: process.env.JAZZ_LLM_PROVIDER || "gemini", keyConfigured: Boolean(process.env.JAZZ_LLM_API_KEY || process.env.OPENAI_API_KEY), streaming: true, thinkingLevel: process.env.JAZZ_GEMINI_THINKING_LEVEL || "high" });
+    if (req.method === "GET" && req.url === "/health") return sendJson(res, 200, { ok: true, service: "jazz-api", version: "0.9.1", provider: process.env.JAZZ_LLM_PROVIDER || "gemini", keyConfigured: Boolean(process.env.JAZZ_LLM_API_KEY || process.env.OPENAI_API_KEY), streaming: true, thinkingLevel: process.env.JAZZ_GEMINI_THINKING_LEVEL || "high", ttsStreaming: true });
     if (req.method === "GET" && req.url === "/api/tools") return sendJson(res, 200, { ok: true, tools });
     if (req.method === "GET" && req.url === "/api/scripts") return sendJson(res, 200, { ok: true, items: listScripts() });
     if (req.method === "GET" && req.url === "/api/devices") return sendJson(res, 200, { ok: true, items: devices });
     if (req.method === "GET" && req.url === "/api/time") return sendJson(res, 200, { ok: true, time: getCurrentTime(), timeZone: "Asia/Kolkata" });
     if (req.method === "GET" && req.url === "/api/memory") return sendJson(res, 200, { ok: true, items: memories });
     if (req.method === "GET" && req.url === "/api/reminders") return sendJson(res, 200, { ok: true, items: reminders });
+
     if (req.method === "POST" && req.url === "/api/tts") {
-      const input = await parseJson(req); const text = typeof input.text === "string" ? input.text.trim() : "";
+      const input = await parseJson(req);
+      const text = typeof input.text === "string" ? input.text.trim() : "";
       if (!text) return sendJson(res, 400, { ok: false, error: "text is required" });
       return sendAudio(res, 200, await synthesizeWithPiper(text));
     }
+
+    if (req.method === "POST" && req.url === "/api/tts/stream") {
+      const input = await parseJson(req);
+      const text = typeof input.text === "string" ? input.text.trim() : "";
+      if (!text) return sendJson(res, 400, { ok: false, error: "text is required" });
+      sendSseHeaders(res);
+      try { await streamTtsReply(text, res); }
+      catch (error) { sendSse(res, "error", { error: error instanceof Error ? error.message : "Piper streaming failed" }); if (!res.writableEnded) res.end(); }
+      return;
+    }
+
     if (req.method === "POST" && req.url === "/api/memory") {
       const input = await parseJson(req); const content = typeof input.content === "string" ? input.content.trim() : "";
       if (!content) return sendJson(res, 400, { ok: false, error: "content is required" });
@@ -363,7 +382,9 @@ const server = http.createServer(async (req, res) => {
       const input = await parseJson(req); const result = await assistantReply(typeof input.message === "string" ? input.message : ""); return sendJson(res, 200, { ok: true, ...result });
     }
     return sendJson(res, 404, { ok: false, error: "Not found" });
-  } catch (error) { return sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : "Invalid request" }); }
+  } catch (error) {
+    return sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : "Invalid request" });
+  }
 });
 
 server.listen(port, "0.0.0.0", () => console.log(`Jazz API listening on :${port}`));
