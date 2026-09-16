@@ -6,6 +6,7 @@ import { createJazzOrchestrator } from "../../../packages/core/src/orchestrator.
 import { createLLMProvider } from "../../../packages/llm/src/index.mjs";
 
 const port = Number(process.env.PORT || 8787);
+const maxBodyBytes = Number(process.env.JAZZ_MAX_BODY_BYTES || 1_048_576);
 const memories = [];
 const reminders = [];
 let pendingSensitiveAction = null;
@@ -34,7 +35,23 @@ function sendSseHeaders(res) {
   res.statusCode = 200; res.setHeader("Content-Type", "text/event-stream; charset=utf-8"); res.setHeader("Cache-Control", "no-cache, no-transform"); res.setHeader("Connection", "keep-alive"); res.setHeader("X-Accel-Buffering", "no"); res.setHeader("Access-Control-Allow-Origin", "*"); res.flushHeaders?.();
 }
 function sendSse(res, event, data) { if (!res.writableEnded) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); }
-function parseJson(req) { return new Promise((resolve, reject) => { let body = ""; req.on("data", c => { body += c; }); req.on("end", () => { try { resolve(JSON.parse(body || "{}")); } catch (e) { reject(e); } }); }); }
+function parseJson(req) {
+  return new Promise((resolve, reject) => {
+    let body = ""; let size = 0; let settled = false;
+    const fail = error => { if (!settled) { settled = true; reject(error); } };
+    req.on("data", chunk => {
+      if (settled) return;
+      size += chunk.length;
+      if (size > maxBodyBytes) { fail(new Error("Request body is too large")); return; }
+      body += chunk;
+    });
+    req.on("end", () => {
+      if (settled) return;
+      try { settled = true; resolve(JSON.parse(body || "{}")); } catch { fail(new Error("Invalid JSON request body")); }
+    });
+    req.on("error", fail);
+  });
+}
 function getCurrentTime() { return new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true }).format(new Date()); }
 function extractAmount(text) { const m = String(text).match(/(?:₹|rs\.?|inr\s*)\s*(\d+(?:\.\d+)?)/i) || String(text).match(/\b(\d+(?:\.\d+)?)\s*(?:rupees|rs)\b/i); return m ? Number(m[1]) : null; }
 function deviceForMessage(text) { return /\btablet\b/i.test(text) ? "android-tablet" : "android-phone"; }
@@ -53,16 +70,18 @@ async function handleScriptIntent(message) {
     try { const result = await sendAndroidScript(deviceId, scriptName, args); if (result.ok === false) return { assistant: result.message || `I couldn't run ${script.file}.`, scriptName }; return { assistant: result.message || `Done, Mama. ${script.file} completed on ${device.name}.`, scriptName, executed: true }; }
     catch (error) { return { assistant: `I found ${script.file}, but it couldn't run on ${device.name}: ${error.message}`, scriptName }; }
   }
-  pendingSensitiveAction = { scriptName, deviceId, args, description: script.description };
+  pendingSensitiveAction = { scriptName, deviceId, args, description: script.description, expiresAt: Date.now() + 60_000 };
   const detail = amount !== null ? ` for ₹${amount}` : "";
-  return { assistant: `I found your approved ${script.file} workflow${detail}. This sensitive action needs one final confirmation. Say “confirm” when you want me to run it on ${device.name}.`, scriptName, confirmationRequired: true };
+  return { assistant: `I found your approved ${script.file} workflow${detail}. This sensitive action needs one final confirmation. Say “confirm” within 60 seconds when you want me to run it on ${device.name}.`, scriptName, confirmationRequired: true };
 }
 
 async function registeredToolRouter(message) {
   const text = String(message).trim();
   if (!text) return { assistant: "Tell me what you need, Mama." };
+  if (/^(cancel|never mind|nevermind|stop)$/i.test(text) && pendingSensitiveAction) { pendingSensitiveAction = null; return { assistant: "Cancelled, Mama. I won't run that action." }; }
   if (/^(confirm|yes confirm|confirm it|do it|go ahead)$/i.test(text) && pendingSensitiveAction) {
     const action = pendingSensitiveAction; pendingSensitiveAction = null;
+    if (Date.now() > action.expiresAt) return { assistant: "That confirmation expired. Please ask me to start the action again." };
     try { const result = await sendAndroidScript(action.deviceId, action.scriptName, action.args); if (result.ok === false) return { assistant: result.message || "The approved script did not complete." }; return { assistant: result.message || `Done, Mama. ${action.scriptName} completed.`, executed: true }; }
     catch (error) { return { assistant: `I couldn't execute ${action.scriptName}: ${error.message}` }; }
   }
@@ -72,11 +91,11 @@ async function registeredToolRouter(message) {
 }
 
 const llm = createLLMProvider({ provider: process.env.JAZZ_LLM_PROVIDER || "ollama" });
-const jazz = createJazzOrchestrator({ llm, toolRouter: registeredToolRouter, systemPrompt: systemPrompt() });
+const jazz = createJazzOrchestrator({ llm, toolRouter: registeredToolRouter, systemPrompt });
 
 async function assistantReply(message) {
   try { const result = await jazz.handle(message); return { assistant: result.assistant, mode: result.source, provider: result.provider || null, model: result.model || null, executed: result.executed, confirmationRequired: result.confirmationRequired }; }
-  catch (error) { console.warn(`[Jazz] local brain unavailable — ${error.message}`); return { assistant: "My local brain is unavailable right now. Make sure Ollama is running and qwen3:8b is installed.", mode: "llm-unavailable", provider: "ollama" }; }
+  catch (error) { console.warn(`[Jazz] local brain unavailable — ${error.message}`); return { assistant: `My local brain is unavailable right now. Make sure Ollama is running and ${llm.model} is installed.`, mode: "llm-unavailable", provider: "ollama", model: llm.model }; }
 }
 
 async function streamAssistantReply(message, res) {
@@ -93,7 +112,7 @@ async function streamTtsReply(text, res) {
 const server = http.createServer(async (req, res) => {
   if (req.method === "OPTIONS") return sendJson(res, 204, {});
   try {
-    if (req.method === "GET" && req.url === "/health") { const brain = await llm.health(); return sendJson(res, 200, { ok: true, service: "jazz-api", version: "0.10.0", provider: "ollama", model: llm.model, brain, subscriptionRequired: false, ttsStreaming: true }); }
+    if (req.method === "GET" && req.url === "/health") { const brain = await llm.health(); return sendJson(res, brain.ok ? 200 : 503, { ok: brain.ok, service: "jazz-api", version: "0.10.1", provider: brain.provider || "ollama", model: llm.model, brain, subscriptionRequired: false, ttsStreaming: true }); }
     if (req.method === "GET" && req.url === "/api/tools") return sendJson(res, 200, { ok: true, tools });
     if (req.method === "GET" && req.url === "/api/scripts") return sendJson(res, 200, { ok: true, items: listScripts() });
     if (req.method === "GET" && req.url === "/api/devices") return sendJson(res, 200, { ok: true, items: devices });
