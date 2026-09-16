@@ -3,8 +3,6 @@ import { basename, resolve } from "node:path";
 
 const scriptRoot = resolve(process.env.JAZZ_SCRIPT_ROOT || "scripts/android");
 
-// Explicit allow-list. Jazz never executes an arbitrary path supplied by the LLM/user.
-// Add future Mama-owned scripts here with an exact filename and aliases.
 export const scripts = {
   unlockmobile: {
     file: "unlockmobile.ps1",
@@ -23,7 +21,7 @@ export const scripts = {
   },
   paymom: {
     file: "pay-mom.ps1",
-    description: "Mama's approved payment workflow to Meena",
+    description: "Open Mama's approved Mom payment navigation workflow",
     aliases: [
       "pay mom", "pay my mom", "pay to mom", "pay to my mom",
       "pay mummy", "pay my mummy", "pay to mummy", "pay to my mummy",
@@ -65,9 +63,7 @@ export const scripts = {
   }
 };
 
-export function getScript(name) {
-  return scripts[name] || null;
-}
+export function getScript(name) { return scripts[name] || null; }
 
 function normalizeIntentText(value) {
   return String(value || "")
@@ -78,18 +74,28 @@ function normalizeIntentText(value) {
     .trim();
 }
 
+function isMomPaymentIntent(normalized) {
+  const words = new Set(normalized.split(" ").filter(Boolean));
+  const hasRecipient = ["mom", "mummy", "mommy", "mother", "meena", "amma", "ammaku"].some(word => words.has(word));
+  const hasPaymentVerb = ["pay", "send", "transfer"].some(word => words.has(word));
+  const hasMoneyContext = /\b(?:ru+p(?:e+|ee+|eee+)?s?|rs|inr|money)\b/.test(normalized) || /\b\d+(?:\.\d+)?\b/.test(normalized);
+  return hasRecipient && hasPaymentVerb && (hasMoneyContext || normalized.split(" ").length <= 6);
+}
+
 export function findScriptForMessage(message) {
   const normalized = normalizeIntentText(message);
   if (!normalized) return null;
+
+  // Recognize flexible word order before falling back to exact aliases.
+  // Examples: "pay 1 rupee to mom", "send 100 to mummy", "transfer rs 50 to my mother".
+  if (isMomPaymentIntent(normalized)) return ["paymom", scripts.paymom];
 
   const candidates = [];
   for (const entry of Object.entries(scripts)) {
     const [, script] = entry;
     for (const alias of script.aliases) {
       const normalizedAlias = normalizeIntentText(alias);
-      if (normalizedAlias && normalized.includes(normalizedAlias)) {
-        candidates.push({ entry, length: normalizedAlias.length });
-      }
+      if (normalizedAlias && normalized.includes(normalizedAlias)) candidates.push({ entry, length: normalizedAlias.length });
     }
   }
   candidates.sort((a, b) => b.length - a.length);
