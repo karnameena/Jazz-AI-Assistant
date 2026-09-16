@@ -42,9 +42,12 @@ function confirmedAmount(requestArgs = {}) {
   return amount;
 }
 
+// pay-mom.ps1 is a navigation workflow: it receives only the selected ADB serial.
+// Jazz can retain/display the confirmed amount, but the script does not receive it
+// or submit the financial transaction.
 const approvedScripts = Object.freeze({
   unlockmobile: { file: "unlockmobile.ps1", runner: "powershell", args: ({ serial }) => ["-Serial", serial] },
-  paymom: { file: "pay-mom.ps1", runner: "powershell", args: ({ serial, requestArgs }) => ["-Serial", serial, "-Amount", String(confirmedAmount(requestArgs))] },
+  paymom: { file: "pay-mom.ps1", runner: "powershell", args: ({ serial }) => ["-Serial", serial] },
   instagram: { file: "instagram.sh", runner: "bash" },
   youtube: { file: "youtube.sh", runner: "bash" },
   screenshot: { file: "screenshot.sh", runner: "bash" }
@@ -62,7 +65,7 @@ function safeScriptPath(fileName) {
 function successMessage(scriptName, requestArgs = {}) {
   if (scriptName === "paymom") {
     const amount = confirmedAmount(requestArgs);
-    return `Recipient: Meena alice mom\nAmount: Rs.${amount}\nJazz payment workflow completed.`;
+    return `Recipient: Mom\nAmount: Rs.${amount}\nMom payment screen opened. Verify and complete the payment manually.`;
   }
   return null;
 }
