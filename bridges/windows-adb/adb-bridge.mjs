@@ -1,7 +1,7 @@
 import http from "node:http";
 import { execFile } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, dirname, extname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const port = Number(process.env.JAZZ_ADB_BRIDGE_PORT || 9899);
@@ -36,11 +36,22 @@ function run(args, timeout = 15000) {
   });
 }
 
-// Scripts are selected only from this bridge-owned allow-list. The request cannot
-// supply a path or executable. Secrets stay in the bridge process environment.
+function confirmedAmount(requestArgs = {}) {
+  const amount = Number(requestArgs.amount);
+  if (!Number.isInteger(amount) || amount < 1 || amount > 100000) {
+    throw new Error("A valid confirmed payment amount is required");
+  }
+  return amount;
+}
+
+// Bridge-owned allow-list. Requests select a registered name, never an arbitrary path.
 const approvedScripts = Object.freeze({
   unlockmobile: { file: "unlockmobile.ps1", runner: "powershell", args: ({ serial }) => ["-Serial", serial] },
-  paymom: { file: "paymom.sh", runner: "bash" },
+  paymom: {
+    file: "pay-mom.ps1",
+    runner: "powershell",
+    args: ({ serial, requestArgs }) => ["-Serial", serial, "-Amount", String(confirmedAmount(requestArgs))]
+  },
   instagram: { file: "instagram.sh", runner: "bash" },
   youtube: { file: "youtube.sh", runner: "bash" },
   screenshot: { file: "screenshot.sh", runner: "bash" }
@@ -57,27 +68,29 @@ function safeScriptPath(fileName) {
 
 function runScript(scriptName, target, requestArgs = {}) {
   return new Promise((resolvePromise, reject) => {
-    const spec = approvedScripts[scriptName];
-    if (!spec) return reject(new Error("Script is not registered"));
-    const file = safeScriptPath(spec.file);
-    if (!existsSync(file)) return reject(new Error(`Approved script is not installed: ${spec.file}`));
-    const env = { ...process.env, ADB_PATH: adb, JAZZ_DEVICE_ID: target.deviceId, JAZZ_ANDROID_SERIAL: target.serial, JAZZ_SCRIPT_ARGS: JSON.stringify(requestArgs) };
-    let executable;
-    let args;
-    if (spec.runner === "powershell") {
-      executable = powershellPath;
-      args = ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", file, ...(spec.args ? spec.args({ serial: target.serial, requestArgs }) : [])];
-    } else {
-      executable = bashPath;
-      args = [file];
-    }
-    execFile(executable, args, { cwd: scriptRoot, env, timeout: scriptTimeoutMs, windowsHide: true }, (error, stdout, stderr) => {
-      if (error) {
-        const timeoutText = error.killed ? `Script timed out after ${scriptTimeoutMs}ms` : "";
-        return reject(new Error(stderr.trim() || stdout.trim() || timeoutText || error.message));
+    try {
+      const spec = approvedScripts[scriptName];
+      if (!spec) return reject(new Error("Script is not registered"));
+      const file = safeScriptPath(spec.file);
+      if (!existsSync(file)) return reject(new Error(`Approved script is not installed: ${spec.file}`));
+      const env = { ...process.env, ADB_PATH: adb, JAZZ_DEVICE_ID: target.deviceId, JAZZ_ANDROID_SERIAL: target.serial, JAZZ_SCRIPT_ARGS: JSON.stringify(requestArgs) };
+      let executable;
+      let args;
+      if (spec.runner === "powershell") {
+        executable = powershellPath;
+        args = ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", file, ...(spec.args ? spec.args({ serial: target.serial, requestArgs }) : [])];
+      } else {
+        executable = bashPath;
+        args = [file];
       }
-      resolvePromise({ ok: true, scriptName, file: spec.file, stdout: stdout.trim(), message: stdout.trim() || `Jazz completed ${spec.file}.` });
-    });
+      execFile(executable, args, { cwd: scriptRoot, env, timeout: scriptTimeoutMs, windowsHide: true }, (error, stdout, stderr) => {
+        if (error) {
+          const timeoutText = error.killed ? `Script timed out after ${scriptTimeoutMs}ms` : "";
+          return reject(new Error(stderr.trim() || stdout.trim() || timeoutText || error.message));
+        }
+        resolvePromise({ ok: true, scriptName, file: spec.file, stdout: stdout.trim(), message: stdout.trim() || `Jazz completed ${spec.file}.` });
+      });
+    } catch (error) { reject(error); }
   });
 }
 
