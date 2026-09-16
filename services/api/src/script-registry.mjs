@@ -10,34 +10,35 @@ export const scripts = {
     file: "unlockmobile.ps1",
     description: "Run Mama's approved Android wake/unlock workflow",
     aliases: [
-      "unlock mobile",
-      "unlock my mobile",
-      "unlock the mobile",
-      "unlock phone",
-      "unlock my phone",
-      "unlock the phone",
-      "open mobile",
-      "open my mobile",
-      "open the mobile",
-      "open phone",
-      "open my phone",
-      "open the phone",
-      "wake mobile",
-      "wake my mobile",
-      "wake phone",
-      "wake my phone",
-      "open my mobile jazz",
-      "unlock my mobile jazz",
-      "jazz open my mobile",
-      "jazz unlock my mobile"
+      "unlock mobile", "unlock my mobile", "unlock the mobile",
+      "unlock phone", "unlock my phone", "unlock the phone",
+      "open mobile", "open my mobile", "open the mobile",
+      "open phone", "open my phone", "open the phone",
+      "wake mobile", "wake my mobile", "wake phone", "wake my phone",
+      "open my mobile jazz", "unlock my mobile jazz",
+      "jazz open my mobile", "jazz unlock my mobile"
     ],
     requiresConfirmation: true,
     category: "device"
   },
   paymom: {
-    file: "paymom.ps1",
-    description: "Mama-owned payment workflow",
-    aliases: ["pay mom", "pay my mom", "send money to mom", "send money to my mom"],
+    file: "pay-mom.ps1",
+    description: "Mama's approved payment workflow to Meena",
+    aliases: [
+      "pay mom", "pay my mom", "pay to mom", "pay to my mom",
+      "pay mummy", "pay my mummy", "pay to mummy", "pay to my mummy",
+      "pay mommy", "pay my mommy", "pay to mommy", "pay to my mommy",
+      "pay meena", "pay to meena", "pay to meena my mother",
+      "pay my mother", "pay to my mother",
+      "send money to mom", "send money to my mom",
+      "send money to mummy", "send money to my mummy",
+      "send money to mommy", "send money to my mommy",
+      "send money to meena", "send money to my mother",
+      "enga amma", "enga ammaku", "enga amma ku",
+      "amma ku pay", "ammaku pay", "amma pay",
+      "amma ku money send", "ammaku money send", "amma ku kasu anupu",
+      "jazz pay mom", "jazz pay my mom", "jazz pay meena"
+    ],
     requiresConfirmation: true,
     category: "financial"
   },
@@ -81,7 +82,6 @@ export function findScriptForMessage(message) {
   const normalized = normalizeIntentText(message);
   if (!normalized) return null;
 
-  // Prefer the longest alias so specific phrases win over shorter overlaps.
   const candidates = [];
   for (const entry of Object.entries(scripts)) {
     const [, script] = entry;
