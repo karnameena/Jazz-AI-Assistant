@@ -9,7 +9,28 @@ export const scripts = {
   unlockmobile: {
     file: "unlockmobile.ps1",
     description: "Run Mama's approved Android wake/unlock workflow",
-    aliases: ["unlock mobile", "unlock my mobile", "unlock my phone", "unlock phone"],
+    aliases: [
+      "unlock mobile",
+      "unlock my mobile",
+      "unlock the mobile",
+      "unlock phone",
+      "unlock my phone",
+      "unlock the phone",
+      "open mobile",
+      "open my mobile",
+      "open the mobile",
+      "open phone",
+      "open my phone",
+      "open the phone",
+      "wake mobile",
+      "wake my mobile",
+      "wake phone",
+      "wake my phone",
+      "open my mobile jazz",
+      "unlock my mobile jazz",
+      "jazz open my mobile",
+      "jazz unlock my mobile"
+    ],
     requiresConfirmation: true,
     category: "device"
   },
@@ -47,11 +68,32 @@ export function getScript(name) {
   return scripts[name] || null;
 }
 
+function normalizeIntentText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[’']/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export function findScriptForMessage(message) {
-  const lower = String(message || "").toLowerCase();
-  return Object.entries(scripts).find(([, script]) =>
-    script.aliases.some(alias => lower.includes(alias))
-  ) || null;
+  const normalized = normalizeIntentText(message);
+  if (!normalized) return null;
+
+  // Prefer the longest alias so specific phrases win over shorter overlaps.
+  const candidates = [];
+  for (const entry of Object.entries(scripts)) {
+    const [, script] = entry;
+    for (const alias of script.aliases) {
+      const normalizedAlias = normalizeIntentText(alias);
+      if (normalizedAlias && normalized.includes(normalizedAlias)) {
+        candidates.push({ entry, length: normalizedAlias.length });
+      }
+    }
+  }
+  candidates.sort((a, b) => b.length - a.length);
+  return candidates[0]?.entry || null;
 }
 
 export function scriptPath(name) {
