@@ -1,3 +1,5 @@
+@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap");
+
 /* Clean ChatGPT-style composer + command-bar layout */
 .analytics-row{display:none!important}
 .chat-panel{height:clamp(520px,calc(100vh - 190px),900px)!important;min-height:0!important}
@@ -52,7 +54,6 @@ html[data-jazz-voice-state="speaking"] .composer{border-color:rgba(238,83,255,.3
 .device-row>svg{width:17px!important;height:17px!important}
 
 /* Premium large typography: sidebar + chat */
-@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap");
 .jazz-app{font-family:Manrope,Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important}
 .brand-copy strong{font-size:18px!important;font-weight:800!important;letter-spacing:-.45px!important}
 .brand-copy span{font-size:15px!important;font-weight:700!important;letter-spacing:-.25px!important;color:#d8d2ee!important}
