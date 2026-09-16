@@ -11,6 +11,12 @@ export class JazzOrchestrator {
     this.history = [];
   }
 
+  resolveSystemPrompt(context = {}) {
+    return typeof this.systemPrompt === "function"
+      ? this.systemPrompt(context)
+      : this.systemPrompt;
+  }
+
   async handle(message, context = {}) {
     const text = String(message || "").trim();
     if (!text) return { assistant: "Tell me what you need.", source: "orchestrator" };
@@ -23,7 +29,7 @@ export class JazzOrchestrator {
     }
 
     const messages = [...this.history.slice(-this.maxHistory), { role: "user", content: text }];
-    const result = await this.llm.chat({ messages, system: this.systemPrompt });
+    const result = await this.llm.chat({ messages, system: this.resolveSystemPrompt(context) });
     this.history.push({ role: "user", content: text }, { role: "assistant", content: result.text });
     if (this.history.length > this.maxHistory * 2) this.history = this.history.slice(-this.maxHistory * 2);
     return { assistant: result.text, source: "llm", provider: result.provider, model: result.model };
