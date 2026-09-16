@@ -38,20 +38,13 @@ function run(args, timeout = 15000) {
 
 function confirmedAmount(requestArgs = {}) {
   const amount = Number(requestArgs.amount);
-  if (!Number.isInteger(amount) || amount < 1 || amount > 100000) {
-    throw new Error("A valid confirmed payment amount is required");
-  }
+  if (!Number.isInteger(amount) || amount < 1 || amount > 100000) throw new Error("A valid confirmed payment amount is required");
   return amount;
 }
 
-// Bridge-owned allow-list. Requests select a registered name, never an arbitrary path.
 const approvedScripts = Object.freeze({
   unlockmobile: { file: "unlockmobile.ps1", runner: "powershell", args: ({ serial }) => ["-Serial", serial] },
-  paymom: {
-    file: "pay-mom.ps1",
-    runner: "powershell",
-    args: ({ serial, requestArgs }) => ["-Serial", serial, "-Amount", String(confirmedAmount(requestArgs))]
-  },
+  paymom: { file: "pay-mom.ps1", runner: "powershell", args: ({ serial, requestArgs }) => ["-Serial", serial, "-Amount", String(confirmedAmount(requestArgs))] },
   instagram: { file: "instagram.sh", runner: "bash" },
   youtube: { file: "youtube.sh", runner: "bash" },
   screenshot: { file: "screenshot.sh", runner: "bash" }
@@ -64,6 +57,14 @@ function safeScriptPath(fileName) {
   const rootPrefix = `${scriptRoot}${process.platform === "win32" ? "\\" : "/"}`;
   if (!file.startsWith(rootPrefix)) throw new Error("Invalid script path");
   return file;
+}
+
+function successMessage(scriptName, requestArgs = {}) {
+  if (scriptName === "paymom") {
+    const amount = confirmedAmount(requestArgs);
+    return `Recipient: Meena alice mom\nAmount: Rs.${amount}\nJazz payment workflow completed.`;
+  }
+  return null;
 }
 
 function runScript(scriptName, target, requestArgs = {}) {
@@ -88,7 +89,8 @@ function runScript(scriptName, target, requestArgs = {}) {
           const timeoutText = error.killed ? `Script timed out after ${scriptTimeoutMs}ms` : "";
           return reject(new Error(stderr.trim() || stdout.trim() || timeoutText || error.message));
         }
-        resolvePromise({ ok: true, scriptName, file: spec.file, stdout: stdout.trim(), message: stdout.trim() || `Jazz completed ${spec.file}.` });
+        const message = successMessage(scriptName, requestArgs) || stdout.trim() || `Jazz completed ${spec.file}.`;
+        resolvePromise({ ok: true, scriptName, file: spec.file, stdout: stdout.trim(), message });
       });
     } catch (error) { reject(error); }
   });
