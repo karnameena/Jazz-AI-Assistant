@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+
 import {
   Activity,
   Bell,
@@ -36,6 +37,7 @@ import {
 } from "lucide-react";
 import { createRoot } from "react-dom/client";
 import { JazzVoice } from "./voice";
+import { MessageContent } from "./MessageContent";
 import "./styles.css";
 import "./chat-overrides.css";
 
@@ -1127,7 +1129,11 @@ function ChatMessage({ message }: { message: Message }) {
         <Wave />
       </div>
       <div className="jazz-bubble">
-        <div>{message.text || <span className="streaming-cursor">▌</span>}</div>
+        {message.text ? (
+          <MessageContent text={message.text} />
+        ) : (
+          <span className="streaming-cursor">▌</span>
+        )}
         <small>{message.time}</small>
       </div>
     </div>
