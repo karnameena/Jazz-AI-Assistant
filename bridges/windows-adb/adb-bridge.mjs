@@ -12,8 +12,8 @@ const tabletSerial = process.env.JAZZ_ANDROID_TABLET_SERIAL || "";
 const phoneToken = process.env.JAZZ_ANDROID_PHONE_TOKEN || "";
 const tabletToken = process.env.JAZZ_ANDROID_TABLET_TOKEN || "";
 const targets = {
-  "android-phone": { serial: phoneSerial, localPort: 19001, token: phoneToken },
-  "android-tablet": { serial: tabletSerial, localPort: 19002, token: tabletToken }
+  "android-phone": { serial: phoneSerial, configuredSerial: phoneSerial, localPort: 19001, token: phoneToken },
+  "android-tablet": { serial: tabletSerial, configuredSerial: tabletSerial, localPort: 19002, token: tabletToken }
 };
 
 const bridgeDir = dirname(fileURLToPath(import.meta.url));
@@ -25,44 +25,107 @@ let identityState = {};
 try { if (existsSync(stateFile)) identityState = JSON.parse(readFileSync(stateFile, "utf8")); } catch { identityState = {}; }
 
 function saveIdentityState() { try { writeFileSync(stateFile, JSON.stringify(identityState, null, 2), "utf8"); } catch { } }
+function sleep(ms) { return new Promise(resolvePromise => setTimeout(resolvePromise, ms)); }
 function run(args, timeout = 15000) { return new Promise((resolvePromise, reject) => execFile(adb, args, { timeout, windowsHide: true }, (error, stdout, stderr) => error ? reject(new Error(stderr.trim() || error.message)) : resolvePromise(stdout.trim()))); }
 function runScript(file, target, args = {}) { return new Promise((resolvePromise, reject) => {
   if (!existsSync(file)) return reject(new Error("Script is not installed"));
   const env = { ...process.env, ADB_PATH: adb, JAZZ_DEVICE_ID: target.deviceId, JAZZ_ANDROID_SERIAL: target.serial, JAZZ_SCRIPT_ARGS: JSON.stringify(args) };
   execFile(bashPath, [file], { cwd: scriptRoot, env, timeout: 120000, windowsHide: true }, (error, stdout, stderr) => error ? reject(new Error(stderr.trim() || stdout.trim() || error.message)) : resolvePromise({ ok: true, stdout: stdout.trim(), message: stdout.trim() || "Jazz script completed." }));
 }); }
+function isTcpSerial(serial) { return /^\d{1,3}(?:\.\d{1,3}){3}:\d+$/.test(String(serial || "")); }
 function isConnected(serial) { return run(["devices"]).then(output => output.split(/\r?\n/).some(line => line.startsWith(`${serial}\tdevice`))).catch(() => false); }
-async function rememberIdentity(deviceId, serial) { if (!serial || serial.includes(":")) return; if (identityState[deviceId] !== serial) { identityState[deviceId] = serial; saveIdentityState(); } }
+async function rememberIdentity(deviceId, serial) { if (!serial || serial === "unknown" || isTcpSerial(serial)) return; if (identityState[deviceId] !== serial) { identityState[deviceId] = serial; saveIdentityState(); } }
 async function rememberIdentityFromConnection(deviceId, target) { if (!target.serial) return; try { await rememberIdentity(deviceId, await run(["-s", target.serial, "get-serialno"])); } catch { } }
-async function discoverAndReconnect(deviceId, target) {
-  const knownIdentity = identityState[deviceId] || (!target.serial.includes(":") ? target.serial : "");
-  if (!knownIdentity) return false;
-  let services; try { services = await run(["mdns", "services"], 5000); } catch { return false; }
-  for (const line of services.split(/\r?\n/)) {
-    if (!line.includes("_adb-tls-connect._tcp")) continue;
-    const match = line.match(/^\s*(\S+)\s+_adb-tls-connect\._tcp\.?\s+(\d{1,3}(?:\.\d{1,3}){3}:\d+)\s*$/i);
-    if (!match || !match[1].includes(knownIdentity)) continue;
-    try { await run(["connect", match[2]], 8000); if (await isConnected(match[2])) { target.serial = match[2]; await rememberIdentityFromConnection(deviceId, target); return true; } } catch { }
+
+async function directReconnect(deviceId, target) {
+  const candidates = [...new Set([target.serial, target.configuredSerial].filter(isTcpSerial))];
+  for (const endpoint of candidates) {
+    try {
+      console.log(`[ADB] ${deviceId}: trying direct reconnect to ${endpoint}`);
+      await run(["connect", endpoint], 8000).catch(() => "");
+      await sleep(500);
+      if (await isConnected(endpoint)) {
+        target.serial = endpoint;
+        await rememberIdentityFromConnection(deviceId, target);
+        console.log(`[ADB] ${deviceId}: connected to ${endpoint}`);
+        return true;
+      }
+    } catch { }
   }
   return false;
 }
-async function ensureConnected(deviceId, target) { if (!target.serial) throw new Error("Device serial is not configured"); if (await isConnected(target.serial)) { await rememberIdentityFromConnection(deviceId, target); return target.serial; } if (await discoverAndReconnect(deviceId, target)) return target.serial; throw new Error(`${deviceId} is offline. Waiting for ADB Wi-Fi/mDNS reconnect.`); }
-async function ensureForward(deviceId, target) { const serial = await ensureConnected(deviceId, target); await run(["-s", serial, "forward", `tcp:${target.localPort}`, "tcp:9898"]); }
+
+function parseMdnsEndpoint(line) {
+  if (!line.includes("_adb-tls-connect._tcp")) return null;
+  const endpoint = line.match(/(\d{1,3}(?:\.\d{1,3}){3}:\d+)/)?.[1];
+  if (!endpoint) return null;
+  const serviceName = line.trim().split(/\s+/)[0] || "";
+  return { serviceName, endpoint };
+}
+
+async function discoverAndReconnect(deviceId, target) {
+  let services;
+  try { services = await run(["mdns", "services"], 5000); } catch { return false; }
+  const entries = services.split(/\r?\n/).map(parseMdnsEndpoint).filter(Boolean);
+  if (!entries.length) return false;
+
+  const knownIdentity = identityState[deviceId] || "";
+  const preferred = knownIdentity ? entries.filter(entry => entry.serviceName.includes(knownIdentity)) : [];
+  const candidates = preferred.length ? preferred : (entries.length === 1 ? entries : []);
+
+  for (const entry of candidates) {
+    try {
+      console.log(`[ADB] ${deviceId}: trying mDNS endpoint ${entry.endpoint}`);
+      await run(["connect", entry.endpoint], 8000).catch(() => "");
+      await sleep(500);
+      if (await isConnected(entry.endpoint)) {
+        target.serial = entry.endpoint;
+        await rememberIdentityFromConnection(deviceId, target);
+        console.log(`[ADB] ${deviceId}: recovered through mDNS at ${entry.endpoint}`);
+        return true;
+      }
+    } catch { }
+  }
+  return false;
+}
+
+async function ensureConnected(deviceId, target) {
+  if (!target.serial && !target.configuredSerial) throw new Error("Device serial is not configured");
+  if (target.serial && await isConnected(target.serial)) {
+    await rememberIdentityFromConnection(deviceId, target);
+    return target.serial;
+  }
+  if (await directReconnect(deviceId, target)) return target.serial;
+  if (await discoverAndReconnect(deviceId, target)) return target.serial;
+  throw new Error(`${deviceId} is offline. Automatic ADB reconnect failed. Check that Wireless debugging is enabled and the devices are on the same reachable network.`);
+}
+
+async function ensureForward(deviceId, target) {
+  const serial = await ensureConnected(deviceId, target);
+  await run(["-s", serial, "forward", `tcp:${target.localPort}`, "tcp:9898"]);
+}
 async function sendToAndroid(deviceId, target, payload) {
   await ensureForward(deviceId, target);
   const response = await fetch(`http://127.0.0.1:${target.localPort}/command`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${target.token}` }, body: JSON.stringify(payload) });
   const text = await response.text(); let data; try { data = JSON.parse(text); } catch { data = { message: text }; }
   if (!response.ok) throw new Error(data?.error || "Android companion request failed"); return data;
 }
-async function reconnectLoop() { for (const [deviceId, target] of Object.entries(targets)) { if (!target.serial) continue; if (await isConnected(target.serial)) { await rememberIdentityFromConnection(deviceId, target); continue; } await discoverAndReconnect(deviceId, target).catch(() => false); } }
+async function reconnectLoop() {
+  for (const [deviceId, target] of Object.entries(targets)) {
+    if (!target.serial && !target.configuredSerial) continue;
+    if (target.serial && await isConnected(target.serial)) { await rememberIdentityFromConnection(deviceId, target); continue; }
+    if (await directReconnect(deviceId, target)) continue;
+    await discoverAndReconnect(deviceId, target).catch(() => false);
+  }
+}
 function json(res, status, data) { res.statusCode = status; res.setHeader("Content-Type", "application/json; charset=utf-8"); res.setHeader("Access-Control-Allow-Origin", "http://localhost:5173"); res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization"); res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS"); res.end(JSON.stringify(data)); }
 function body(req) { return new Promise((resolvePromise, reject) => { let raw = ""; req.on("data", chunk => { raw += chunk; if (raw.length > 64 * 1024) req.destroy(); }); req.on("end", () => { try { resolvePromise(JSON.parse(raw || "{}")); } catch (e) { reject(e); } }); }); }
 
 const server = http.createServer(async (req, res) => {
   if (req.method === "OPTIONS") return json(res, 204, {});
-  if (req.method === "GET" && req.url === "/health") return json(res, 200, { ok: true, service: "jazz-adb-bridge", autoReconnect: true, scripts: true });
+  if (req.method === "GET" && req.url === "/health") return json(res, 200, { ok: true, service: "jazz-adb-bridge", autoReconnect: true, directReconnect: true, mdnsReconnect: true, scripts: true });
   if (req.method === "GET" && req.url === "/devices") {
-    try { await reconnectLoop(); const targetEntries = await Promise.all(Object.entries(targets).map(async ([id, target]) => [id, { serial: target.serial, identity: identityState[id] || null, connected: target.serial ? await isConnected(target.serial) : false }])); return json(res, 200, { ok: true, adb: await run(["devices", "-l"]), targets: Object.fromEntries(targetEntries) }); }
+    try { await reconnectLoop(); const targetEntries = await Promise.all(Object.entries(targets).map(async ([id, target]) => [id, { serial: target.serial, configuredSerial: target.configuredSerial, identity: identityState[id] || null, connected: target.serial ? await isConnected(target.serial) : false }])); return json(res, 200, { ok: true, adb: await run(["devices", "-l"]), targets: Object.fromEntries(targetEntries) }); }
     catch (e) { return json(res, 500, { ok: false, error: e.message }); }
   }
   if (req.method !== "POST" || !["/command", "/script"].includes(req.url)) return json(res, 404, { ok: false, error: "Not found" });
