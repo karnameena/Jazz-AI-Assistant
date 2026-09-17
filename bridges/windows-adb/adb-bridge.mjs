@@ -24,7 +24,7 @@ const stateFile = join(bridgeDir, ".device-identities.json");
 let identityState = {};
 try { if (existsSync(stateFile)) identityState = JSON.parse(readFileSync(stateFile, "utf8")); } catch { identityState = {}; }
 
-function saveIdentityState() { try { writeFileSync(stateFile, JSON.stringify(identityState, null, 2), "utf8"); } catch { } }
+function saveIdentityState() { try { writeFileSync(stateFile, JSON.stringify(identityState, null, 2), "utf8"); } catch {} }
 function sleep(ms) { return new Promise(resolvePromise => setTimeout(resolvePromise, ms)); }
 function run(args, timeout = 15000) { return new Promise((resolvePromise, reject) => execFile(adb, args, { timeout, windowsHide: true }, (error, stdout, stderr) => error ? reject(new Error(stderr.trim() || error.message)) : resolvePromise(stdout.trim()))); }
 function runScript(file, target, args = {}) { return new Promise((resolvePromise, reject) => {
@@ -33,9 +33,26 @@ function runScript(file, target, args = {}) { return new Promise((resolvePromise
   execFile(bashPath, [file], { cwd: scriptRoot, env, timeout: 120000, windowsHide: true }, (error, stdout, stderr) => error ? reject(new Error(stderr.trim() || stdout.trim() || error.message)) : resolvePromise({ ok: true, stdout: stdout.trim(), message: stdout.trim() || "Jazz script completed." }));
 }); }
 function isTcpSerial(serial) { return /^\d{1,3}(?:\.\d{1,3}){3}:\d+$/.test(String(serial || "")); }
-function isConnected(serial) { return run(["devices"]).then(output => output.split(/\r?\n/).some(line => line.startsWith(`${serial}\tdevice`))).catch(() => false); }
+function parseConnectedDevices(output) {
+  return output.split(/\r?\n/).slice(1).map(line => line.trim()).filter(Boolean).map(line => ({ serial: line.split(/\s+/)[0], line })).filter(item => /\sdevice(?:\s|$)/.test(item.line));
+}
+async function connectedDevices() { try { return parseConnectedDevices(await run(["devices", "-l"])); } catch { return []; } }
+async function isConnected(serial) { return (await connectedDevices()).some(item => item.serial === serial); }
 async function rememberIdentity(deviceId, serial) { if (!serial || serial === "unknown" || isTcpSerial(serial)) return; if (identityState[deviceId] !== serial) { identityState[deviceId] = serial; saveIdentityState(); } }
-async function rememberIdentityFromConnection(deviceId, target) { if (!target.serial) return; try { await rememberIdentity(deviceId, await run(["-s", target.serial, "get-serialno"])); } catch { } }
+async function rememberIdentityFromConnection(deviceId, target) { if (!target.serial) return; try { await rememberIdentity(deviceId, await run(["-s", target.serial, "get-serialno"])); } catch {} }
+
+async function adoptExistingTransport(deviceId, target) {
+  const devices = await connectedDevices();
+  if (!devices.length) return false;
+  const known = identityState[deviceId] || "";
+  let candidate = known ? devices.find(item => item.serial.includes(known)) : null;
+  if (!candidate && devices.length === 1) candidate = devices[0];
+  if (!candidate) return false;
+  target.serial = candidate.serial;
+  await rememberIdentityFromConnection(deviceId, target);
+  console.log(`[ADB] ${deviceId}: adopted active transport ${target.serial}`);
+  return true;
+}
 
 async function directReconnect(deviceId, target) {
   const candidates = [...new Set([target.serial, target.configuredSerial].filter(isTcpSerial))];
@@ -44,65 +61,44 @@ async function directReconnect(deviceId, target) {
       console.log(`[ADB] ${deviceId}: trying direct reconnect to ${endpoint}`);
       await run(["connect", endpoint], 8000).catch(() => "");
       await sleep(500);
-      if (await isConnected(endpoint)) {
-        target.serial = endpoint;
-        await rememberIdentityFromConnection(deviceId, target);
-        console.log(`[ADB] ${deviceId}: connected to ${endpoint}`);
-        return true;
-      }
-    } catch { }
+      if (await isConnected(endpoint)) { target.serial = endpoint; await rememberIdentityFromConnection(deviceId, target); console.log(`[ADB] ${deviceId}: connected to ${endpoint}`); return true; }
+    } catch {}
   }
   return false;
 }
-
 function parseMdnsEndpoint(line) {
   if (!line.includes("_adb-tls-connect._tcp")) return null;
   const endpoint = line.match(/(\d{1,3}(?:\.\d{1,3}){3}:\d+)/)?.[1];
   if (!endpoint) return null;
-  const serviceName = line.trim().split(/\s+/)[0] || "";
-  return { serviceName, endpoint };
+  return { serviceName: line.trim().split(/\s+/)[0] || "", endpoint };
 }
-
 async function discoverAndReconnect(deviceId, target) {
-  let services;
-  try { services = await run(["mdns", "services"], 5000); } catch { return false; }
+  let services; try { services = await run(["mdns", "services"], 5000); } catch { return false; }
   const entries = services.split(/\r?\n/).map(parseMdnsEndpoint).filter(Boolean);
   if (!entries.length) return false;
-
   const knownIdentity = identityState[deviceId] || "";
   const preferred = knownIdentity ? entries.filter(entry => entry.serviceName.includes(knownIdentity)) : [];
   const candidates = preferred.length ? preferred : (entries.length === 1 ? entries : []);
-
   for (const entry of candidates) {
     try {
-      console.log(`[ADB] ${deviceId}: trying mDNS endpoint ${entry.endpoint}`);
-      await run(["connect", entry.endpoint], 8000).catch(() => "");
-      await sleep(500);
-      if (await isConnected(entry.endpoint)) {
-        target.serial = entry.endpoint;
-        await rememberIdentityFromConnection(deviceId, target);
-        console.log(`[ADB] ${deviceId}: recovered through mDNS at ${entry.endpoint}`);
-        return true;
-      }
-    } catch { }
+      await run(["connect", entry.endpoint], 8000).catch(() => ""); await sleep(500);
+      if (await isConnected(entry.endpoint)) { target.serial = entry.endpoint; await rememberIdentityFromConnection(deviceId, target); console.log(`[ADB] ${deviceId}: recovered through mDNS at ${entry.endpoint}`); return true; }
+    } catch {}
   }
   return false;
 }
-
 async function ensureConnected(deviceId, target) {
-  if (!target.serial && !target.configuredSerial) throw new Error("Device serial is not configured");
-  if (target.serial && await isConnected(target.serial)) {
-    await rememberIdentityFromConnection(deviceId, target);
-    return target.serial;
-  }
+  if (target.serial && await isConnected(target.serial)) { await rememberIdentityFromConnection(deviceId, target); return target.serial; }
+  if (await adoptExistingTransport(deviceId, target)) return target.serial;
   if (await directReconnect(deviceId, target)) return target.serial;
   if (await discoverAndReconnect(deviceId, target)) return target.serial;
   throw new Error(`${deviceId} is offline. Automatic ADB reconnect failed. Check that Wireless debugging is enabled and the devices are on the same reachable network.`);
 }
-
-async function ensureForward(deviceId, target) {
+async function ensureForward(deviceId, target) { const serial = await ensureConnected(deviceId, target); await run(["-s", serial, "forward", `tcp:${target.localPort}`, "tcp:9898"]); }
+async function wakeDevice(deviceId, target) {
   const serial = await ensureConnected(deviceId, target);
-  await run(["-s", serial, "forward", `tcp:${target.localPort}`, "tcp:9898"]);
+  await run(["-s", serial, "shell", "input", "keyevent", "KEYCODE_WAKEUP"]);
+  return { ok: true, status: "authentication_required", message: `${deviceId === "android-tablet" ? "Tablet" : "Mobile"} is awake. Authenticate on the device, then Jazz can continue.`, deviceId };
 }
 async function sendToAndroid(deviceId, target, payload) {
   await ensureForward(deviceId, target);
@@ -112,8 +108,8 @@ async function sendToAndroid(deviceId, target, payload) {
 }
 async function reconnectLoop() {
   for (const [deviceId, target] of Object.entries(targets)) {
-    if (!target.serial && !target.configuredSerial) continue;
     if (target.serial && await isConnected(target.serial)) { await rememberIdentityFromConnection(deviceId, target); continue; }
+    if (await adoptExistingTransport(deviceId, target)) continue;
     if (await directReconnect(deviceId, target)) continue;
     await discoverAndReconnect(deviceId, target).catch(() => false);
   }
@@ -123,7 +119,7 @@ function body(req) { return new Promise((resolvePromise, reject) => { let raw = 
 
 const server = http.createServer(async (req, res) => {
   if (req.method === "OPTIONS") return json(res, 204, {});
-  if (req.method === "GET" && req.url === "/health") return json(res, 200, { ok: true, service: "jazz-adb-bridge", autoReconnect: true, directReconnect: true, mdnsReconnect: true, scripts: true });
+  if (req.method === "GET" && req.url === "/health") return json(res, 200, { ok: true, service: "jazz-adb-bridge", autoReconnect: true, activeTransportDiscovery: true, directReconnect: true, mdnsReconnect: true, scripts: true });
   if (req.method === "GET" && req.url === "/devices") {
     try { await reconnectLoop(); const targetEntries = await Promise.all(Object.entries(targets).map(async ([id, target]) => [id, { serial: target.serial, configuredSerial: target.configuredSerial, identity: identityState[id] || null, connected: target.serial ? await isConnected(target.serial) : false }])); return json(res, 200, { ok: true, adb: await run(["devices", "-l"]), targets: Object.fromEntries(targetEntries) }); }
     catch (e) { return json(res, 500, { ok: false, error: e.message }); }
@@ -134,13 +130,13 @@ const server = http.createServer(async (req, res) => {
     if (req.url === "/script") {
       const scriptName = String(input.scriptName || ""); if (!/^[a-z0-9_-]+$/.test(scriptName)) return json(res, 400, { ok: false, error: "Invalid script name" });
       const registeredScripts = new Set(["paymom", "unlock", "unlockmobile", "instagram", "youtube", "screenshot"]);
-      const credentialScripts = new Set(["unlock", "unlockmobile"]);
       if (!registeredScripts.has(scriptName)) return json(res, 403, { ok: false, error: "Script is not registered" });
-      if (credentialScripts.has(scriptName)) return json(res, 403, { ok: false, status: "credential_action_requires_manual_entry", error: "Credential-entry scripts cannot be executed automatically by the Jazz bridge.", scriptName });
+      if (scriptName === "unlock" || scriptName === "unlockmobile") return json(res, 200, await wakeDevice(input.deviceId, target));
       const scriptFile = resolve(scriptRoot, `${scriptName}.sh`); if (!scriptFile.startsWith(`${scriptRoot}\\`) && !scriptFile.startsWith(`${scriptRoot}/`)) return json(res, 403, { ok: false, error: "Invalid script path" });
       target.deviceId = input.deviceId; target.serial = serial; return json(res, 200, await runScript(scriptFile, target, input.args || {}));
     }
     const action = String(input.action || "");
+    if (action === "wake_screen") return json(res, 200, await wakeDevice(input.deviceId, target));
     const allowed = new Set(["device_info", "screen_state", "open_url", "launch_app", "dial_number", "home", "back", "recents", "notifications", "tap", "swipe", "scroll_down", "scroll_up", "click_text", "open_instagram_reels", "read_screen"]);
     if (!allowed.has(action)) return json(res, 400, { ok: false, error: "Action not allowed" });
     const data = await sendToAndroid(input.deviceId, target, { deviceId: input.deviceId, action, args: input.args || {} }); return json(res, data.ok === false ? 400 : 200, data);
@@ -151,6 +147,6 @@ server.listen(port, "127.0.0.1", () => {
   console.log(`Jazz Windows ADB bridge listening on 127.0.0.1:${port}`);
   console.log(`ADB Wi-Fi auto-reconnect enabled; scan interval ${reconnectIntervalMs}ms`);
   console.log(`Approved Android scripts enabled from ${scriptRoot}`);
-  reconnectLoop().catch(() => { });
-  setInterval(() => reconnectLoop().catch(() => { }), reconnectIntervalMs);
+  reconnectLoop().catch(error => console.error("[ADB] Initial reconnect failed:", error.message));
+  setInterval(() => reconnectLoop().catch(error => console.error("[ADB] Reconnect failed:", error.message)), reconnectIntervalMs);
 });
