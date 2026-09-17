@@ -4,14 +4,16 @@ import { basename, resolve } from "node:path";
 const scriptRoot = resolve(process.env.JAZZ_SCRIPT_ROOT || "scripts/android");
 
 // Explicit allow-list. Jazz never executes an arbitrary path supplied by the LLM/user.
-// Add future Mama-owned scripts here with an exact filename and aliases.
+// Credential entry is deliberately not automated; unlockmobile is handled as a
+// wake -> user authentication -> verify -> continue workflow by the API.
 export const scripts = {
   unlockmobile: {
     file: "unlockmobile.ps1",
-    description: "Run Mama's approved Android wake/unlock workflow",
+    description: "Wake Mama's Android device and wait for normal device authentication",
     aliases: ["unlock mobile", "unlock my mobile", "unlock my phone", "unlock phone"],
-    requiresConfirmation: true,
-    category: "device"
+    requiresConfirmation: false,
+    category: "device",
+    workflow: "wake_and_authenticate"
   },
   paymom: {
     file: "paymom.ps1",
@@ -43,15 +45,11 @@ export const scripts = {
   }
 };
 
-export function getScript(name) {
-  return scripts[name] || null;
-}
+export function getScript(name) { return scripts[name] || null; }
 
 export function findScriptForMessage(message) {
   const lower = String(message || "").toLowerCase();
-  return Object.entries(scripts).find(([, script]) =>
-    script.aliases.some(alias => lower.includes(alias))
-  ) || null;
+  return Object.entries(scripts).find(([, script]) => script.aliases.some(alias => lower.includes(alias))) || null;
 }
 
 export function scriptPath(name) {
@@ -71,6 +69,7 @@ export function listScripts() {
     description: script.description,
     requiresConfirmation: script.requiresConfirmation,
     category: script.category,
-    installed: Boolean(scriptPath(name))
+    workflow: script.workflow || "script",
+    installed: script.workflow === "wake_and_authenticate" ? true : Boolean(scriptPath(name))
   }));
 }
