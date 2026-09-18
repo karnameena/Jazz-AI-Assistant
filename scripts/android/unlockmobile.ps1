@@ -1,17 +1,34 @@
 param(
-    [Parameter(Mandatory = $true)]
-    [string]$Serial
+    [string]$BridgeUrl = "http://127.0.0.1:9899",
+    [ValidateSet("android-phone", "android-tablet")]
+    [string]$DeviceId = "android-phone"
 )
 
 $ErrorActionPreference = "Stop"
 
-$adb = if ($env:ADB_PATH) { $env:ADB_PATH } else { "adb" }
+$endpoint = "$($BridgeUrl.TrimEnd('/'))/command"
+$body = @{
+    deviceId = $DeviceId
+    action   = "wake_screen"
+    args     = @{}
+} | ConvertTo-Json -Depth 4
 
-& $adb -s $Serial shell input keyevent KEYCODE_WAKEUP
-if ($LASTEXITCODE -ne 0) {
-    throw "ADB could not wake the Android device."
+$result = Invoke-RestMethod `
+    -Method POST `
+    -Uri $endpoint `
+    -ContentType "application/json" `
+    -Body $body `
+    -TimeoutSec 20
+
+if ($result.ok -eq $false) {
+    throw ($result.error ?? $result.message ?? "Jazz could not wake the Android device.")
 }
 
-Start-Sleep -Milliseconds 500
-
-Write-Output "Mobile is awake. Authenticate on the device, then Jazz can continue."
+[pscustomobject]@{
+    ok             = $true
+    status         = if ($result.status) { $result.status } else { "authentication_required" }
+    message        = if ($result.message) { $result.message } else { "Mobile is awake. Authenticate on the device, then Jazz can continue." }
+    deviceId       = $DeviceId
+    script         = "unlockmobile.ps1"
+    executedScript = $true
+} | ConvertTo-Json -Compress
