@@ -19,20 +19,57 @@ function Test-PiperSmoke {
   )
 
   $testWave = Join-Path $env:TEMP "jazz-piper-smoke-test.wav"
-  Remove-Item $testWave -Force -ErrorAction SilentlyContinue
+  $stdinFile = Join-Path $env:TEMP "jazz-piper-smoke-input.txt"
+  $stdoutFile = Join-Path $env:TEMP "jazz-piper-smoke-stdout.log"
+  $stderrFile = Join-Path $env:TEMP "jazz-piper-smoke-stderr.log"
+  Remove-Item $testWave,$stdinFile,$stdoutFile,$stderrFile -Force -ErrorAction SilentlyContinue
+  Set-Content -Path $stdinFile -Value "Jazz ready." -Encoding UTF8
+
   $oldPath = $env:PATH
   try {
     $env:PATH = "$RuntimeDir;$oldPath"
-    "Jazz ready." | & $Exe --model $Model --espeak_data $EspeakData --output_file $testWave 2>&1 | Out-Null
-    $code = $LASTEXITCODE
+
+    # Piper writes normal informational messages to stderr. Calling it directly
+    # under $ErrorActionPreference='Stop' makes Windows PowerShell wrap those
+    # harmless log lines as NativeCommandError and abort a successful smoke test.
+    # Start-Process keeps stdout/stderr separate and judges success only by the
+    # real process exit code + generated WAV file.
+    $args = @(
+      "--model", "`"$Model`"",
+      "--espeak_data", "`"$EspeakData`"",
+      "--output_file", "`"$testWave`""
+    )
+
+    $process = Start-Process -FilePath $Exe `
+      -ArgumentList $args `
+      -WorkingDirectory $RuntimeDir `
+      -RedirectStandardInput $stdinFile `
+      -RedirectStandardOutput $stdoutFile `
+      -RedirectStandardError $stderrFile `
+      -NoNewWindow `
+      -Wait `
+      -PassThru
+
+    $code = $process.ExitCode
+    $stderrText = if (Test-Path $stderrFile) { (Get-Content $stderrFile -Raw -ErrorAction SilentlyContinue).Trim() } else { "" }
+    $waveCreated = Test-Path $testWave
+
     return [pscustomobject]@{
-      Ok = ($code -eq 0 -and (Test-Path $testWave))
+      Ok = ($code -eq 0 -and $waveCreated)
       ExitCode = $code
+      WaveCreated = $waveCreated
+      ErrorText = $stderrText
+    }
+  } catch {
+    return [pscustomobject]@{
+      Ok = $false
+      ExitCode = -1
       WaveCreated = (Test-Path $testWave)
+      ErrorText = $_.Exception.Message
     }
   } finally {
     $env:PATH = $oldPath
-    Remove-Item $testWave -Force -ErrorAction SilentlyContinue
+    Remove-Item $testWave,$stdinFile,$stdoutFile,$stderrFile -Force -ErrorAction SilentlyContinue
   }
 }
 
@@ -116,7 +153,8 @@ if (-not $smoke.Ok) {
 Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
 
 if (-not $smoke.Ok) {
-  throw "Piper smoke test failed with exit code $($smoke.ExitCode). Runtime: $runtimeExe"
+  $detail = if ($smoke.ErrorText) { " Details: $($smoke.ErrorText)" } else { "" }
+  throw "Piper smoke test failed with exit code $($smoke.ExitCode). Runtime: $runtimeExe.$detail"
 }
 
 Write-Host ""
