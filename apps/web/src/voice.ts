@@ -23,10 +23,13 @@ export class JazzVoice {
   private levelData: Uint8Array | null = null;
   private outputAnalyser: AnalyserNode | null = null;
   private outputData: Uint8Array | null = null;
+  private outputFrequencyData: Uint8Array | null = null;
   private outputFrame: number | null = null;
   private outputSources = new Set<AudioBufferSourceNode>();
   private streamPlaying = false;
   private speechRunId = 0;
+  private visualLevel = 0;
+  private visualPeak = 0;
 
   constructor(callbacks: VoiceCallbacks = {}) {
     this.callbacks = callbacks;
@@ -96,16 +99,30 @@ export class JazzVoice {
   private setVisualState(state: VoiceState) {
     document.documentElement.dataset.jazzVoiceState = state;
     if (state === "idle" || state === "unsupported") {
+      this.visualLevel = 0;
+      this.visualPeak = 0;
       document.documentElement.style.setProperty("--jazz-voice-level", "0");
-      document.documentElement.style.setProperty("--jazz-voice-scale", "0.82");
+      document.documentElement.style.setProperty("--jazz-voice-peak", "0");
+      document.documentElement.style.setProperty("--jazz-voice-bass", "0");
+      document.documentElement.style.setProperty("--jazz-voice-mid", "0");
+      document.documentElement.style.setProperty("--jazz-voice-treble", "0");
+      document.documentElement.style.setProperty("--jazz-voice-scale", "0.96");
     }
   }
 
-  private setLevel(level: number) {
+  private setLevel(level: number, bass = level, mid = level, treble = level) {
     const safe = Math.max(0, Math.min(1, level));
-    const scale = 0.82 + safe * 0.58;
-    document.documentElement.style.setProperty("--jazz-voice-level", safe.toFixed(3));
-    document.documentElement.style.setProperty("--jazz-voice-scale", scale.toFixed(3));
+    const attack = safe > this.visualLevel ? 0.68 : 0.2;
+    this.visualLevel += (safe - this.visualLevel) * attack;
+    this.visualPeak = Math.max(this.visualLevel, this.visualPeak * 0.9);
+    const scale = 0.96 + this.visualLevel * 0.20 + this.visualPeak * 0.045;
+    const root = document.documentElement.style;
+    root.setProperty("--jazz-voice-level", this.visualLevel.toFixed(3));
+    root.setProperty("--jazz-voice-peak", this.visualPeak.toFixed(3));
+    root.setProperty("--jazz-voice-bass", Math.max(0, Math.min(1, bass)).toFixed(3));
+    root.setProperty("--jazz-voice-mid", Math.max(0, Math.min(1, mid)).toFixed(3));
+    root.setProperty("--jazz-voice-treble", Math.max(0, Math.min(1, treble)).toFixed(3));
+    root.setProperty("--jazz-voice-scale", scale.toFixed(3));
   }
 
   private async ensureAudioContext() {
@@ -124,7 +141,7 @@ export class JazzVoice {
       if (!context || !this.micStream) return;
       this.micAnalyser = context.createAnalyser();
       this.micAnalyser.fftSize = 256;
-      this.micAnalyser.smoothingTimeConstant = 0.72;
+      this.micAnalyser.smoothingTimeConstant = 0.45;
       this.micSource = context.createMediaStreamSource(this.micStream);
       this.micSource.connect(this.micAnalyser);
       this.levelData = new Uint8Array(this.micAnalyser.fftSize);
@@ -138,12 +155,15 @@ export class JazzVoice {
     if (!this.micAnalyser || !this.levelData || !this.listeningRequested) return;
     this.micAnalyser.getByteTimeDomainData(this.levelData);
     let sum = 0;
+    let peak = 0;
     for (let i = 0; i < this.levelData.length; i += 1) {
       const sample = (this.levelData[i] - 128) / 128;
       sum += sample * sample;
+      peak = Math.max(peak, Math.abs(sample));
     }
     const rms = Math.sqrt(sum / this.levelData.length);
-    this.setLevel(Math.min(1, Math.max(0, (rms - 0.015) * 7.2)));
+    const level = Math.min(1, Math.max(0, (rms - 0.012) * 7.8 + peak * 0.24));
+    this.setLevel(level, level * 0.82, level, level * 0.72);
     this.levelFrame = window.requestAnimationFrame(this.readMicLevel);
   };
 
@@ -165,34 +185,46 @@ export class JazzVoice {
     if (!context) return null;
     this.stopOutputMonitor(false);
     this.outputAnalyser = context.createAnalyser();
-    this.outputAnalyser.fftSize = 512;
-    this.outputAnalyser.smoothingTimeConstant = 0.58;
+    this.outputAnalyser.fftSize = 1024;
+    this.outputAnalyser.smoothingTimeConstant = 0.3;
     this.outputAnalyser.connect(context.destination);
     this.outputData = new Uint8Array(this.outputAnalyser.fftSize);
+    this.outputFrequencyData = new Uint8Array(this.outputAnalyser.frequencyBinCount);
     this.readOutputLevel();
     return context;
   }
 
-  /** Drive the holographic heart from actual streamed PCM RMS + frequency energy. */
+  private averageBand(data: Uint8Array, start: number, end: number) {
+    const from = Math.max(0, Math.min(data.length - 1, start));
+    const to = Math.max(from + 1, Math.min(data.length, end));
+    let sum = 0;
+    for (let i = from; i < to; i += 1) sum += data[i];
+    return sum / ((to - from) * 255);
+  }
+
+  /** Drive the holographic heart from actual streamed Piper PCM RMS, peaks and spectral energy. */
   private readOutputLevel = () => {
-    if (!this.outputAnalyser || !this.outputData || !this.streamPlaying) {
+    if (!this.outputAnalyser || !this.outputData || !this.outputFrequencyData || !this.streamPlaying) {
       this.outputFrame = null;
       return;
     }
     this.outputAnalyser.getByteTimeDomainData(this.outputData);
     let sum = 0;
+    let peak = 0;
     for (let i = 0; i < this.outputData.length; i += 1) {
       const sample = (this.outputData[i] - 128) / 128;
       sum += sample * sample;
+      peak = Math.max(peak, Math.abs(sample));
     }
     const rms = Math.sqrt(sum / this.outputData.length);
-    const frequencyData = new Uint8Array(this.outputAnalyser.frequencyBinCount);
-    this.outputAnalyser.getByteFrequencyData(frequencyData);
-    let frequencySum = 0;
-    for (let i = 0; i < frequencyData.length; i += 1) frequencySum += frequencyData[i];
-    const frequencyLevel = frequencySum / (frequencyData.length * 255);
-    const level = Math.min(1, Math.max(0, (rms - 0.006) * 9 + frequencyLevel * 0.55));
-    this.setLevel(level);
+    this.outputAnalyser.getByteFrequencyData(this.outputFrequencyData);
+
+    const binHz = (this.audioContext?.sampleRate || 22050) / this.outputAnalyser.fftSize;
+    const bass = this.averageBand(this.outputFrequencyData, Math.floor(70 / binHz), Math.ceil(280 / binHz));
+    const mid = this.averageBand(this.outputFrequencyData, Math.floor(280 / binHz), Math.ceil(2200 / binHz));
+    const treble = this.averageBand(this.outputFrequencyData, Math.floor(2200 / binHz), Math.ceil(7200 / binHz));
+    const raw = (rms - 0.0055) * 8.7 + peak * 0.30 + mid * 0.36 + bass * 0.14;
+    this.setLevel(Math.min(1, Math.max(0, raw)), bass, mid, treble);
     this.outputFrame = window.requestAnimationFrame(this.readOutputLevel);
   };
 
@@ -200,6 +232,7 @@ export class JazzVoice {
     if (this.outputFrame !== null) window.cancelAnimationFrame(this.outputFrame);
     this.outputFrame = null;
     this.outputData = null;
+    this.outputFrequencyData = null;
     if (stopSources) {
       for (const source of this.outputSources) {
         try { source.stop(); } catch { /* already stopped */ }
@@ -309,9 +342,7 @@ export class JazzVoice {
       let data: any;
       try { data = JSON.parse(payload); } catch { return; }
       if (runId !== this.speechRunId) return;
-      if (name === "meta") {
-        return;
-      }
+      if (name === "meta") return;
       if (name === "error") {
         streamError = new Error(data?.error || "Piper streaming failed");
         return;
@@ -384,6 +415,7 @@ export class JazzVoice {
     utterance.rate = 1.04;
     utterance.pitch = 1.10;
     utterance.volume = 1;
+    utterance.onboundary = () => this.setLevel(0.28 + Math.random() * 0.28, 0.18, 0.42, 0.30);
     utterance.onend = () => { if (runId === this.speechRunId) this.finishSpeaking(); };
     utterance.onerror = () => { if (runId === this.speechRunId) this.finishSpeaking(); };
     window.speechSynthesis.speak(utterance);
