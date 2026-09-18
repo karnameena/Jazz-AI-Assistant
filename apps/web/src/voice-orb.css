@@ -1,0 +1,126 @@
+/*
+ * Jazz reactive voice orb
+ * Code-only visualizer: no image asset.
+ * --jazz-voice-level / --jazz-voice-scale are driven by the real mic/Piper analyser in voice.ts.
+ */
+
+html body .chat-panel::before,
+html body .chat-panel::after {
+  pointer-events: none !important;
+  position: absolute !important;
+  left: 50% !important;
+  top: 43% !important;
+  z-index: 30 !important;
+  opacity: 0 !important;
+  will-change: transform, opacity, filter, background-position !important;
+}
+
+/* Continuously moving cyan/magenta side waveform. */
+html body .chat-panel::before {
+  content: "" !important;
+  width: 430px !important;
+  height: 126px !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  transform: translate(-50%, -50%) !important;
+  background-color: transparent !important;
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 360 120'%3E%3Cpath d='M0 60 C28 12 57 12 86 60 S144 108 173 60 S231 12 260 60 S318 108 360 60' fill='none' stroke='%2349e7ff' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M0 60 C30 98 60 98 90 60 S150 22 180 60 S240 98 270 60 S330 22 360 60' fill='none' stroke='%23ee57ff' stroke-width='2' stroke-linecap='round' opacity='.9'/%3E%3Cpath d='M0 60 C24 30 48 30 72 60 S120 90 144 60 S192 30 216 60 S264 90 288 60 S336 30 360 60' fill='none' stroke='%238c7dff' stroke-width='1.2' opacity='.7'/%3E%3C/svg%3E") !important;
+  background-repeat: repeat-x !important;
+  background-position: 0 50% !important;
+  background-size: 360px 126px !important;
+  -webkit-mask: none !important;
+  mask: none !important;
+  filter: drop-shadow(0 0 6px rgba(59, 218, 255, .74)) drop-shadow(0 0 11px rgba(231, 67, 255, .42)) !important;
+  animation: jazz-side-wave 1.35s linear infinite !important;
+}
+
+/* Medium glass orb with neon heart + ring. */
+html body .chat-panel::after {
+  content: "♥" !important;
+  width: 150px !important;
+  height: 150px !important;
+  display: grid !important;
+  place-items: center !important;
+  border-radius: 50% !important;
+  color: #fff !important;
+  font: 700 66px/1 "Segoe UI Symbol", "Arial Unicode MS", sans-serif !important;
+  transform: translate(-50%, -50%) scale(.96) !important;
+  background:
+    radial-gradient(circle at 34% 27%, rgba(255,255,255,.31), transparent 20%),
+    radial-gradient(circle at 50% 58%, rgba(125,66,255,.25), rgba(39,28,102,.22) 45%, rgba(2,10,29,.72) 100%) !important;
+  border: 2px solid rgba(139, 222, 255, .72) !important;
+  outline: 1px solid rgba(232, 91, 255, .58) !important;
+  outline-offset: 7px !important;
+  text-shadow:
+    0 0 8px rgba(255,255,255,1),
+    0 0 19px rgba(255,123,245,.94),
+    0 0 34px rgba(193,68,255,.82) !important;
+  box-shadow:
+    0 0 0 5px rgba(83, 191, 255, .10),
+    0 0 23px rgba(67, 217, 255, .54),
+    0 0 48px rgba(209, 69, 255, .35),
+    inset 0 0 26px rgba(104, 220, 255, .13),
+    inset 0 0 48px rgba(222, 67, 255, .10) !important;
+  transition: transform 35ms linear, filter 35ms linear, box-shadow 45ms linear !important;
+}
+
+/* Show the visualizer only while Jazz is actively listening/speaking. */
+html[data-jazz-voice-state="listening"] body .chat-panel::before,
+html[data-jazz-voice-state="listening"] body .chat-panel::after,
+html[data-jazz-voice-state="speaking"] body .chat-panel::before,
+html[data-jazz-voice-state="speaking"] body .chat-panel::after {
+  opacity: 1 !important;
+}
+
+/* Listening: stable orb, waveform keeps travelling. */
+html[data-jazz-voice-state="listening"] body .chat-panel::after {
+  transform: translate(-50%, -50%) scale(.96) !important;
+  filter: brightness(1.03) saturate(1.08) !important;
+}
+
+/* Speaking: the CENTER orb follows the real Piper audio level. */
+html[data-jazz-voice-state="speaking"] body .chat-panel::after {
+  transform: translate(-50%, -50%) scale(clamp(.92, var(--jazz-voice-scale, .96), 1.16)) !important;
+  filter: brightness(calc(1.02 + var(--jazz-voice-level, 0) * .34)) saturate(1.18) !important;
+  box-shadow:
+    0 0 0 5px rgba(83,191,255,.12),
+    0 0 28px rgba(61,224,255,.68),
+    0 0 58px rgba(225,68,255,.48),
+    inset 0 0 29px rgba(109,225,255,.16),
+    inset 0 0 52px rgba(230,69,255,.13) !important;
+}
+
+/* Wave never freezes while either voice state is active. */
+html[data-jazz-voice-state="speaking"] body .chat-panel::before {
+  animation-duration: .92s !important;
+  filter: drop-shadow(0 0 7px rgba(59,218,255,.84)) drop-shadow(0 0 13px rgba(237,70,255,.58)) !important;
+}
+
+html[data-jazz-voice-state="listening"] body .chat-messages,
+html[data-jazz-voice-state="speaking"] body .chat-messages {
+  opacity: .70 !important;
+}
+
+@keyframes jazz-side-wave {
+  from { background-position: 0 50%; }
+  to   { background-position: 360px 50%; }
+}
+
+@media (max-width: 700px) {
+  html body .chat-panel::before {
+    width: 310px !important;
+    height: 100px !important;
+    background-size: 300px 100px !important;
+  }
+  html body .chat-panel::after {
+    width: 118px !important;
+    height: 118px !important;
+    font-size: 51px !important;
+    outline-offset: 5px !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html body .chat-panel::before { animation-duration: 3.5s !important; }
+}
