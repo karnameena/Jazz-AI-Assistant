@@ -11,55 +11,93 @@ function deviceFor(text) {
   return /\btablet\b/i.test(text) ? "android-tablet" : "android-phone";
 }
 
-async function run(deviceId, action, args, success) {
-  const device = getDevice(deviceId);
-  if (!device) return { assistant: `I don't know that device yet.` };
-  try {
-    const result = await sendAndroidCommand(deviceId, action, args);
-    if (result?.ok === false) return { assistant: result.message || `I couldn't control ${device.name}.` };
-    return { assistant: success(device), executed: true, tool: `android.${action}`, result };
-  } catch (error) {
-    return { assistant: `I couldn't control ${device.name}: ${error.message}` };
-  }
+function wait(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function collectMatches(text, regex, makeStep) {
+  const flags = regex.flags.includes("g") ? regex.flags : `${regex.flags}g`;
+  const global = new RegExp(regex.source, flags);
+  return [...text.matchAll(global)].map(match => ({ index: match.index ?? 0, length: match[0].length, ...makeStep(match) }));
+}
+
+function overlaps(a, b) {
+  return a.index < b.index + b.length && b.index < a.index + a.length;
+}
+
+function planAndroidSteps(text) {
+  const steps = [];
+
+  const reelsSteps = collectMatches(
+    text,
+    /\b(?:open|show|go\s+to|launch|start)\s+(?:instagram\s+)?reels?\b/i,
+    () => ({ action: "open_instagram_reels", args: {}, label: "opened Instagram Reels", waitAfter: 1900 })
+  );
+  steps.push(...reelsSteps);
+
+  const appSteps = collectMatches(
+    text,
+    /\b(?:open|launch|start)\s+(instagram|youtube music|youtube|whatsapp)\b/i,
+    match => ({
+      action: "launch_app",
+      args: { packageName: APP_PACKAGES[String(match[1]).toLowerCase()] },
+      label: `opened ${match[1]}`,
+      waitAfter: 900
+    })
+  ).filter(step => !reelsSteps.some(reel => overlaps(step, reel)));
+  steps.push(...appSteps);
+
+  steps.push(...collectMatches(text, /\b(?:next\s+reel|scroll\s+down|next\s+video)\b/i,
+    () => ({ action: "scroll_down", args: {}, label: "scrolled down", waitAfter: 260 })));
+  steps.push(...collectMatches(text, /\b(?:previous\s+reel|scroll\s+up|previous\s+video)\b/i,
+    () => ({ action: "scroll_up", args: {}, label: "scrolled up", waitAfter: 260 })));
+  steps.push(...collectMatches(text, /\b(?:go\s+back|back)\b/i,
+    () => ({ action: "back", args: {}, label: "went back", waitAfter: 220 })));
+  steps.push(...collectMatches(text, /\b(?:go\s+home|home\s+screen|home)\b/i,
+    () => ({ action: "home", args: {}, label: "opened Home", waitAfter: 220 })));
+  steps.push(...collectMatches(text, /\b(?:read|what(?:'s|\s+is)\s+on)\s+(?:the\s+)?screen\b/i,
+    () => ({ action: "read_screen", args: {}, label: "read the screen", waitAfter: 0 })));
+
+  return steps.sort((a, b) => a.index - b.index);
 }
 
 export async function handleAndroidIntent(message) {
   const text = String(message || "").trim();
   if (!text) return null;
+
+  const steps = planAndroidSteps(text);
+  if (!steps.length) return null;
+
   const deviceId = deviceFor(text);
+  const device = getDevice(deviceId);
+  if (!device) return { assistant: "I don't know that Android device yet." };
 
-  const open = text.match(/\b(?:open|launch|start)\s+(instagram|youtube music|youtube|whatsapp)\b/i);
-  if (open) {
-    const app = open[1].toLowerCase();
-    return run(deviceId, "launch_app", { packageName: APP_PACKAGES[app] }, device => `${open[1]} is opening on ${device.name}.`);
+  const results = [];
+  for (const step of steps) {
+    try {
+      const result = await sendAndroidCommand(deviceId, step.action, step.args);
+      results.push({ action: step.action, ok: result?.ok !== false, result });
+      if (result?.ok === false) {
+        return {
+          assistant: result.message || `I couldn't ${step.label} on ${device.name}.`,
+          executed: results.some(item => item.ok),
+          steps: results
+        };
+      }
+      if (step.waitAfter) await wait(step.waitAfter);
+    } catch (error) {
+      return {
+        assistant: `I couldn't control ${device.name}: ${error instanceof Error ? error.message : String(error)}`,
+        executed: results.some(item => item.ok),
+        steps: results
+      };
+    }
   }
 
-  if (/\b(?:open|show|go to)\s+(?:instagram\s+)?reels?\b/i.test(text)) {
-    const launched = await run(deviceId, "launch_app", { packageName: APP_PACKAGES.instagram }, device => `Instagram is open on ${device.name}.`);
-    if (!launched.executed) return launched;
-    await new Promise(resolve => setTimeout(resolve, 900));
-    return run(deviceId, "click_text", { text: "Reels" }, device => `Reels is open on ${device.name}.`);
-  }
-
-  if (/\b(?:next reel|scroll down|scroll reels?|next video)\b/i.test(text)) {
-    return run(deviceId, "scroll_down", {}, device => `Scrolled down on ${device.name}.`);
-  }
-
-  if (/\b(?:previous reel|scroll up|previous video)\b/i.test(text)) {
-    return run(deviceId, "scroll_up", {}, device => `Scrolled up on ${device.name}.`);
-  }
-
-  if (/\b(?:go back|back)\b/i.test(text)) {
-    return run(deviceId, "back", {}, device => `Went back on ${device.name}.`);
-  }
-
-  if (/\b(?:go home|home screen)\b/i.test(text)) {
-    return run(deviceId, "home", {}, device => `Opened the home screen on ${device.name}.`);
-  }
-
-  if (/\b(?:read|what(?:'s| is) on) (?:the )?screen\b/i.test(text)) {
-    return run(deviceId, "read_screen", {}, device => `I read the visible screen on ${device.name}.`);
-  }
-
-  return null;
+  return {
+    assistant: `Done, Mama — ${steps.map(step => step.label).join(", then ")} on ${device.name}.`,
+    executed: true,
+    tool: "android.sequence",
+    steps: results
+  };
 }
