@@ -2,3 +2,8 @@ packages:
   - apps/*
   - services/*
   - packages/*
+
+# pnpm 11+ blocks dependency install scripts unless explicitly approved.
+# Vite requires esbuild's install script to prepare its native binary.
+allowBuilds:
+  esbuild: true
