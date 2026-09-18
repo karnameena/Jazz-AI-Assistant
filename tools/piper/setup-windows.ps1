@@ -1,9 +1,12 @@
 $ErrorActionPreference = "Stop"
+$PiperSetupVersion = "2026.09.18.2"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $runtime = Join-Path $root "runtime"
 $voices = Join-Path $root "voices"
 $stage = Join-Path $env:TEMP "jazz-piper-stage"
 $piperZip = Join-Path $env:TEMP "jazz-piper-windows.zip"
+
+Write-Host "Jazz Piper setup $PiperSetupVersion" -ForegroundColor Cyan
 
 New-Item -ItemType Directory -Force -Path $voices | Out-Null
 Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
