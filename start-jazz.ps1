@@ -1,6 +1,7 @@
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $root
+$expectedVersion = "0.10.0-local"
 
 Write-Host "Jazz startup" -ForegroundColor Cyan
 Write-Host "Root: $root"
@@ -11,6 +12,24 @@ function Test-Http($url) {
     return $true
   } catch { return $false }
 }
+
+function Stop-PortListener([int]$port) {
+  try {
+    $connections = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
+    foreach ($connection in @($connections)) {
+      if ($connection.OwningProcess) {
+        Write-Host "Stopping stale process on port $port (PID $($connection.OwningProcess))..." -ForegroundColor DarkYellow
+        Stop-Process -Id $connection.OwningProcess -Force -ErrorAction SilentlyContinue
+      }
+    }
+  } catch {}
+}
+
+# Always replace stale Jazz runtime processes so old code cannot keep answering requests.
+Stop-PortListener 8787
+Stop-PortListener 9899
+Stop-PortListener 5173
+Start-Sleep -Milliseconds 450
 
 # 1) Ollama local brain
 $ollama = Get-Command ollama -ErrorAction SilentlyContinue
@@ -30,10 +49,10 @@ if ($ollama) {
     }
   }
 } else {
-  Write-Warning "Ollama command not found. Jazz will still handle local commands, but general AI chat needs Ollama or an online provider."
+  Write-Warning "Ollama command not found. Jazz local commands still work, but general AI chat needs Ollama or an online provider."
 }
 
-# 2) Piper TTS. Set it up automatically only when missing.
+# 2) Piper TTS. Install the free local runtime automatically when missing.
 $piperExe = Join-Path $root "tools\piper\piper.exe"
 $piperSetup = Join-Path $root "tools\piper\setup-windows.ps1"
 if (-not (Test-Path $piperExe)) {
@@ -47,27 +66,34 @@ else { Write-Warning "Piper is still missing. Browser TTS fallback will be used.
 
 # 3) Windows ADB bridge
 $bridgeEnv = Join-Path $root "bridges\windows-adb\.env"
-$bridgeJs = Join-Path $root "bridges\windows-adb\adb-bridge.mjs"
-if (-not (Test-Http "http://127.0.0.1:9899/health")) {
-  if (-not (Test-Path $bridgeEnv)) { Write-Warning "ADB bridge .env is missing: $bridgeEnv" }
-  else {
-    $bridgeCommand = "Set-Location '$root'; node --env-file='.\bridges\windows-adb\.env' '.\bridges\windows-adb\adb-bridge.mjs'"
-    Start-Process powershell.exe -ArgumentList "-NoExit", "-Command", $bridgeCommand
-    Start-Sleep -Seconds 1
-  }
+if (-not (Test-Path $bridgeEnv)) {
+  Write-Warning "ADB bridge .env is missing: $bridgeEnv"
+} else {
+  $bridgeCommand = "Set-Location '$root'; node --env-file='.\bridges\windows-adb\.env' '.\bridges\windows-adb\adb-bridge.mjs'"
+  Start-Process powershell.exe -ArgumentList "-NoExit", "-Command", $bridgeCommand
+  Start-Sleep -Seconds 1
 }
 
 # 4) Jazz API
 $apiEnv = Join-Path $root "services\api\.env"
-if (-not (Test-Http "http://127.0.0.1:8787/health")) {
-  $envArg = if (Test-Path $apiEnv) { "--env-file='.\services\api\.env'" } else { "" }
-  $apiCommand = "Set-Location '$root'; node $envArg '.\services\api\src\server.mjs'"
-  Start-Process powershell.exe -ArgumentList "-NoExit", "-Command", $apiCommand
-  Start-Sleep -Seconds 2
+$envArg = if (Test-Path $apiEnv) { "--env-file='.\services\api\.env'" } else { "" }
+$apiCommand = "Set-Location '$root'; node $envArg '.\services\api\src\server.mjs'"
+Start-Process powershell.exe -ArgumentList "-NoExit", "-Command", $apiCommand
+Start-Sleep -Seconds 2
+
+# Verify the exact API build. This catches stale local code immediately.
+try {
+  $apiHealth = Invoke-RestMethod "http://127.0.0.1:8787/health" -TimeoutSec 5
+  if ($apiHealth.version -ne $expectedVersion) {
+    throw "Wrong Jazz API version is running. Expected $expectedVersion but got $($apiHealth.version)."
+  }
+  Write-Host "Jazz API version verified: $($apiHealth.version)" -ForegroundColor Green
+} catch {
+  Write-Warning "Jazz API verification failed: $($_.Exception.Message)"
 }
 
-# 5) Web UI
-$webCommand = "Set-Location '$root\apps\web'; if (Test-Path '.\node_modules\.vite') { Remove-Item -Recurse -Force '.\node_modules\.vite' -ErrorAction SilentlyContinue }; pnpm dev -- --force"
+# 5) Web UI on one fixed port, with Vite cache cleared.
+$webCommand = "Set-Location '$root\apps\web'; if (Test-Path '.\node_modules\.vite') { Remove-Item -Recurse -Force '.\node_modules\.vite' -ErrorAction SilentlyContinue }; pnpm dev -- --force --port 5173 --strictPort"
 Start-Process powershell.exe -ArgumentList "-NoExit", "-Command", $webCommand
 
 Start-Sleep -Seconds 2
@@ -81,4 +107,4 @@ try {
 }
 
 Write-Host ""
-Write-Host "Jazz startup completed. Open the Vite URL shown in the web terminal." -ForegroundColor Green
+Write-Host "Jazz startup completed. Open http://localhost:5173" -ForegroundColor Green
