@@ -58,6 +58,17 @@ function Show-LogTail($path, $label) {
   }
 }
 
+function Test-JazzPiperApi {
+  param([int]$Port)
+  $body = @{ text = "Jazz ready." } | ConvertTo-Json
+  try {
+    $response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/api/tts" -Method POST -ContentType "application/json" -Body $body -TimeoutSec 30
+    return $response.StatusCode -eq 200 -and $response.RawContentLength -gt 44
+  } catch {
+    return $false
+  }
+}
+
 # Always remove stale Jazz runtimes first.
 Stop-StaleJazzNodeProcesses
 Stop-PortListener 8787
@@ -77,8 +88,7 @@ if ($serverText -match "I tried the configured model and resilient fallbacks") {
 }
 Write-Host "Local Jazz API source verified: $expectedVersion" -ForegroundColor Green
 
-# 1) Start the Jazz API FIRST. Disable Piper prewarm during boot because the
-# launcher repairs Piper after the API is online and verified.
+# 1) Start API first. Piper prewarm is disabled until the launcher validates the runtime.
 $node = Get-Command node -ErrorAction Stop
 $apiOut = Join-Path $logDir "api.out.log"
 $apiErr = Join-Path $logDir "api.err.log"
@@ -96,7 +106,8 @@ try {
   $env:JAZZ_OLLAMA_FALLBACK = "true"
   $env:JAZZ_PIPER_PREWARM = "false"
 
-  # Intentionally do NOT load services/api/.env here. It may contain old provider/port values.
+  # Do not load services/api/.env here. Old provider/Piper overrides in that file
+  # must not control the managed Jazz runtime.
   $apiProcess = Start-Process -FilePath $node.Source -ArgumentList @($serverFile) -WorkingDirectory $root -WindowStyle Hidden -RedirectStandardOutput $apiOut -RedirectStandardError $apiErr -PassThru
 } finally {
   if ($null -eq $oldPort) { Remove-Item Env:PORT -ErrorAction SilentlyContinue } else { $env:PORT = $oldPort }
@@ -130,7 +141,7 @@ if ($apiHealth.provider -ne "ollama") {
 }
 Write-Host "Jazz API READY: version=$($apiHealth.version), provider=$($apiHealth.provider), port=$apiPort, PID=$($apiProcess.Id)" -ForegroundColor Green
 
-# 2) Start/check Ollama. Failure here never takes the API down.
+# 2) Ollama local brain.
 try {
   $ollama = Get-Command ollama -ErrorAction SilentlyContinue
   if ($ollama) {
@@ -155,7 +166,7 @@ try {
   Write-Warning "Ollama startup check failed: $($_.Exception.Message)"
 }
 
-# 3) Start the Windows ADB bridge. Keep private device credentials only in bridges/windows-adb/.env.
+# 3) Windows ADB bridge.
 try {
   $bridgeEnv = Join-Path $root "bridges\windows-adb\.env"
   $bridgeFile = Join-Path $root "bridges\windows-adb\adb-bridge.mjs"
@@ -182,35 +193,49 @@ try {
   Write-Warning "ADB bridge startup failed: $($_.Exception.Message)"
 }
 
-# 4) Repair Piper as a COMPLETE Windows runtime (exe + DLLs + eSpeak data),
-# then verify synthesis through the already-running Jazz API.
+# 4) Piper. Require the complete runtime path and a real synthesis test. If either
+# check fails, repair once and retry automatically.
 try {
-  $piperExe = Join-Path $root "tools\piper\runtime\piper.exe"
   $piperSetup = Join-Path $root "tools\piper\setup-windows.ps1"
-  $piperNeedsRepair = -not (Test-Path $piperExe)
+  $runtimeExe = Join-Path $root "tools\piper\runtime\piper.exe"
+  $needsRepair = -not (Test-Path $runtimeExe)
 
-  if ($piperNeedsRepair -and (Test-Path $piperSetup)) {
-    Write-Host "Installing/repairing complete Piper runtime..." -ForegroundColor Yellow
+  $ttsHealth = Invoke-RestMethod "http://127.0.0.1:$apiPort/api/tts-health" -TimeoutSec 8
+  if (-not $ttsHealth.tts.ok -or $ttsHealth.tts.executable -notmatch '\\runtime\\piper\.exe$') {
+    $needsRepair = $true
+  }
+
+  if (-not $needsRepair -and -not (Test-JazzPiperApi -Port $apiPort)) {
+    $needsRepair = $true
+  }
+
+  if ($needsRepair) {
+    if (-not (Test-Path $piperSetup)) { throw "Piper setup script is missing: $piperSetup" }
+    Write-Host "Repairing complete Piper runtime + Windows dependencies..." -ForegroundColor Yellow
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $piperSetup
     if ($LASTEXITCODE -ne 0) { throw "Piper installer exited with code $LASTEXITCODE." }
+    Start-Sleep -Milliseconds 350
   }
 
   $ttsHealth = Invoke-RestMethod "http://127.0.0.1:$apiPort/api/tts-health" -TimeoutSec 8
   if (-not $ttsHealth.tts.ok) {
-    throw "Piper files are still incomplete: $($ttsHealth.tts | ConvertTo-Json -Compress)"
+    throw "Piper files are incomplete: $($ttsHealth.tts | ConvertTo-Json -Compress)"
   }
-
-  # Real API-level synthesis smoke test.
-  $ttsBody = @{ text = "Jazz ready." } | ConvertTo-Json
-  $null = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$apiPort/api/tts" -Method POST -ContentType "application/json" -Body $ttsBody -TimeoutSec 30
+  if ($ttsHealth.tts.executable -notmatch '\\runtime\\piper\.exe$') {
+    throw "Jazz selected the wrong Piper executable: $($ttsHealth.tts.executable)"
+  }
+  if (-not (Test-JazzPiperApi -Port $apiPort)) {
+    throw "Piper files exist, but real speech synthesis still failed."
+  }
   Write-Host "Piper TTS READY: $($ttsHealth.tts.executable)" -ForegroundColor Green
 } catch {
   Write-Warning "Piper TTS is not ready; browser TTS fallback remains available: $($_.Exception.Message)"
 }
 
-# 5) Start the web UI after the API is confirmed alive.
+# 5) Web UI. Clear both old and new Vite caches; vite.config.ts deduplicates
+# react/react-dom so lucide-react and the app share the same hook dispatcher.
 try {
-  $webCommand = "Set-Location '$root\apps\web'; `$env:JAZZ_API_PORT='$apiPort'; if (Test-Path '.\node_modules\.vite') { Remove-Item -Recurse -Force '.\node_modules\.vite' -ErrorAction SilentlyContinue }; pnpm dev -- --force --port $webPort --strictPort"
+  $webCommand = "Set-Location '$root\apps\web'; `$env:JAZZ_API_PORT='$apiPort'; Remove-Item -Recurse -Force '.\node_modules\.vite' -ErrorAction SilentlyContinue; Remove-Item -Recurse -Force '.\node_modules\.vite-jazz' -ErrorAction SilentlyContinue; pnpm exec vite --force --port $webPort --strictPort"
   Start-Process powershell.exe -ArgumentList "-NoExit", "-Command", $webCommand
   Start-Sleep -Seconds 2
 } catch {
@@ -222,6 +247,6 @@ Write-Host "Jazz health:" -ForegroundColor Cyan
 (Invoke-RestMethod $healthUrl -TimeoutSec 5) | ConvertTo-Json -Depth 6
 Write-Host ""
 Write-Host "Jazz startup completed." -ForegroundColor Green
-Write-Host "Web: http://localhost:$webPort/?v=20260918-7" -ForegroundColor Green
+Write-Host "Web: http://localhost:$webPort/?v=20260918-8" -ForegroundColor Green
 Write-Host "API: http://127.0.0.1:$apiPort/health" -ForegroundColor Green
 Write-Host "API logs: $apiOut ; $apiErr" -ForegroundColor DarkGray
