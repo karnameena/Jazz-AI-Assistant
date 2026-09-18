@@ -19,8 +19,12 @@ export const scripts = {
     file: "pay-mom.ps1",
     files: ["pay-mom.ps1", "Payto_Mom.ps1", "paymom.ps1", "paymom.sh"],
     description: "Mama-owned payment workflow",
-    aliases: ["pay mom", "pay to mom", "pay my mom", "pay to my mom", "send money to mom", "send money to my mom"],
-    // An explicit phrase such as "pay mom 1 rupee" is itself the user's command.
+    aliases: [
+      "pay mom", "pay momma", "pay mummy", "pay my mom", "pay my momma", "pay my mummy",
+      "pay to mom", "pay to momma", "pay to mummy", "pay to my mom", "pay to my momma", "pay to my mummy",
+      "send money to mom", "send money to momma", "send money to mummy",
+      "send money to my mom", "send money to my momma", "send money to my mummy"
+    ],
     requiresConfirmation: false,
     category: "financial",
     workflow: "script"
@@ -63,9 +67,9 @@ export function findScriptForMessage(message) {
     return ["unlockmobile", scripts.unlockmobile];
   }
 
-  // Direct phrase-to-script behavior even when an amount appears between
-  // "pay" and "mom", e.g. "pay mom 1 rupee" or "pay 1 rupee to mom".
-  if (/\b(?:pay|send)\b[^\n]{0,80}\b(?:my\s+)?mom\b/i.test(lower)) {
+  // Match natural variants such as:
+  // "pay mom 1 rupee", "pay 1 rupee to mom", "pay momma", "pay to my mummy".
+  if (/\b(?:pay|send)\b[^\n]{0,100}\b(?:my\s+)?(?:mom|momma|mummy)\b/i.test(lower)) {
     return ["paymom", scripts.paymom];
   }
 
