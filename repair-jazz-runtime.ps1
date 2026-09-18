@@ -13,6 +13,7 @@ $runtimeFiles = @(
   "services/api/src/android-intents.mjs",
   "services/api/src/script-registry.mjs",
   "bridges/windows-adb/adb-bridge.mjs",
+  "tools/piper/setup-windows.ps1",
   "apps/web/vite.config.ts",
   "apps/web/index.html",
   "apps/web/public/api-runtime.js",
