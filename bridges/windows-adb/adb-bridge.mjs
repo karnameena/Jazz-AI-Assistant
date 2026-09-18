@@ -89,11 +89,20 @@ function runScript(file, target, args = {}) {
   return new Promise((resolvePromise, reject) => {
     if (!file || !existsSync(file)) return reject(new Error("Script is not installed"));
 
+    // Preserve the environment names used by the original working PowerShell
+    // workflows. Also place the configured ADB folder on PATH so both
+    // `$env:ADB_PATH` and plain `adb` continue to work inside legacy scripts.
+    const adbDir = adb && adb !== "adb" ? dirname(adb) : "";
+    const inheritedPath = process.env.PATH || process.env.Path || "";
     const env = {
       ...process.env,
+      PATH: adbDir ? `${adbDir};${inheritedPath}` : inheritedPath,
+      Path: adbDir ? `${adbDir};${inheritedPath}` : inheritedPath,
       ADB_PATH: adb,
       JAZZ_DEVICE_ID: target.deviceId,
       JAZZ_ANDROID_SERIAL: target.serial,
+      JAZZ_ANDROID_PHONE_SERIAL: target.deviceId === "android-phone" ? target.serial : (process.env.JAZZ_ANDROID_PHONE_SERIAL || ""),
+      JAZZ_ANDROID_TABLET_SERIAL: target.deviceId === "android-tablet" ? target.serial : (process.env.JAZZ_ANDROID_TABLET_SERIAL || ""),
       JAZZ_SCRIPT_ARGS: JSON.stringify(args)
     };
     if (args?.amount !== null && args?.amount !== undefined) {
@@ -112,7 +121,10 @@ function runScript(file, target, args = {}) {
       { cwd: scriptRoot, env, timeout: 120000, windowsHide: true },
       (error, stdout, stderr) => {
         if (error) {
-          reject(new Error(String(stderr || stdout || error.message).trim()));
+          const details = [String(stderr || "").trim(), String(stdout || "").trim(), String(error.message || "").trim()]
+            .filter(Boolean)
+            .join(" | ");
+          reject(new Error(`${basename(file)} failed${error.code !== undefined ? ` (exit ${error.code})` : ""}: ${details || "unknown script error"}`));
           return;
         }
         resolvePromise(normalizeScriptResult(file, stdout));
