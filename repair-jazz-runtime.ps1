@@ -15,6 +15,7 @@ $runtimeFiles = @(
   "bridges/windows-adb/adb-bridge.mjs",
   "apps/web/vite.config.ts",
   "apps/web/index.html",
+  "apps/web/public/api-runtime.js",
   "apps/web/src/api-runtime.ts",
   "apps/web/src/main.tsx",
   "apps/web/src/voice.ts",
@@ -37,7 +38,7 @@ if ($server -match 'I tried the configured model and resilient fallbacks') {
   throw "Repair failed: legacy Gemini fallback text still exists."
 }
 
-$apiRuntime = Get-Content ".\apps\web\src\api-runtime.ts" -Raw
+$apiRuntime = Get-Content ".\apps\web\public\api-runtime.js" -Raw
 if ($apiRuntime -notmatch '127\.0\.0\.1:8797') {
   throw "Repair failed: web runtime is not pinned to Jazz API port 8797."
 }
