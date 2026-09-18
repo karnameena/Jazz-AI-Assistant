@@ -74,10 +74,10 @@ if (-not (Test-Path $bridgeEnv)) {
   Start-Sleep -Seconds 1
 }
 
-# 4) Jazz API
+# 4) Jazz API. This launcher intentionally forces the free/local Ollama provider.
 $apiEnv = Join-Path $root "services\api\.env"
 $envArg = if (Test-Path $apiEnv) { "--env-file='.\services\api\.env'" } else { "" }
-$apiCommand = "Set-Location '$root'; node $envArg '.\services\api\src\server.mjs'"
+$apiCommand = "Set-Location '$root'; `$env:JAZZ_LLM_PROVIDER='ollama'; `$env:JAZZ_OLLAMA_AUTOSTART='true'; node $envArg '.\services\api\src\server.mjs'"
 Start-Process powershell.exe -ArgumentList "-NoExit", "-Command", $apiCommand
 Start-Sleep -Seconds 2
 
