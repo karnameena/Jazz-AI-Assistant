@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 
 const DEFAULT_URL = "http://127.0.0.1:11434";
 const DEFAULT_MODEL = "qwen2.5:7b";
+let autoStartAttempted = false;
 
 export function ollamaConfig() {
   return {
@@ -38,13 +39,15 @@ export async function getOllamaStatus() {
 
 function startOllamaProcess() {
   const config = ollamaConfig();
-  if (!config.autoStart) return false;
+  if (!config.autoStart || autoStartAttempted) return false;
+  autoStartAttempted = true;
   try {
     const child = spawn(config.bin, ["serve"], {
       detached: true,
       windowsHide: true,
       stdio: "ignore"
     });
+    child.on("error", () => {});
     child.unref();
     return true;
   } catch {
@@ -68,9 +71,7 @@ export async function ensureOllamaReady() {
 async function resolveModel() {
   const config = ollamaConfig();
   const status = await ensureOllamaReady();
-  if (!status.ok) {
-    throw new Error(`Ollama is not running at ${config.url}. Install/start Ollama or set JAZZ_OLLAMA_AUTOSTART=true.`);
-  }
+  if (!status.ok) throw new Error(`Ollama is not running at ${config.url}. Install/start Ollama or run start-jazz.ps1.`);
 
   if (config.model) {
     const exact = status.models.find(name => name === config.model || name.startsWith(`${config.model}:`));
