@@ -1,199 +1,216 @@
-/* Dedicated Jazz voice stage — code only, no image assets. */
+/* Jazz crystal listening visualizer v3 — code only, no image assets. */
 
-/* Hard-disable every legacy voice visual so the new stage is the only one visible. */
+/* Kill every previous listening/speaking visual. */
 html body .voice-listening-layer,
 html body .chat-panel-glow,
 html body .chat-panel::before,
 html body .chat-panel::after {
-  display: none !important;
-  content: none !important;
-  opacity: 0 !important;
+  display:none!important;
+  content:none!important;
+  opacity:0!important;
+  visibility:hidden!important;
+  animation:none!important;
 }
 
-.jazz-voice-stage {
-  position: absolute;
-  left: 50%;
-  top: 43%;
-  width: min(560px, 84%);
-  height: 230px;
-  transform: translate(-50%, -50%);
-  z-index: 35;
-  pointer-events: none;
-  opacity: 0;
-  visibility: hidden;
-  transition: opacity .16s ease, visibility .16s ease;
-  isolation: isolate;
+.jazz-voice-stage{
+  position:absolute;
+  left:50%;
+  top:43%;
+  width:min(520px,82%);
+  height:220px;
+  transform:translate(-50%,-50%);
+  z-index:60;
+  pointer-events:none;
+  opacity:0;
+  visibility:hidden;
+  transition:opacity .14s ease,visibility .14s ease;
+  isolation:isolate;
+}
+.jazz-voice-stage.is-active{opacity:1;visibility:visible}
+
+.jazz-voice-wave{
+  position:absolute;
+  left:50%;
+  top:50%;
+  width:100%;
+  height:180px;
+  transform:translate(-50%,-50%);
+  overflow:visible;
+  opacity:.94;
+  filter:drop-shadow(0 0 6px rgba(58,230,255,.72)) drop-shadow(0 0 12px rgba(255,66,225,.44));
+}
+.jazz-wave-lines{transform-origin:50% 50%;animation:jazz-wave-breathe 1.25s ease-in-out infinite alternate}
+.jazz-wave-lines path{stroke-dasharray:18 8;animation:jazz-wave-flow .92s linear infinite}
+.jazz-wave-lines path:nth-child(2){animation-duration:1.16s;animation-direction:reverse}
+.jazz-wave-lines path:nth-child(3){animation-duration:1.45s}
+.jazz-wave-lines path:nth-child(4){animation-duration:1.8s;animation-direction:reverse}
+
+.jazz-orb-shell{
+  position:absolute;
+  left:50%;
+  top:50%;
+  width:166px;
+  height:166px;
+  transform:translate(-50%,-50%);
+  display:grid;
+  place-items:center;
+  filter:drop-shadow(0 0 20px rgba(69,214,255,.22));
 }
 
-.jazz-voice-stage.is-active {
-  opacity: 1;
-  visibility: visible;
-}
-
-.jazz-voice-wave {
-  position: absolute;
-  inset: 50% auto auto 50%;
-  width: 100%;
-  height: 190px;
-  transform: translate(-50%, -50%);
-  overflow: visible;
-  filter: drop-shadow(0 0 8px rgba(56,232,255,.58)) drop-shadow(0 0 12px rgba(255,75,227,.34));
-}
-
-.jazz-wave-lines {
-  transform-origin: center;
-  animation: jazz-wave-float 1.4s ease-in-out infinite alternate;
-}
-
-.jazz-wave-lines path {
-  stroke-dasharray: 16 8;
-  animation: jazz-wave-travel 1.05s linear infinite;
-}
-
-.jazz-wave-lines path:nth-child(2) { animation-duration: 1.35s; animation-direction: reverse; }
-.jazz-wave-lines path:nth-child(3) { animation-duration: 1.7s; }
-
-.jazz-orb-shell {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 152px;
-  height: 152px;
-  transform: translate(-50%, -50%);
-  display: grid;
-  place-items: center;
-}
-
-.jazz-glass-orb {
-  position: relative;
-  width: 136px;
-  height: 136px;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  overflow: hidden;
+.jazz-glass-orb{
+  position:relative;
+  width:132px;
+  height:132px;
+  border-radius:50%;
+  display:grid;
+  place-items:center;
+  overflow:hidden;
+  transform:scale(.98);
+  will-change:transform,filter,box-shadow;
+  transition:transform 24ms linear,filter 24ms linear,box-shadow 30ms linear;
   background:
-    radial-gradient(circle at 34% 24%, rgba(255,255,255,.40), transparent 19%),
-    radial-gradient(circle at 50% 54%, rgba(79,227,255,.18), rgba(91,78,255,.25) 46%, rgba(214,55,255,.24) 72%, rgba(4,9,28,.88) 100%);
-  border: 1px solid rgba(162,232,255,.72);
+    radial-gradient(circle at 30% 22%,rgba(255,255,255,.52),rgba(255,255,255,.07) 18%,transparent 31%),
+    radial-gradient(circle at 72% 78%,rgba(234,64,255,.28),transparent 42%),
+    radial-gradient(circle at 27% 72%,rgba(48,224,255,.28),transparent 44%),
+    radial-gradient(circle at 50% 50%,rgba(71,177,255,.18),rgba(91,76,255,.26) 48%,rgba(16,19,52,.78) 79%,rgba(4,8,24,.93) 100%);
+  border:1px solid rgba(166,236,255,.78);
+  outline:1px solid rgba(232,85,255,.50);
+  outline-offset:5px;
   box-shadow:
-    0 0 0 4px rgba(74,210,255,.08),
-    0 0 25px rgba(58,219,255,.58),
-    0 0 48px rgba(225,69,255,.36),
-    inset 0 0 24px rgba(255,255,255,.12),
-    inset -12px -16px 34px rgba(221,63,255,.15);
-  transform: scale(.98);
-  transition: transform 28ms linear, filter 28ms linear, box-shadow 34ms linear;
-  will-change: transform, filter, box-shadow;
+    0 0 0 3px rgba(62,212,255,.08),
+    0 0 20px rgba(49,227,255,.62),
+    0 0 44px rgba(197,72,255,.36),
+    inset 11px 10px 26px rgba(255,255,255,.10),
+    inset -16px -17px 32px rgba(229,60,255,.16),
+    inset 0 0 34px rgba(72,213,255,.10);
+}
+.jazz-glass-orb::before{
+  content:"";
+  position:absolute;
+  inset:10px;
+  border-radius:50%;
+  border:1px solid rgba(255,255,255,.08);
+  box-shadow:inset 0 0 16px rgba(255,255,255,.05);
+}
+.jazz-glass-shine{
+  position:absolute;
+  left:18%;
+  top:9%;
+  width:60%;
+  height:33%;
+  border-radius:50%;
+  background:radial-gradient(ellipse,rgba(255,255,255,.30),rgba(255,255,255,0) 70%);
+  transform:rotate(-18deg);
+}
+.jazz-glass-refraction{
+  position:absolute;
+  right:-13%;
+  bottom:5%;
+  width:58%;
+  height:58%;
+  border-radius:50%;
+  background:radial-gradient(circle,rgba(237,70,255,.16),transparent 64%);
+  filter:blur(2px);
 }
 
-.jazz-glass-shine {
-  position: absolute;
-  width: 58%;
-  height: 34%;
-  left: 18%;
-  top: 10%;
-  border-radius: 50%;
-  background: radial-gradient(ellipse, rgba(255,255,255,.28), rgba(255,255,255,0) 72%);
-  transform: rotate(-18deg);
+.jazz-crystal-heart{
+  position:relative;
+  z-index:4;
+  width:54px;
+  height:54px;
+  overflow:visible;
+  filter:drop-shadow(0 0 4px #fff) drop-shadow(0 0 11px rgba(255,139,245,.98)) drop-shadow(0 0 24px rgba(200,68,255,.88));
+  animation:jazz-heart-idle 1.45s ease-in-out infinite;
 }
 
-.jazz-crystal-heart {
-  width: 58px;
-  height: 58px;
-  overflow: visible;
-  filter: drop-shadow(0 0 5px #fff) drop-shadow(0 0 12px rgba(255,126,246,.95)) drop-shadow(0 0 24px rgba(192,75,255,.78));
+.jazz-frequency-ring{
+  position:absolute;
+  left:50%;
+  top:50%;
+  border-radius:50%;
+  transform:translate(-50%,-50%);
+  pointer-events:none;
 }
-
-.jazz-frequency-ring {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  border-radius: 50%;
-  transform: translate(-50%, -50%);
-  border: 1px solid rgba(103,222,255,.48);
-  box-shadow: 0 0 10px rgba(76,213,255,.24), inset 0 0 10px rgba(230,77,255,.10);
-}
-
 .jazz-frequency-ring::before,
-.jazz-frequency-ring::after {
-  content: "";
-  position: absolute;
-  inset: -4px;
-  border-radius: 50%;
-  border: 1px dashed rgba(239,72,255,.55);
+.jazz-frequency-ring::after{
+  content:"";
+  position:absolute;
+  inset:0;
+  border-radius:50%;
+}
+.jazz-frequency-ring-a{
+  width:148px;height:148px;
+  border:1px solid rgba(75,226,255,.58);
+  box-shadow:0 0 9px rgba(64,225,255,.30);
+  animation:jazz-ring-spin 5.8s linear infinite;
+}
+.jazz-frequency-ring-a::before{inset:-3px;border:1px dashed rgba(75,226,255,.46)}
+.jazz-frequency-ring-b{
+  width:158px;height:158px;
+  border:1px solid rgba(238,76,255,.48);
+  box-shadow:0 0 10px rgba(238,76,255,.20);
+  animation:jazz-ring-spin-reverse 7.2s linear infinite;
+}
+.jazz-frequency-ring-b::before{inset:-4px;border:1px dashed rgba(240,83,255,.44)}
+.jazz-frequency-ring-c{
+  width:169px;height:169px;
+  border:1px solid rgba(88,169,255,.27);
+  animation:jazz-ring-pulse 1.5s ease-in-out infinite;
+}
+.jazz-frequency-ring-c::after{inset:-5px;border:1px dotted rgba(107,224,255,.34)}
+.jazz-frequency-ring-d{
+  width:180px;height:180px;
+  border:1px solid rgba(220,78,255,.16);
+  box-shadow:0 0 22px rgba(65,217,255,.08),0 0 30px rgba(224,67,255,.08);
+  animation:jazz-ring-spin 11s linear infinite;
 }
 
-.jazz-frequency-ring-a { width: 154px; height: 154px; animation: jazz-ring-spin 7s linear infinite; }
-.jazz-frequency-ring-b { width: 168px; height: 168px; border-color: rgba(237,75,255,.42); animation: jazz-ring-spin-reverse 8.5s linear infinite; }
-.jazz-frequency-ring-c { width: 182px; height: 182px; border-color: rgba(76,220,255,.28); animation: jazz-ring-pulse 1.7s ease-in-out infinite; }
-
-.jazz-voice-stage.is-listening .jazz-glass-orb {
-  transform: scale(.98);
-  filter: brightness(1.04) saturate(1.08);
+.jazz-voice-stage.is-listening .jazz-glass-orb{
+  transform:scale(.98);
+  filter:brightness(1.04) saturate(1.09);
 }
 
-/* Real Piper amplitude drives the bounce while Jazz is speaking. */
-.jazz-voice-stage.is-speaking .jazz-glass-orb {
-  transform: scale(clamp(.97, var(--jazz-voice-scale, 1), 1.17));
-  filter: brightness(calc(1.03 + var(--jazz-voice-level, 0) * .34)) saturate(1.18);
+/* Real Piper analyser drives this scale while Jazz speaks. */
+.jazz-voice-stage.is-speaking .jazz-glass-orb{
+  transform:scale(clamp(.97,var(--jazz-voice-scale,1),1.19));
+  filter:brightness(calc(1.03 + var(--jazz-voice-level,0)*.38)) saturate(calc(1.10 + var(--jazz-voice-mid,0)*.28));
   box-shadow:
-    0 0 0 4px rgba(74,210,255,.10),
-    0 0 calc(24px + var(--jazz-voice-level,0) * 16px) rgba(58,219,255,.72),
-    0 0 calc(50px + var(--jazz-voice-level,0) * 28px) rgba(225,69,255,.48),
-    inset 0 0 27px rgba(255,255,255,.15),
-    inset -12px -16px 38px rgba(221,63,255,.18);
+    0 0 0 3px rgba(62,212,255,.10),
+    0 0 calc(20px + var(--jazz-voice-level,0)*18px) rgba(49,227,255,.76),
+    0 0 calc(44px + var(--jazz-voice-level,0)*36px) rgba(217,67,255,.52),
+    inset 11px 10px 28px rgba(255,255,255,.13),
+    inset -16px -17px 36px rgba(229,60,255,.20),
+    inset 0 0 38px rgba(72,213,255,.13);
 }
-
-.jazz-voice-stage.is-speaking .jazz-wave-lines {
-  transform: scaleY(calc(1 + var(--jazz-voice-level,0) * .34));
-  animation-duration: .72s;
+.jazz-voice-stage.is-speaking .jazz-crystal-heart{
+  transform:scale(calc(1 + var(--jazz-voice-peak,0)*.12));
+  filter:drop-shadow(0 0 5px #fff) drop-shadow(0 0 calc(12px + var(--jazz-voice-level,0)*10px) rgba(255,139,245,1)) drop-shadow(0 0 calc(24px + var(--jazz-voice-level,0)*18px) rgba(200,68,255,.95));
 }
-
-.jazz-voice-stage.is-speaking .jazz-wave-lines path { animation-duration: .72s; }
-.jazz-voice-stage.is-speaking .jazz-frequency-ring-c { transform: translate(-50%, -50%) scale(calc(1 + var(--jazz-voice-level,0) * .08)); }
+.jazz-voice-stage.is-speaking .jazz-wave-lines{
+  transform:scaleY(calc(1 + var(--jazz-voice-level,0)*.42));
+  animation-duration:.56s;
+}
+.jazz-voice-stage.is-speaking .jazz-wave-lines path{animation-duration:.62s}
+.jazz-voice-stage.is-speaking .jazz-frequency-ring-c{transform:translate(-50%,-50%) scale(calc(1 + var(--jazz-voice-level,0)*.09))}
 
 html[data-jazz-voice-state="listening"] .chat-messages,
-html[data-jazz-voice-state="speaking"] .chat-messages {
-  opacity: .66 !important;
-  transition: opacity .18s ease;
-}
+html[data-jazz-voice-state="speaking"] .chat-messages{opacity:.58!important;transition:opacity .14s ease}
 
-@keyframes jazz-wave-travel {
-  to { stroke-dashoffset: -48; }
-}
+@keyframes jazz-wave-flow{to{stroke-dashoffset:-52}}
+@keyframes jazz-wave-breathe{from{transform:scaleY(.90)}to{transform:scaleY(1.10)}}
+@keyframes jazz-ring-spin{to{transform:translate(-50%,-50%) rotate(360deg)}}
+@keyframes jazz-ring-spin-reverse{to{transform:translate(-50%,-50%) rotate(-360deg)}}
+@keyframes jazz-ring-pulse{0%,100%{opacity:.40}50%{opacity:1}}
+@keyframes jazz-heart-idle{0%,100%{filter:drop-shadow(0 0 4px #fff) drop-shadow(0 0 11px rgba(255,139,245,.96)) drop-shadow(0 0 24px rgba(200,68,255,.82))}50%{filter:drop-shadow(0 0 6px #fff) drop-shadow(0 0 15px rgba(255,139,245,1)) drop-shadow(0 0 30px rgba(200,68,255,.98))}}
 
-@keyframes jazz-wave-float {
-  from { transform: scaleY(.92); }
-  to { transform: scaleY(1.08); }
-}
-
-@keyframes jazz-ring-spin {
-  to { transform: translate(-50%, -50%) rotate(360deg); }
-}
-
-@keyframes jazz-ring-spin-reverse {
-  to { transform: translate(-50%, -50%) rotate(-360deg); }
-}
-
-@keyframes jazz-ring-pulse {
-  0%,100% { opacity: .54; }
-  50% { opacity: 1; }
-}
-
-@media (max-width: 700px) {
-  .jazz-voice-stage { width: min(340px, 92%); height: 190px; }
-  .jazz-voice-wave { height: 150px; }
-  .jazz-orb-shell { width: 126px; height: 126px; }
-  .jazz-glass-orb { width: 112px; height: 112px; }
-  .jazz-crystal-heart { width: 48px; height: 48px; }
-  .jazz-frequency-ring-a { width: 126px; height: 126px; }
-  .jazz-frequency-ring-b { width: 138px; height: 138px; }
-  .jazz-frequency-ring-c { width: 150px; height: 150px; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .jazz-wave-lines path { animation-duration: 3s; }
-  .jazz-frequency-ring-a,
-  .jazz-frequency-ring-b { animation-duration: 14s; }
+@media(max-width:700px){
+  .jazz-voice-stage{width:min(330px,92%);height:185px}
+  .jazz-voice-wave{height:145px}
+  .jazz-orb-shell{width:134px;height:134px}
+  .jazz-glass-orb{width:108px;height:108px}
+  .jazz-crystal-heart{width:45px;height:45px}
+  .jazz-frequency-ring-a{width:120px;height:120px}
+  .jazz-frequency-ring-b{width:130px;height:130px}
+  .jazz-frequency-ring-c{width:140px;height:140px}
+  .jazz-frequency-ring-d{width:150px;height:150px}
 }
