@@ -4,7 +4,7 @@ Set-Location $root
 
 Write-Host "Repairing Jazz runtime from origin/main..." -ForegroundColor Cyan
 
-# Keep private/local config untouched. Only runtime source/generated dependencies are refreshed.
+# Keep private/local config untouched. Only source + generated dependency folders are refreshed.
 $runtimeFiles = @(
   "services/api/src/server.mjs",
   "services/api/src/ollama.mjs",
@@ -50,23 +50,56 @@ $vite = Get-Content ".\apps\web\vite.config.ts" -Raw
 if ($vite -notmatch 'dedupe: \["react", "react-dom"\]') {
   throw "Repair failed: React dedupe configuration is missing."
 }
-
-# The invalid-hook-call error is caused by multiple/stale React copies in the web
-# dependency tree. node_modules is generated, so rebuild only the web workspace.
-Write-Host "Rebuilding Jazz web dependencies to guarantee one React runtime..." -ForegroundColor Cyan
-$webNodeModules = Join-Path $root "apps\web\node_modules"
-if (Test-Path $webNodeModules) {
-  Remove-Item $webNodeModules -Recurse -Force -ErrorAction Stop
+if ($vite -notmatch 'require\.resolve\("react/package\.json"') {
+  throw "Repair failed: hard React runtime pinning is missing."
 }
+
+# Stop old Jazz/Vite Node processes BEFORE touching node_modules. Otherwise Windows
+# can keep stale optimized React chunks open and the browser continues to hit them.
+Write-Host "Stopping stale Jazz web/API processes..." -ForegroundColor Yellow
+$needle = [regex]::Escape($root)
+Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+  Where-Object {
+    $_.Name -match '^node(\.exe)?$' -and
+    $_.CommandLine -match $needle -and
+    ($_.CommandLine -match 'vite' -or $_.CommandLine -match 'server\.mjs' -or $_.CommandLine -match 'adb-bridge\.mjs')
+  } |
+  ForEach-Object {
+    Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+  }
+Start-Sleep -Milliseconds 600
+
+# Rebuild the WHOLE pnpm workspace store/link tree. Deleting only apps/web/node_modules
+# is not enough because a stale root node_modules can supply a second React copy.
+Write-Host "Removing generated Node dependency trees..." -ForegroundColor Cyan
+$rootNodeModules = Join-Path $root "node_modules"
+$webNodeModules = Join-Path $root "apps\web\node_modules"
+if (Test-Path $webNodeModules) { Remove-Item $webNodeModules -Recurse -Force }
+if (Test-Path $rootNodeModules) { Remove-Item $rootNodeModules -Recurse -Force }
+
+$pnpm = Get-Command pnpm -ErrorAction Stop
+Write-Host "Installing one clean pnpm workspace dependency graph..." -ForegroundColor Cyan
+& $pnpm.Source install --force
+if ($LASTEXITCODE -ne 0) { throw "pnpm install failed while rebuilding Jazz dependencies." }
+
+# Verify React and ReactDOM are exactly the versions Jazz web expects.
+$versionCheck = @'
+const react = require('./apps/web/node_modules/react/package.json');
+const reactDom = require('./apps/web/node_modules/react-dom/package.json');
+console.log(`React ${react.version} / ReactDOM ${reactDom.version}`);
+if (react.version !== '18.3.1' || reactDom.version !== '18.3.1') process.exit(2);
+'@
+$versionCheck | node
+if ($LASTEXITCODE -ne 0) { throw "React runtime verification failed. Expected React/ReactDOM 18.3.1." }
+
+# Remove every known Vite optimizer cache after dependency installation.
+Remove-Item (Join-Path $root "apps\web\node_modules\.vite") -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item (Join-Path $root "apps\web\node_modules\.vite-jazz") -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item (Join-Path $root "node_modules\.vite") -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item (Join-Path $root "node_modules\.vite-jazz") -Recurse -Force -ErrorAction SilentlyContinue
 
-$pnpm = Get-Command pnpm -ErrorAction Stop
-& $pnpm.Source install --filter "@jazz/web" --force
-if ($LASTEXITCODE -ne 0) { throw "pnpm failed while rebuilding Jazz web dependencies." }
-
 Write-Host "Runtime source repaired successfully." -ForegroundColor Green
-Write-Host "React web dependencies rebuilt cleanly." -ForegroundColor Green
+Write-Host "React runtime verified: one pinned React 18.3.1 + ReactDOM 18.3.1 installation." -ForegroundColor Green
 Write-Host "Private .env files were not changed." -ForegroundColor DarkGray
 Write-Host "Starting Jazz..." -ForegroundColor Cyan
 
