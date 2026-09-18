@@ -53,12 +53,7 @@ function stageMarkup() {
     </div>`;
 }
 
-function removeLegacyVoiceUi() {
-  document.querySelectorAll<HTMLElement>(".voice-listening-layer,.chat-panel-glow").forEach(node => node.remove());
-}
-
 function ensureStage() {
-  removeLegacyVoiceUi();
   const panel = document.querySelector<HTMLElement>(".chat-panel");
   if (!panel) return;
   if (document.getElementById(STAGE_ID)) return;
@@ -81,7 +76,6 @@ const rootObserver = new MutationObserver(syncStage);
 rootObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-jazz-voice-state"] });
 
 const appObserver = new MutationObserver(() => {
-  removeLegacyVoiceUi();
   if (!document.getElementById(STAGE_ID)) syncStage();
 });
 appObserver.observe(document.documentElement, { childList: true, subtree: true });
