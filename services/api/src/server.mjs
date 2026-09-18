@@ -114,7 +114,11 @@ function systemPrompt() {
 
 async function geminiRequest(message, model, systemInstruction, stream = false) {
   const key = process.env.JAZZ_LLM_API_KEY;
-  if (!key) return null;
+  if (!key) {
+    const error = new Error("JAZZ_LLM_API_KEY is not configured");
+    error.code = "missing_api_key";
+    throw error;
+  }
   const body = {
     model,
     input: message,
@@ -153,6 +157,7 @@ async function callGemini(message, systemInstruction) {
         throw new Error(`Gemini ${model} returned no text`);
       } catch (error) {
         lastError = error;
+        if (error?.code === "missing_api_key") throw error;
         if (!transientGemini(error?.status)) break;
         if (attempt === 0) await sleep(350 + Math.floor(Math.random() * 250));
       }
@@ -195,6 +200,7 @@ async function streamGemini(message, systemInstruction, onText) {
         return model;
       } catch (error) {
         lastError = error;
+        if (error?.code === "missing_api_key") throw error;
         if (started || !transientGemini(error?.status)) break;
         if (attempt === 0) await sleep(350 + Math.floor(Math.random() * 250));
       }
@@ -264,7 +270,7 @@ async function localAssistantReply(message) {
   if (scripted) return scripted;
   if (/^(?:what(?:'s| is)\s+)?(?:the\s+)?(?:current\s+)?time(?:\s+is\s+it)?(?:\s+in\s+india)?[?.! ]*$/i.test(text)) return { assistant: `Mama, the current time in India is ${getCurrentTime()}.` };
   if (/\b(where are you|where r u|where are u|where're you)\b/i.test(text)) return { assistant: "I'm right here with you, Mama 👋 I'm online, listening, and ready for whatever you want to do." };
-  if (/^(hi|hello|hey)(\s+jazz)?[!. ]*$/i.test(text)) return { assistant: "Hey Mama 👋 I'm here. What are we doing?" };
+  if (/^(jazz|hey\s+jazz|hi\s+jazz|hello\s+jazz|hi|hello|hey)[!.? ]*$/i.test(text)) return { assistant: "Hey Mama 👋 I'm here and listening. What do you want me to do?" };
   if (lower.includes("weather")) return { assistant: "I can handle weather once a live weather provider is connected. Tell me the city you want." };
   if (lower.includes("remember") || lower.includes("memory")) return { assistant: "Absolutely, Mama. Tell me what you want Jazz to remember." };
   if (lower.includes("remind") || lower.includes("reminder")) return { assistant: "Sure. Tell me what I should remind you about and when." };
@@ -277,8 +283,13 @@ async function assistantReply(message) {
   try {
     const result = await callConfiguredLLM(String(message).trim());
     if (result?.text) return { assistant: result.text, mode: "llm", model: result.model };
-  } catch (error) { console.warn(error.message); }
-  return { assistant: "Gemini is temporarily unavailable. I tried the configured model and resilient fallbacks. Please try again shortly.", mode: "llm-unavailable" };
+  } catch (error) {
+    console.warn(error.message);
+    if (error?.code === "missing_api_key") {
+      return { assistant: "Jazz is online, but the Gemini API key is not configured in the API .env file.", mode: "llm-not-configured" };
+    }
+  }
+  return { assistant: "Gemini is temporarily unavailable. Please try again shortly.", mode: "llm-unavailable" };
 }
 
 async function streamAssistantReply(message, res) {
@@ -294,6 +305,14 @@ async function streamAssistantReply(message, res) {
   if (provider !== "gemini") {
     const result = await assistantReply(message);
     sendSse(res, "meta", { mode: result.mode || "llm", model: result.model || null });
+    sendSse(res, "text", { text: result.assistant });
+    sendSse(res, "done", result);
+    res.end();
+    return;
+  }
+  if (!process.env.JAZZ_LLM_API_KEY) {
+    const result = { assistant: "Jazz is online, but the Gemini API key is not configured in the API .env file.", mode: "llm-not-configured" };
+    sendSse(res, "meta", { mode: result.mode });
     sendSse(res, "text", { text: result.assistant });
     sendSse(res, "done", result);
     res.end();
@@ -324,7 +343,7 @@ async function streamTtsReply(text, res) {
 const server = http.createServer(async (req, res) => {
   if (req.method === "OPTIONS") return sendJson(res, 204, {});
   try {
-    if (req.method === "GET" && req.url === "/health") return sendJson(res, 200, { ok: true, service: "jazz-api", version: "0.9.1", provider: process.env.JAZZ_LLM_PROVIDER || "gemini", keyConfigured: Boolean(process.env.JAZZ_LLM_API_KEY || process.env.OPENAI_API_KEY), streaming: true, thinkingLevel: process.env.JAZZ_GEMINI_THINKING_LEVEL || "high", ttsStreaming: true });
+    if (req.method === "GET" && req.url === "/health") return sendJson(res, 200, { ok: true, service: "jazz-api", version: "0.9.2", provider: process.env.JAZZ_LLM_PROVIDER || "gemini", model: process.env.JAZZ_LLM_MODEL || "gemini-3.8-flash", keyConfigured: Boolean(process.env.JAZZ_LLM_API_KEY || process.env.OPENAI_API_KEY), streaming: true, thinkingLevel: process.env.JAZZ_GEMINI_THINKING_LEVEL || "high", ttsStreaming: true });
     if (req.method === "GET" && req.url === "/api/tools") return sendJson(res, 200, { ok: true, tools });
     if (req.method === "GET" && req.url === "/api/scripts") return sendJson(res, 200, { ok: true, items: listScripts() });
     if (req.method === "GET" && req.url === "/api/devices") return sendJson(res, 200, { ok: true, items: devices });
