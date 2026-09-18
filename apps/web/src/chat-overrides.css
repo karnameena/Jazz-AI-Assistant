@@ -5,81 +5,32 @@
 .suggestion-row{display:none!important}
 .composer-wrap{left:0!important;right:0!important;bottom:0!important;padding:14px 18px 16px!important;background:linear-gradient(180deg,rgba(5,10,20,0),rgba(5,10,20,.88) 28%,rgba(5,10,20,.99) 72%)!important}
 .composer{width:100%!important;height:58px!important;min-height:58px!important;padding:0 50px 0 10px!important;border-radius:30px!important;background:rgba(10,17,30,.97)!important;border:1px solid rgba(255,255,255,.12)!important;box-shadow:0 8px 28px rgba(0,0,0,.25),inset 0 1px 0 rgba(255,255,255,.025)!important}
-.composer input{font-size:14px!important;padding:0 10px!important}
-.composer-icon{width:40px!important;height:40px!important}
-.composer-icon:first-child{color:#9aa5b8!important}
-.composer-icon:first-child:hover{color:#fff!important;background:rgba(255,255,255,.06)!important}
-.send-button{position:absolute!important;right:27px;top:50%;transform:translateY(-50%)!important;width:42px!important;height:42px!important;border-radius:50%!important;z-index:3;box-shadow:0 6px 18px rgba(83,57,255,.3)!important}
-.send-button:hover{transform:translateY(-50%) translateY(-1px)!important}
-.command-bar{position:relative!important;z-index:12!important}
+.composer input{font-size:15px!important;font-weight:500!important;padding:0 10px!important}
+.composer-icon{width:40px!important;height:40px!important}.composer-icon:first-child{color:#9aa5b8!important}.composer-icon:first-child:hover{color:#fff!important;background:rgba(255,255,255,.06)!important}
+.send-button{position:absolute!important;right:27px;top:50%;transform:translateY(-50%)!important;width:42px!important;height:42px!important;border-radius:50%!important;z-index:3;box-shadow:0 6px 18px rgba(83,57,255,.3)!important}.send-button:hover{transform:translateY(-50%) translateY(-1px)!important}.command-bar{position:relative!important;z-index:12!important}
+
+/* Reactive Jazz voice hologram. Audio level comes from the real mic/Piper WebAudio analyser. */
 .voice-listening-layer{display:none!important}
-.chat-panel::before,.chat-panel::after{position:absolute;left:50%;top:43%;pointer-events:none;z-index:6;opacity:0;transition:opacity .22s ease,background .35s ease,box-shadow .35s ease}
-.chat-panel::before{content:"";width:164px;height:164px;border-radius:50%;transform:translate(-50%,-50%) scale(var(--jazz-voice-scale,.82));background:radial-gradient(circle,transparent 54%,rgba(108,193,255,.07) 55%,transparent 57%),conic-gradient(from 0deg,transparent 0 12%,rgba(94,193,255,.78) 18%,transparent 25% 44%,rgba(159,83,255,.78) 50%,transparent 58% 78%,rgba(73,230,255,.72) 85%,transparent 92%);-webkit-mask:radial-gradient(circle,transparent 0 55%,#000 56% 58%,transparent 59% 100%);mask:radial-gradient(circle,transparent 0 55%,#000 56% 58%,transparent 59% 100%);filter:drop-shadow(0 0 10px rgba(72,166,255,.7));animation:jazz-ring-spin 5s linear infinite}
-.chat-panel::after{content:"♥";width:84px;height:84px;display:grid;place-items:center;transform:translate(-50%,-50%) scale(var(--jazz-voice-scale,.82));border-radius:50%;color:#fff;font-size:47px;line-height:1;font-family:"Segoe UI Symbol","Arial Unicode MS",sans-serif;background:radial-gradient(circle,rgba(255,255,255,.18),rgba(255,255,255,.035) 42%,transparent 72%);text-shadow:0 0 7px rgba(255,255,255,.95),0 0 19px var(--jazz-voice-glow,rgba(89,210,255,.95)),0 0 42px var(--jazz-voice-glow,rgba(89,210,255,.65));box-shadow:0 0 18px var(--jazz-voice-glow,rgba(89,210,255,.55)),0 0 54px var(--jazz-voice-glow-soft,rgba(89,210,255,.24)),inset 0 0 25px rgba(255,255,255,.08);animation:jazz-heart-breathe 1.45s ease-in-out infinite}
-html[data-jazz-voice-state="listening"] .chat-panel::before,html[data-jazz-voice-state="listening"] .chat-panel::after{opacity:1}
-html[data-jazz-voice-state="listening"] .chat-panel{--jazz-voice-glow:rgba(64,201,255,.95);--jazz-voice-glow-soft:rgba(72,122,255,.25)}
-html[data-jazz-voice-state="speaking"] .chat-panel::before,html[data-jazz-voice-state="speaking"] .chat-panel::after{opacity:1}
-html[data-jazz-voice-state="speaking"] .chat-panel{--jazz-voice-glow:rgba(244,66,255,.98);--jazz-voice-glow-soft:rgba(140,57,255,.3)}
-html[data-jazz-voice-state="speaking"] .chat-panel::before{background:radial-gradient(circle,transparent 54%,rgba(255,71,230,.08) 55%,transparent 57%),conic-gradient(from 0deg,transparent 0 12%,rgba(255,86,235,.9) 18%,transparent 25% 44%,rgba(157,73,255,.85) 50%,transparent 58% 78%,rgba(255,54,196,.82) 85%,transparent 92%);filter:drop-shadow(0 0 13px rgba(255,55,220,.78))}
-html[data-jazz-voice-state="listening"] .chat-messages,html[data-jazz-voice-state="speaking"] .chat-messages{opacity:.78;transition:opacity .2s ease}
-html[data-jazz-voice-state="listening"] .composer{border-color:rgba(104,190,255,.35)!important;box-shadow:0 0 0 3px rgba(77,178,255,.06),0 8px 28px rgba(0,0,0,.25)!important}
-html[data-jazz-voice-state="speaking"] .composer{border-color:rgba(238,83,255,.35)!important;box-shadow:0 0 0 3px rgba(226,69,255,.055),0 8px 28px rgba(0,0,0,.25)!important}
-@keyframes jazz-ring-spin{to{transform:translate(-50%,-50%) scale(var(--jazz-voice-scale,.82)) rotate(360deg)}}
-@keyframes jazz-heart-breathe{0%,100%{filter:brightness(.96);box-shadow:0 0 18px var(--jazz-voice-glow,rgba(89,210,255,.55)),0 0 54px var(--jazz-voice-glow-soft,rgba(89,210,255,.24)),inset 0 0 25px rgba(255,255,255,.08)}50%{filter:brightness(1.18);box-shadow:0 0 28px var(--jazz-voice-glow,rgba(89,210,255,.72)),0 0 75px var(--jazz-voice-glow-soft,rgba(89,210,255,.34)),inset 0 0 30px rgba(255,255,255,.13)}}
+.chat-panel::before,.chat-panel::after{position:absolute;left:50%;top:42%;pointer-events:none;z-index:8;opacity:0;will-change:transform,filter,opacity;transition:opacity .16s ease}
+.chat-panel::before{content:"";width:min(68%,680px);height:190px;transform:translate(-50%,-50%);background:
+ repeating-radial-gradient(ellipse at center,transparent 0 9px,rgba(85,204,255,.20) 10px,transparent 12px 18px),
+ linear-gradient(90deg,transparent 0%,rgba(61,186,255,.14) 10%,rgba(69,214,255,.85) 23%,rgba(94,105,255,.55) 38%,transparent 48%,rgba(244,66,255,.72) 62%,rgba(90,174,255,.82) 79%,transparent 100%);
+-webkit-mask:linear-gradient(90deg,transparent,#000 12%,#000 88%,transparent),repeating-linear-gradient(0deg,transparent 0 7px,#000 8px 10px,transparent 11px 15px);mask:linear-gradient(90deg,transparent,#000 12%,#000 88%,transparent),repeating-linear-gradient(0deg,transparent 0 7px,#000 8px 10px,transparent 11px 15px);filter:blur(.2px) drop-shadow(0 0 11px rgba(69,190,255,.62));transform-origin:center;animation:jazz-wave-flow 1.55s linear infinite,jazz-wave-breathe .62s ease-in-out infinite alternate}
+.chat-panel::after{content:"♥";width:170px;height:170px;display:grid;place-items:center;transform:translate(-50%,-50%) scale(calc(.78 + var(--jazz-voice-level,0)*.42));border-radius:50%;color:#fff;font-size:76px;line-height:1;font-family:"Segoe UI Symbol","Arial Unicode MS",sans-serif;background:radial-gradient(circle at 36% 28%,rgba(255,255,255,.28),rgba(68,213,255,.17) 25%,rgba(77,92,255,.17) 52%,rgba(230,52,255,.18) 72%,rgba(5,10,24,.08) 100%);border:1px solid rgba(154,225,255,.34);text-shadow:0 0 8px #fff,0 0 23px var(--jazz-voice-glow,rgba(65,211,255,.95)),0 0 48px var(--jazz-voice-glow,rgba(75,127,255,.62));box-shadow:0 0 calc(22px + var(--jazz-voice-level,0)*30px) var(--jazz-voice-glow,rgba(68,204,255,.58)),0 0 calc(62px + var(--jazz-voice-level,0)*62px) var(--jazz-voice-glow-soft,rgba(110,69,255,.26)),inset 0 0 34px rgba(255,255,255,.10);filter:brightness(calc(1 + var(--jazz-voice-level,0)*.34));transition:transform 42ms linear,filter 42ms linear,box-shadow 55ms linear}
+html[data-jazz-voice-state="listening"] .chat-panel::before,html[data-jazz-voice-state="listening"] .chat-panel::after,html[data-jazz-voice-state="speaking"] .chat-panel::before,html[data-jazz-voice-state="speaking"] .chat-panel::after{opacity:1}
+html[data-jazz-voice-state="listening"] .chat-panel{--jazz-voice-glow:rgba(62,211,255,.98);--jazz-voice-glow-soft:rgba(65,105,255,.28)}
+html[data-jazz-voice-state="speaking"] .chat-panel{--jazz-voice-glow:rgba(239,69,255,.98);--jazz-voice-glow-soft:rgba(93,169,255,.30)}
+html[data-jazz-voice-state="speaking"] .chat-panel::before{filter:drop-shadow(0 0 calc(10px + var(--jazz-voice-level,0)*18px) rgba(225,64,255,.72));animation-duration:.95s,.36s}
+html[data-jazz-voice-state="listening"] .chat-panel::before{transform:translate(-50%,-50%) scaleY(calc(.72 + var(--jazz-voice-level,0)*.78))}
+html[data-jazz-voice-state="speaking"] .chat-panel::before{transform:translate(-50%,-50%) scaleY(calc(.72 + var(--jazz-voice-level,0)*1.25))}
+html[data-jazz-voice-state="listening"] .chat-messages,html[data-jazz-voice-state="speaking"] .chat-messages{opacity:.58;transition:opacity .2s ease}
+html[data-jazz-voice-state="listening"] .composer{border-color:rgba(104,190,255,.35)!important;box-shadow:0 0 0 3px rgba(77,178,255,.06),0 8px 28px rgba(0,0,0,.25)!important}html[data-jazz-voice-state="speaking"] .composer{border-color:rgba(238,83,255,.35)!important;box-shadow:0 0 0 3px rgba(226,69,255,.055),0 8px 28px rgba(0,0,0,.25)!important}
+@keyframes jazz-wave-flow{0%{background-position:0 0,0 0}100%{background-position:90px 0,180px 0}}
+@keyframes jazz-wave-breathe{from{opacity:.68}to{opacity:1}}
 
 /* Elegant larger right-dashboard typography */
-.dashboard-card .card-heading{min-height:42px!important}
-.dashboard-card .card-heading>div{gap:10px!important}
-.dashboard-card .card-heading strong{font-size:17px!important;font-weight:800!important;letter-spacing:-.25px!important;color:#f5f2ff!important}
-.dashboard-card .card-heading button{font-size:11px!important;font-weight:600!important}
-.quick-actions-grid{gap:9px!important}
-.quick-action{min-height:64px!important;border-radius:11px!important}
-.quick-action span{font-size:12px!important;font-weight:700!important;line-height:1.25!important}
-.quick-action svg{width:20px!important;height:20px!important}
-.status-card{padding:16px!important;border-radius:13px!important}
-.status-heading{gap:10px!important}
-.status-heading strong{font-size:18px!important;font-weight:800!important;letter-spacing:-.3px!important}
-.status-card .status-top p{font-size:11px!important;margin-top:6px!important}
-.online-badge{font-size:10px!important;font-weight:800!important;padding:5px 9px!important}
-
-/* Larger, bolder device names */
-.device-list{gap:7px!important}
-.device-row{min-height:66px!important;padding:9px 11px!important;border-radius:11px!important}
-.device-row .device-icon{width:38px!important;height:38px!important;border-radius:10px!important}
-.device-row .device-icon svg{width:21px!important;height:21px!important}
-.device-copy strong{font-size:14px!important;font-weight:800!important;color:#f5f7ff!important;letter-spacing:-.15px!important}
-.device-copy small{font-size:10px!important;margin-top:4px!important}
-.device-row>svg{width:17px!important;height:17px!important}
-
-/* Premium large typography: sidebar + chat */
-@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap");
-.jazz-app{font-family:Manrope,Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important}
-.brand-copy strong{font-size:18px!important;font-weight:800!important;letter-spacing:-.45px!important}
-.brand-copy span{font-size:15px!important;font-weight:700!important;letter-spacing:-.25px!important;color:#d8d2ee!important}
-.brand-copy small{font-size:10px!important;font-weight:500!important;letter-spacing:.05px!important}
-.new-chat-button{height:44px!important;font-size:14px!important;font-weight:800!important;letter-spacing:-.15px!important;border-radius:11px!important}
-.navigation{gap:5px!important}
-.nav-item{height:43px!important;padding:0 12px!important;gap:12px!important;font-size:14px!important;font-weight:650!important;letter-spacing:-.12px!important}
-.nav-item svg{width:19px!important;height:19px!important}
-.nav-item em{font-size:9px!important;font-weight:800!important;padding:3px 8px!important}
-.overview-title{font-size:13px!important;font-weight:700!important}
-.stat span{font-size:10px!important;font-weight:600!important}
-.stat strong{font-size:15px!important;font-weight:800!important}
-.overview-bottom span{font-size:10px!important;font-weight:600!important}
-.overview-bottom strong{font-size:14px!important;font-weight:800!important}
-.sidebar-assistant-card{padding:14px!important}
-.assistant-card-label{font-size:14px!important;font-weight:700!important}
-.assistant-card-label strong{font-size:17px!important;font-weight:800!important}
-.sidebar-assistant-card>span{font-size:11px!important;font-weight:600!important}
-.customize-button{height:37px!important;font-size:12px!important;font-weight:700!important}
-.greeting h1{font-size:23px!important;font-weight:800!important;letter-spacing:-.7px!important}
-.greeting p{font-size:12px!important;font-weight:500!important}
-.chat-messages{padding-left:34px!important;padding-right:34px!important}
-.jazz-bubble{font-size:15px!important;line-height:1.72!important;font-weight:500!important;padding:14px 17px 10px!important;letter-spacing:-.08px!important}
-.user-bubble{font-size:15px!important;line-height:1.65!important;font-weight:600!important;padding:14px 17px 10px!important;letter-spacing:-.08px!important}
-.jazz-bubble small,.user-bubble small{font-size:9px!important;font-weight:600!important}
-.composer input{font-size:15px!important;font-weight:500!important;letter-spacing:-.05px!important}
-.composer input::placeholder{font-weight:500!important}
-
-@media(max-width:950px){.chat-panel{height:calc(100vh - 180px)!important}.composer-wrap{padding-left:12px!important;padding-right:12px!important;padding-bottom:12px!important}.send-button{right:21px}}
-@media(max-width:650px){.chat-panel{height:calc(100vh - 150px)!important}.composer{height:54px!important;min-height:54px!important;padding-right:48px!important}.composer input{font-size:14px!important}.composer-icon{width:36px!important;height:36px!important}.send-button{right:17px;width:38px!important;height:38px!important}.nav-item{font-size:14px!important}.brand-copy strong{font-size:17px!important}.jazz-bubble,.user-bubble{font-size:14px!important}}
+.dashboard-card .card-heading{min-height:42px!important}.dashboard-card .card-heading>div{gap:10px!important}.dashboard-card .card-heading strong{font-size:17px!important;font-weight:800!important;letter-spacing:-.25px!important;color:#f5f2ff!important}.dashboard-card .card-heading button{font-size:11px!important;font-weight:600!important}.quick-actions-grid{gap:9px!important}.quick-action{min-height:64px!important;border-radius:11px!important}.quick-action span{font-size:12px!important;font-weight:700!important;line-height:1.25!important}.quick-action svg{width:20px!important;height:20px!important}.status-card{padding:16px!important;border-radius:13px!important}.status-heading{gap:10px!important}.status-heading strong{font-size:18px!important;font-weight:800!important;letter-spacing:-.3px!important}.status-card .status-top p{font-size:11px!important;margin-top:6px!important}.online-badge{font-size:10px!important;font-weight:800!important;padding:5px 9px!important}
+.device-list{gap:7px!important}.device-row{min-height:66px!important;padding:9px 11px!important;border-radius:11px!important}.device-row .device-icon{width:38px!important;height:38px!important;border-radius:10px!important}.device-row .device-icon svg{width:21px!important;height:21px!important}.device-copy strong{font-size:14px!important;font-weight:800!important;color:#f5f7ff!important;letter-spacing:-.15px!important}.device-copy small{font-size:10px!important;margin-top:4px!important}.device-row>svg{width:17px!important;height:17px!important}
+@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap");.jazz-app{font-family:Manrope,Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important}.brand-copy strong{font-size:18px!important;font-weight:800!important;letter-spacing:-.45px!important}.brand-copy span{font-size:15px!important;font-weight:700!important;letter-spacing:-.25px!important;color:#d8d2ee!important}.brand-copy small{font-size:10px!important;font-weight:500!important;letter-spacing:.05px!important}.new-chat-button{height:44px!important;font-size:14px!important;font-weight:800!important;letter-spacing:-.15px!important;border-radius:11px!important}.navigation{gap:5px!important}.nav-item{height:43px!important;padding:0 12px!important;gap:12px!important;font-size:14px!important;font-weight:650!important;letter-spacing:-.12px!important}.nav-item svg{width:19px!important;height:19px!important}.nav-item em{font-size:9px!important;font-weight:800!important;padding:3px 8px!important}.overview-title{font-size:13px!important;font-weight:700!important}.stat span{font-size:10px!important;font-weight:600!important}.stat strong{font-size:15px!important;font-weight:800!important}.overview-bottom span{font-size:10px!important;font-weight:600!important}.overview-bottom strong{font-size:14px!important;font-weight:800!important}.sidebar-assistant-card{padding:14px!important}.assistant-card-label{font-size:14px!important;font-weight:700!important}.assistant-card-label strong{font-size:17px!important;font-weight:800!important}.sidebar-assistant-card>span{font-size:11px!important;font-weight:600!important}.customize-button{height:37px!important;font-size:12px!important;font-weight:700!important}.greeting h1{font-size:23px!important;font-weight:800!important;letter-spacing:-.7px!important}.greeting p{font-size:12px!important;font-weight:500!important}.chat-messages{padding-left:34px!important;padding-right:34px!important}.jazz-bubble{font-size:15px!important;line-height:1.72!important;font-weight:500!important;padding:14px 17px 10px!important;letter-spacing:-.08px!important}.user-bubble{font-size:15px!important;line-height:1.65!important;font-weight:600!important;padding:14px 17px 10px!important;letter-spacing:-.08px!important}.jazz-bubble small,.user-bubble small{font-size:9px!important;font-weight:600!important}.composer input::placeholder{font-weight:500!important}
+@media(max-width:950px){.chat-panel{height:calc(100vh - 180px)!important}.composer-wrap{padding-left:12px!important;padding-right:12px!important;padding-bottom:12px!important}.send-button{right:21px}.chat-panel::before{width:82%}}
+@media(max-width:650px){.chat-panel{height:calc(100vh - 150px)!important}.composer{height:54px!important;min-height:54px!important;padding-right:48px!important}.composer input{font-size:14px!important}.composer-icon{width:36px!important;height:36px!important}.send-button{right:17px;width:38px!important;height:38px!important}.nav-item{font-size:14px!important}.brand-copy strong{font-size:17px!important}.jazz-bubble,.user-bubble{font-size:14px!important}.chat-panel::before{width:94%;height:145px}.chat-panel::after{width:132px;height:132px;font-size:60px}}
