@@ -380,9 +380,7 @@ const server = http.createServer(async (req, res) => {
 
       target.deviceId = input.deviceId;
       target.serial = serial;
-      const result = scriptName === "paymom"
-        ? await startScriptDetached(scriptFile, target, input.args || {})
-        : await runScript(scriptFile, target, input.args || {});
+      const result = await runScript(scriptFile, target, input.args || {});
       return json(res, result.ok === false ? 400 : 200, result);
     }
 
