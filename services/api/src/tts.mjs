@@ -47,15 +47,35 @@ export function ttsConfig() {
   return { root, runtimeDir, executable, model, espeakData };
 }
 
+async function countRuntimeDlls(runtimeDir) {
+  if (process.platform !== "win32") return 0;
+  try {
+    const entries = await fs.readdir(runtimeDir, { withFileTypes: true });
+    return entries.filter(entry => entry.isFile() && /\.dll$/i.test(entry.name)).length;
+  } catch {
+    return 0;
+  }
+}
+
 export async function getTtsStatus() {
   const config = ttsConfig();
-  const [exeStat, modelStat, espeakStat] = await Promise.all([
+  const [exeStat, modelStat, espeakStat, runtimeDllCount] = await Promise.all([
     fs.stat(config.executable).catch(() => null),
     fs.stat(config.model).catch(() => null),
-    fs.stat(config.espeakData).catch(() => null)
+    fs.stat(config.espeakData).catch(() => null),
+    countRuntimeDlls(config.runtimeDir)
   ]);
+
+  // On Windows, a detached piper.exe is not considered healthy even if the file
+  // exists. Piper must sit beside its release DLLs or Windows exits 0xC0000135.
+  const runtimeComplete = process.platform !== "win32" || runtimeDllCount > 0;
+  const filesReady = Boolean(exeStat && modelStat && espeakStat);
+
   return {
-    ok: Boolean(exeStat && modelStat && espeakStat),
+    ok: Boolean(filesReady && runtimeComplete),
+    filesReady,
+    runtimeComplete,
+    runtimeDllCount,
     executable: config.executable,
     executableFound: Boolean(exeStat),
     runtimeDir: config.runtimeDir,
@@ -72,6 +92,7 @@ async function validatePiper(config) {
   if (!status.executableFound) throw new Error(`Piper executable not found: ${status.executable}`);
   if (!status.modelFound) throw new Error(`Piper voice model not found: ${status.model}`);
   if (!status.espeakDataFound) throw new Error(`Piper eSpeak data not found: ${status.espeakData}`);
+  if (!status.runtimeComplete) throw new Error(`Piper Windows runtime is incomplete at ${status.runtimeDir}. Re-run ${status.setupScript}.`);
 }
 
 function piperEnv(config) {
@@ -86,7 +107,7 @@ function piperEnv(config) {
 function piperExitError(code, stderr) {
   const detail = String(stderr || "").trim();
   if (Number(code) === 3221225781 || Number(code) === -1073741515) {
-    return new Error("Piper could not load a required Windows DLL (0xC0000135). Re-run tools/piper/setup-windows.ps1 so Jazz installs the complete Piper runtime, not only piper.exe.");
+    return new Error("Piper could not load a required Windows DLL (0xC0000135). Re-run tools/piper/setup-windows.ps1; Jazz will also install the Microsoft Visual C++ x64 runtime if Windows is missing it.");
   }
   return new Error(`Piper exited with code ${code}: ${detail || "unknown error"}`);
 }
