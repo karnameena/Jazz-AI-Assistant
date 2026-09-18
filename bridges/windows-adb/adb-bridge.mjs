@@ -1,5 +1,5 @@
 import http from "node:http";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -85,36 +85,47 @@ function normalizeScriptResult(file, stdout) {
   };
 }
 
+function amountFromArgs(args = {}) {
+  if (args?.amount !== null && args?.amount !== undefined && Number.isFinite(Number(args.amount))) {
+    return Number(args.amount);
+  }
+  const request = String(args?.request || "");
+  const match = request.match(/(?:₹|rs\.?|inr\s*)\s*(\d+(?:\.\d+)?)/i)
+    || request.match(/\b(\d+(?:\.\d+)?)\s*(?:rupee|rupees|rs)\b/i);
+  return match ? Number(match[1]) : null;
+}
+
+function buildScriptLaunch(file, target, args = {}) {
+  const adbDir = adb && adb !== "adb" ? dirname(adb) : "";
+  const inheritedPath = process.env.PATH || process.env.Path || "";
+  const amount = amountFromArgs(args);
+  const env = {
+    ...process.env,
+    PATH: adbDir ? `${adbDir};${inheritedPath}` : inheritedPath,
+    Path: adbDir ? `${adbDir};${inheritedPath}` : inheritedPath,
+    ADB_PATH: adb,
+    JAZZ_DEVICE_ID: target.deviceId,
+    JAZZ_ANDROID_SERIAL: target.serial,
+    JAZZ_ANDROID_PHONE_SERIAL: target.deviceId === "android-phone" ? target.serial : (process.env.JAZZ_ANDROID_PHONE_SERIAL || ""),
+    JAZZ_ANDROID_TABLET_SERIAL: target.deviceId === "android-tablet" ? target.serial : (process.env.JAZZ_ANDROID_TABLET_SERIAL || ""),
+    JAZZ_SCRIPT_ARGS: JSON.stringify({ ...args, amount })
+  };
+  if (amount !== null) env.JAZZ_PAYMENT_AMOUNT = String(amount);
+
+  const extension = extname(file).toLowerCase();
+  const command = extension === ".ps1" ? powershellPath : bashPath;
+  const commandArgs = extension === ".ps1"
+    ? ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", file]
+    : [file];
+
+  return { command, commandArgs, env, amount };
+}
+
 function runScript(file, target, args = {}) {
   return new Promise((resolvePromise, reject) => {
     if (!file || !existsSync(file)) return reject(new Error("Script is not installed"));
 
-    // Preserve the environment names used by the original working PowerShell
-    // workflows. Also place the configured ADB folder on PATH so both
-    // `$env:ADB_PATH` and plain `adb` continue to work inside legacy scripts.
-    const adbDir = adb && adb !== "adb" ? dirname(adb) : "";
-    const inheritedPath = process.env.PATH || process.env.Path || "";
-    const env = {
-      ...process.env,
-      PATH: adbDir ? `${adbDir};${inheritedPath}` : inheritedPath,
-      Path: adbDir ? `${adbDir};${inheritedPath}` : inheritedPath,
-      ADB_PATH: adb,
-      JAZZ_DEVICE_ID: target.deviceId,
-      JAZZ_ANDROID_SERIAL: target.serial,
-      JAZZ_ANDROID_PHONE_SERIAL: target.deviceId === "android-phone" ? target.serial : (process.env.JAZZ_ANDROID_PHONE_SERIAL || ""),
-      JAZZ_ANDROID_TABLET_SERIAL: target.deviceId === "android-tablet" ? target.serial : (process.env.JAZZ_ANDROID_TABLET_SERIAL || ""),
-      JAZZ_SCRIPT_ARGS: JSON.stringify(args)
-    };
-    if (args?.amount !== null && args?.amount !== undefined) {
-      env.JAZZ_PAYMENT_AMOUNT = String(args.amount);
-    }
-
-    const extension = extname(file).toLowerCase();
-    const command = extension === ".ps1" ? powershellPath : bashPath;
-    const commandArgs = extension === ".ps1"
-      ? ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", file]
-      : [file];
-
+    const { command, commandArgs, env } = buildScriptLaunch(file, target, args);
     execFile(
       command,
       commandArgs,
@@ -130,6 +141,39 @@ function runScript(file, target, args = {}) {
         resolvePromise(normalizeScriptResult(file, stdout));
       }
     );
+  });
+}
+
+function startScriptDetached(file, target, args = {}) {
+  return new Promise((resolvePromise, reject) => {
+    if (!file || !existsSync(file)) return reject(new Error("Script is not installed"));
+    const { command, commandArgs, env, amount } = buildScriptLaunch(file, target, args);
+    const child = spawn(command, commandArgs, {
+      cwd: scriptRoot,
+      env,
+      windowsHide: true,
+      detached: true,
+      stdio: "ignore"
+    });
+    let settled = false;
+    child.once("error", error => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    });
+    child.once("spawn", () => {
+      if (settled) return;
+      settled = true;
+      child.unref();
+      resolvePromise({
+        ok: true,
+        status: "started",
+        message: `${basename(file)} started${amount !== null ? ` for ₹${amount}` : ""}.`,
+        script: basename(file),
+        executedScript: true,
+        amount
+      });
+    });
   });
 }
 
@@ -336,7 +380,9 @@ const server = http.createServer(async (req, res) => {
 
       target.deviceId = input.deviceId;
       target.serial = serial;
-      const result = await runScript(scriptFile, target, input.args || {});
+      const result = scriptName === "paymom"
+        ? await startScriptDetached(scriptFile, target, input.args || {})
+        : await runScript(scriptFile, target, input.args || {});
       return json(res, result.ok === false ? 400 : 200, result);
     }
 
