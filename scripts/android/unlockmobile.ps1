@@ -1,36 +1,28 @@
 param(
-    [string]$BridgeUrl = "http://127.0.0.1:9899",
-    [ValidateSet("android-phone", "android-tablet")]
-    [string]$DeviceId = "android-phone"
+    [string]$Serial = $env:JAZZ_ANDROID_SERIAL
 )
 
 $ErrorActionPreference = "Stop"
 
-$endpoint = "$($BridgeUrl.TrimEnd('/'))/command"
-$body = @{
-    deviceId = $DeviceId
-    action   = "wake_screen"
-    args     = @{}
-} | ConvertTo-Json -Depth 4
-
-$result = Invoke-RestMethod `
-    -Method POST `
-    -Uri $endpoint `
-    -ContentType "application/json" `
-    -Body $body `
-    -TimeoutSec 20
-
-if ($result.ok -eq $false) {
-    throw ($result.error ?? $result.message ?? "Jazz could not wake the Android device.")
+if ([string]::IsNullOrWhiteSpace($Serial)) {
+    throw "JAZZ_ANDROID_SERIAL is not available to unlockmobile.ps1."
 }
 
-$deviceMessage = if ($result.message) { $result.message } else { "Mobile is awake. Authenticate on the device, then Jazz can continue." }
+$adb = if ($env:ADB_PATH) { $env:ADB_PATH } else { "adb" }
+
+# Registered workflow for the phrase "unlock mobile".
+# Jazz wakes the device through ADB; PIN/biometric authentication stays on-device.
+& $adb -s $Serial shell input keyevent KEYCODE_WAKEUP
+if ($LASTEXITCODE -ne 0) {
+    throw "ADB could not wake the Android device."
+}
+
+Start-Sleep -Milliseconds 500
 
 [pscustomobject]@{
     ok             = $true
-    status         = if ($result.status) { $result.status } else { "authentication_required" }
-    message        = "unlockmobile.ps1 executed. $deviceMessage"
-    deviceId       = $DeviceId
+    status         = "authentication_required"
+    message        = "unlockmobile.ps1 executed. Mobile is awake. Authenticate on the device, then Jazz can continue."
     script         = "unlockmobile.ps1"
     executedScript = $true
 } | ConvertTo-Json -Compress
