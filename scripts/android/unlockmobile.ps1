@@ -22,7 +22,7 @@ Start-Sleep -Milliseconds 500
 [pscustomobject]@{
     ok             = $true
     status         = "authentication_required"
-    message        = "unlockmobile.ps1 executed. Mobile is awake. Authenticate on the device, then Jazz can continue."
+    message        = "Hey Mama, the unlock workflow ran. What do you want me to do next?"
     script         = "unlockmobile.ps1"
     executedScript = $true
 } | ConvertTo-Json -Compress
