@@ -55,6 +55,7 @@ html body .chat-panel::after {
   display:grid;
   place-items:center;
   filter:drop-shadow(0 0 20px rgba(69,214,255,.22));
+  transform-origin:center;
 }
 
 .jazz-glass-orb{
@@ -170,7 +171,12 @@ html body .chat-panel::after {
   filter:brightness(1.04) saturate(1.09);
 }
 
-/* Real Piper analyser drives this scale while Jazz speaks. */
+/* Guaranteed speech pulse on every spoken phrase, even when browser TTS is the fallback. */
+.jazz-voice-stage.is-speaking .jazz-orb-shell{
+  animation:jazz-speech-shell-bounce .34s ease-in-out infinite alternate;
+}
+
+/* Real Piper analyser adds a second, audio-accurate layer of motion. */
 .jazz-voice-stage.is-speaking .jazz-glass-orb{
   transform:scale(clamp(.97,var(--jazz-voice-scale,1),1.19));
   filter:brightness(calc(1.03 + var(--jazz-voice-level,0)*.38)) saturate(calc(1.10 + var(--jazz-voice-mid,0)*.28));
@@ -201,6 +207,7 @@ html[data-jazz-voice-state="speaking"] .chat-messages{opacity:.58!important;tran
 @keyframes jazz-ring-spin{to{transform:translate(-50%,-50%) rotate(360deg)}}
 @keyframes jazz-ring-spin-reverse{to{transform:translate(-50%,-50%) rotate(-360deg)}}
 @keyframes jazz-ring-pulse{0%,100%{opacity:.40}50%{opacity:1}}
+@keyframes jazz-speech-shell-bounce{from{transform:translate(-50%,-50%) scale(.985)}to{transform:translate(-50%,-50%) scale(1.035)}}
 @keyframes jazz-heart-idle{0%,100%{filter:drop-shadow(0 0 4px #fff) drop-shadow(0 0 11px rgba(255,139,245,.96)) drop-shadow(0 0 24px rgba(200,68,255,.82))}50%{filter:drop-shadow(0 0 6px #fff) drop-shadow(0 0 15px rgba(255,139,245,1)) drop-shadow(0 0 30px rgba(200,68,255,.98))}}
 
 @media(max-width:700px){
