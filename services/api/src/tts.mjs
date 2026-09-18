@@ -1,37 +1,72 @@
 import fs from "node:fs/promises";
+import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 
+const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(moduleDir, "../../..");
+
 function configuredPath(value, fallback) {
-  return value ? path.resolve(value) : path.resolve(fallback);
+  return path.resolve(value || fallback);
+}
+
+function firstExisting(candidates) {
+  return candidates.find(candidate => candidate && existsSync(candidate)) || candidates.find(Boolean) || "";
 }
 
 export function ttsConfig() {
-  const root = process.env.JAZZ_PIPER_ROOT || path.resolve(process.cwd(), "tools", "piper");
-  const runtimeDir = process.platform === "win32" ? path.join(root, "piper") : root;
-  const executable = process.env.JAZZ_PIPER_BIN || path.join(root, process.platform === "win32" ? "piper.exe" : "piper");
-  const model = process.env.JAZZ_PIPER_MODEL || path.join(root, "voices", "en_US-amy-medium.onnx");
-  const espeakData = process.env.JAZZ_PIPER_ESPEAK_DATA || path.join(runtimeDir, "espeak-ng-data");
-  return {
-    root: configuredPath(root, root),
-    runtimeDir: configuredPath(runtimeDir, runtimeDir),
-    executable: configuredPath(executable, executable),
-    model: configuredPath(model, model),
-    espeakData: configuredPath(espeakData, espeakData)
-  };
+  const defaultRoot = path.join(repoRoot, "tools", "piper");
+  const root = configuredPath(process.env.JAZZ_PIPER_ROOT, defaultRoot);
+
+  const executable = firstExisting([
+    process.env.JAZZ_PIPER_BIN ? path.resolve(process.env.JAZZ_PIPER_BIN) : "",
+    path.join(root, process.platform === "win32" ? "piper.exe" : "piper"),
+    path.join(root, "piper", process.platform === "win32" ? "piper.exe" : "piper")
+  ]);
+
+  const model = firstExisting([
+    process.env.JAZZ_PIPER_MODEL ? path.resolve(process.env.JAZZ_PIPER_MODEL) : "",
+    path.join(root, "voices", "en_US-amy-medium.onnx")
+  ]);
+
+  const runtimeDir = path.dirname(executable || root);
+  const espeakData = firstExisting([
+    process.env.JAZZ_PIPER_ESPEAK_DATA ? path.resolve(process.env.JAZZ_PIPER_ESPEAK_DATA) : "",
+    path.join(runtimeDir, "espeak-ng-data"),
+    path.join(root, "piper", "espeak-ng-data"),
+    path.join(root, "espeak-ng-data")
+  ]);
+
+  return { root, runtimeDir, executable, model, espeakData };
 }
 
-async function validatePiper(config) {
+export async function getTtsStatus() {
+  const config = ttsConfig();
   const [exeStat, modelStat, espeakStat] = await Promise.all([
     fs.stat(config.executable).catch(() => null),
     fs.stat(config.model).catch(() => null),
     fs.stat(config.espeakData).catch(() => null)
   ]);
-  if (!exeStat) throw new Error(`Piper executable not found: ${config.executable}`);
-  if (!modelStat) throw new Error(`Piper voice model not found: ${config.model}`);
-  if (!espeakStat) throw new Error(`Piper eSpeak data not found: ${config.espeakData}`);
+  return {
+    ok: Boolean(exeStat && modelStat && espeakStat),
+    executable: config.executable,
+    executableFound: Boolean(exeStat),
+    model: config.model,
+    modelFound: Boolean(modelStat),
+    espeakData: config.espeakData,
+    espeakDataFound: Boolean(espeakStat),
+    setupScript: path.join(repoRoot, "tools", "piper", "setup-windows.ps1")
+  };
+}
+
+async function validatePiper(config) {
+  const status = await getTtsStatus();
+  if (!status.executableFound) throw new Error(`Piper executable not found: ${status.executable}`);
+  if (!status.modelFound) throw new Error(`Piper voice model not found: ${status.model}`);
+  if (!status.espeakDataFound) throw new Error(`Piper eSpeak data not found: ${status.espeakData}`);
 }
 
 function piperEnv(config) {
@@ -66,11 +101,6 @@ function runPiper(text, outputFile, config) {
   });
 }
 
-/**
- * Warm the Piper executable/model once when the API process starts.
- * This does not play anything in the browser. It moves the expensive
- * executable/model/disk-cache work out of Mama's first spoken reply.
- */
 let prewarmPromise = null;
 export async function prewarmPiper() {
   if (process.env.JAZZ_PIPER_PREWARM === "false") return false;
@@ -82,27 +112,21 @@ export async function prewarmPiper() {
     const file = path.join(os.tmpdir(), `jazz-tts-prewarm-${crypto.randomUUID()}.wav`);
     try {
       await runPiper("Jazz ready.", file, config);
+      console.log(`[Jazz] Piper ready: ${config.executable}`);
       return true;
     } finally {
       await fs.rm(file, { force: true }).catch(() => {});
     }
   })().catch(error => {
-    // Prewarming is an optimization only. Never make API startup fail because
-    // Piper is missing; the normal TTS request will report the real error.
-    console.warn(`Jazz Piper prewarm skipped: ${error instanceof Error ? error.message : String(error)}`);
+    console.warn(`[Jazz] Piper unavailable; browser TTS fallback remains enabled. ${error instanceof Error ? error.message : String(error)}`);
     return false;
   });
 
   return prewarmPromise;
 }
 
-// Start model/executable warm-up as soon as the TTS module is loaded.
 void prewarmPiper();
 
-/**
- * Stream Piper's raw PCM16LE output as it is generated.
- * The browser can consume these chunks immediately through Web Audio.
- */
 export async function streamPiperRaw(text, onChunk) {
   const clean = String(text || "").replace(/\s+/g, " ").trim();
   if (!clean) throw new Error("Text is required");
