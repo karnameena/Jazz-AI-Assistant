@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,13 +17,34 @@ function firstExisting(candidates) {
   return candidates.find(candidate => candidate && existsSync(candidate)) || candidates.find(Boolean) || "";
 }
 
+function runtimeDllCountSync(executable) {
+  if (!executable || !existsSync(executable) || process.platform !== "win32") return process.platform === "win32" ? 0 : 1;
+  try {
+    return readdirSync(path.dirname(executable), { withFileTypes: true })
+      .filter(entry => entry.isFile() && /\.dll$/i.test(entry.name)).length;
+  } catch {
+    return 0;
+  }
+}
+
+function firstUsablePiper(candidates) {
+  const existing = candidates.filter(candidate => candidate && existsSync(candidate));
+  if (process.platform !== "win32") return existing[0] || candidates.find(Boolean) || "";
+
+  // A detached piper.exe is not a working Windows runtime. Older Jazz .env files
+  // can still point at tools/piper/piper.exe, so ignore that stale override when
+  // it has no DLLs beside it and automatically select the repaired runtime.
+  return existing.find(candidate => runtimeDllCountSync(candidate) > 0)
+    || existing[0]
+    || candidates.find(Boolean)
+    || "";
+}
+
 export function ttsConfig() {
   const defaultRoot = path.join(repoRoot, "tools", "piper");
   const root = configuredPath(process.env.JAZZ_PIPER_ROOT, defaultRoot);
 
-  // Prefer a complete self-contained runtime directory. Older Jazz setup versions
-  // copied piper.exe by itself, which loses required DLLs on Windows.
-  const executable = firstExisting([
+  const executable = firstUsablePiper([
     process.env.JAZZ_PIPER_BIN ? path.resolve(process.env.JAZZ_PIPER_BIN) : "",
     path.join(root, "runtime", process.platform === "win32" ? "piper.exe" : "piper"),
     path.join(root, "piper", process.platform === "win32" ? "piper.exe" : "piper"),
@@ -66,8 +87,6 @@ export async function getTtsStatus() {
     countRuntimeDlls(config.runtimeDir)
   ]);
 
-  // On Windows, a detached piper.exe is not considered healthy even if the file
-  // exists. Piper must sit beside its release DLLs or Windows exits 0xC0000135.
   const runtimeComplete = process.platform !== "win32" || runtimeDllCount > 0;
   const filesReady = Boolean(exeStat && modelStat && espeakStat);
 
@@ -104,10 +123,10 @@ function piperEnv(config) {
   };
 }
 
-function piperExitError(code, stderr) {
+function piperExitError(code, stderr, config) {
   const detail = String(stderr || "").trim();
   if (Number(code) === 3221225781 || Number(code) === -1073741515) {
-    return new Error("Piper could not load a required Windows DLL (0xC0000135). Re-run tools/piper/setup-windows.ps1; Jazz will also install the Microsoft Visual C++ x64 runtime if Windows is missing it.");
+    return new Error(`Piper could not load a required Windows DLL (0xC0000135) from ${config.runtimeDir}. Re-run tools/piper/setup-windows.ps1; Jazz will also install the Microsoft Visual C++ x64 runtime if Windows is missing it.`);
   }
   return new Error(`Piper exited with code ${code}: ${detail || "unknown error"}`);
 }
@@ -130,7 +149,7 @@ function runPiper(text, outputFile, config) {
     child.on("error", reject);
     child.on("close", code => {
       if (code === 0) resolve();
-      else reject(piperExitError(code, stderr));
+      else reject(piperExitError(code, stderr, config));
     });
     child.stdin.end(text);
   });
@@ -200,7 +219,7 @@ export async function streamPiperRaw(text, onChunk) {
     child.on("error", error => finish(error));
     child.on("close", code => {
       if (code === 0) finish();
-      else finish(piperExitError(code, stderr));
+      else finish(piperExitError(code, stderr, config));
     });
 
     child.stdin.on("error", () => {});
