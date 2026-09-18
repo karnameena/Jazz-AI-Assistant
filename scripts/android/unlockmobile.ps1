@@ -24,10 +24,12 @@ if ($result.ok -eq $false) {
     throw ($result.error ?? $result.message ?? "Jazz could not wake the Android device.")
 }
 
+$deviceMessage = if ($result.message) { $result.message } else { "Mobile is awake. Authenticate on the device, then Jazz can continue." }
+
 [pscustomobject]@{
     ok             = $true
     status         = if ($result.status) { $result.status } else { "authentication_required" }
-    message        = if ($result.message) { $result.message } else { "Mobile is awake. Authenticate on the device, then Jazz can continue." }
+    message        = "unlockmobile.ps1 executed. $deviceMessage"
     deviceId       = $DeviceId
     script         = "unlockmobile.ps1"
     executedScript = $true
