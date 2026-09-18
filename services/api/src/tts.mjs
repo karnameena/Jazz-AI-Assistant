@@ -21,10 +21,13 @@ export function ttsConfig() {
   const defaultRoot = path.join(repoRoot, "tools", "piper");
   const root = configuredPath(process.env.JAZZ_PIPER_ROOT, defaultRoot);
 
+  // Prefer a complete self-contained runtime directory. Older Jazz setup versions
+  // copied piper.exe by itself, which loses required DLLs on Windows.
   const executable = firstExisting([
     process.env.JAZZ_PIPER_BIN ? path.resolve(process.env.JAZZ_PIPER_BIN) : "",
-    path.join(root, process.platform === "win32" ? "piper.exe" : "piper"),
-    path.join(root, "piper", process.platform === "win32" ? "piper.exe" : "piper")
+    path.join(root, "runtime", process.platform === "win32" ? "piper.exe" : "piper"),
+    path.join(root, "piper", process.platform === "win32" ? "piper.exe" : "piper"),
+    path.join(root, process.platform === "win32" ? "piper.exe" : "piper")
   ]);
 
   const model = firstExisting([
@@ -36,6 +39,7 @@ export function ttsConfig() {
   const espeakData = firstExisting([
     process.env.JAZZ_PIPER_ESPEAK_DATA ? path.resolve(process.env.JAZZ_PIPER_ESPEAK_DATA) : "",
     path.join(runtimeDir, "espeak-ng-data"),
+    path.join(root, "runtime", "espeak-ng-data"),
     path.join(root, "piper", "espeak-ng-data"),
     path.join(root, "espeak-ng-data")
   ]);
@@ -54,6 +58,7 @@ export async function getTtsStatus() {
     ok: Boolean(exeStat && modelStat && espeakStat),
     executable: config.executable,
     executableFound: Boolean(exeStat),
+    runtimeDir: config.runtimeDir,
     model: config.model,
     modelFound: Boolean(modelStat),
     espeakData: config.espeakData,
@@ -78,6 +83,14 @@ function piperEnv(config) {
   };
 }
 
+function piperExitError(code, stderr) {
+  const detail = String(stderr || "").trim();
+  if (Number(code) === 3221225781 || Number(code) === -1073741515) {
+    return new Error("Piper could not load a required Windows DLL (0xC0000135). Re-run tools/piper/setup-windows.ps1 so Jazz installs the complete Piper runtime, not only piper.exe.");
+  }
+  return new Error(`Piper exited with code ${code}: ${detail || "unknown error"}`);
+}
+
 function runPiper(text, outputFile, config) {
   return new Promise((resolve, reject) => {
     const args = [
@@ -87,6 +100,7 @@ function runPiper(text, outputFile, config) {
     ];
     const child = spawn(config.executable, args, {
       windowsHide: true,
+      cwd: config.runtimeDir,
       env: piperEnv(config),
       stdio: ["pipe", "pipe", "pipe"]
     });
@@ -95,7 +109,7 @@ function runPiper(text, outputFile, config) {
     child.on("error", reject);
     child.on("close", code => {
       if (code === 0) resolve();
-      else reject(new Error(`Piper exited with code ${code}: ${stderr.trim() || "unknown error"}`));
+      else reject(piperExitError(code, stderr));
     });
     child.stdin.end(text);
   });
@@ -144,6 +158,7 @@ export async function streamPiperRaw(text, onChunk) {
   await new Promise((resolve, reject) => {
     const child = spawn(config.executable, args, {
       windowsHide: true,
+      cwd: config.runtimeDir,
       env: piperEnv(config),
       stdio: ["pipe", "pipe", "pipe"]
     });
@@ -164,7 +179,7 @@ export async function streamPiperRaw(text, onChunk) {
     child.on("error", error => finish(error));
     child.on("close", code => {
       if (code === 0) finish();
-      else finish(new Error(`Piper exited with code ${code}: ${stderr.trim() || "unknown error"}`));
+      else finish(piperExitError(code, stderr));
     });
 
     child.stdin.on("error", () => {});
