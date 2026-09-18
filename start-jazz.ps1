@@ -1,10 +1,15 @@
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $root
+
 $expectedVersion = "0.10.0-local"
+$apiPort = 8797
+$webPort = 5173
+$bridgePort = 9899
 
 Write-Host "Jazz startup" -ForegroundColor Cyan
 Write-Host "Root: $root"
+Write-Host "API port: $apiPort"
 
 function Test-Http($url) {
   try {
@@ -18,18 +23,47 @@ function Stop-PortListener([int]$port) {
     $connections = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
     foreach ($connection in @($connections)) {
       if ($connection.OwningProcess) {
-        Write-Host "Stopping stale process on port $port (PID $($connection.OwningProcess))..." -ForegroundColor DarkYellow
+        Write-Host "Stopping stale listener on port $port (PID $($connection.OwningProcess))..." -ForegroundColor DarkYellow
         Stop-Process -Id $connection.OwningProcess -Force -ErrorAction SilentlyContinue
       }
     }
   } catch {}
 }
 
-# Always replace stale Jazz runtime processes so old code cannot keep answering requests.
+function Stop-StaleJazzNodeProcesses {
+  try {
+    $needle = [regex]::Escape($root)
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+      Where-Object {
+        $_.Name -match '^node(\.exe)?$' -and
+        $_.CommandLine -match $needle -and
+        ($_.CommandLine -match 'server\.mjs' -or $_.CommandLine -match 'adb-bridge\.mjs' -or $_.CommandLine -match 'vite')
+      } |
+      ForEach-Object {
+        Write-Host "Stopping stale Jazz Node process PID $($_.ProcessId)..." -ForegroundColor DarkYellow
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+      }
+  } catch {}
+}
+
+# Kill old Jazz processes first. Port 8787 is retired so old API code cannot answer the web app.
+Stop-StaleJazzNodeProcesses
 Stop-PortListener 8787
-Stop-PortListener 9899
-Stop-PortListener 5173
-Start-Sleep -Milliseconds 450
+Stop-PortListener $apiPort
+Stop-PortListener $bridgePort
+Stop-PortListener $webPort
+Start-Sleep -Milliseconds 600
+
+# Refuse to boot an old checkout.
+$serverFile = Join-Path $root "services\api\src\server.mjs"
+$serverText = Get-Content $serverFile -Raw
+if ($serverText -notmatch [regex]::Escape("const VERSION = `"$expectedVersion`"")) {
+  throw "This local server.mjs is not the current Jazz API. Run repair-jazz-runtime.ps1 first."
+}
+if ($serverText -match "I tried the configured model and resilient fallbacks") {
+  throw "Old Gemini fallback text is still present in this checkout. Run repair-jazz-runtime.ps1 first."
+}
+Write-Host "Local Jazz API source verified: $expectedVersion" -ForegroundColor Green
 
 # 1) Ollama local brain
 $ollama = Get-Command ollama -ErrorAction SilentlyContinue
@@ -49,62 +83,58 @@ if ($ollama) {
     }
   }
 } else {
-  Write-Warning "Ollama command not found. Jazz local commands still work, but general AI chat needs Ollama or an online provider."
+  Write-Warning "Ollama command not found. Local device commands still work; general AI chat needs Ollama installed."
 }
 
-# 2) Piper TTS. Install the free local runtime automatically when missing.
+# 2) Piper TTS. Install automatically when missing.
 $piperExe = Join-Path $root "tools\piper\piper.exe"
 $piperSetup = Join-Path $root "tools\piper\setup-windows.ps1"
-if (-not (Test-Path $piperExe)) {
-  if (Test-Path $piperSetup) {
-    Write-Host "Piper is missing. Installing the free local Piper runtime and Amy voice..." -ForegroundColor Yellow
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $piperSetup
-  }
+if (-not (Test-Path $piperExe) -and (Test-Path $piperSetup)) {
+  Write-Host "Piper is missing. Installing Piper + Amy voice..." -ForegroundColor Yellow
+  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $piperSetup
 }
 if (Test-Path $piperExe) { Write-Host "Piper ready." -ForegroundColor Green }
-else { Write-Warning "Piper is still missing. Browser TTS fallback will be used." }
+else { Write-Warning "Piper is unavailable. Browser TTS fallback will be used." }
 
 # 3) Windows ADB bridge
 $bridgeEnv = Join-Path $root "bridges\windows-adb\.env"
-if (-not (Test-Path $bridgeEnv)) {
-  Write-Warning "ADB bridge .env is missing: $bridgeEnv"
-} else {
+if (Test-Path $bridgeEnv) {
   $bridgeCommand = "Set-Location '$root'; node --env-file='.\bridges\windows-adb\.env' '.\bridges\windows-adb\adb-bridge.mjs'"
   Start-Process powershell.exe -ArgumentList "-NoExit", "-Command", $bridgeCommand
   Start-Sleep -Seconds 1
+} else {
+  Write-Warning "ADB bridge .env is missing: $bridgeEnv"
 }
 
-# 4) Jazz API. This launcher intentionally forces the free/local Ollama provider.
+# 4) Jazz API — force local Ollama and isolated port 8797 even if services/api/.env says Gemini/8787.
 $apiEnv = Join-Path $root "services\api\.env"
 $envArg = if (Test-Path $apiEnv) { "--env-file='.\services\api\.env'" } else { "" }
-$apiCommand = "Set-Location '$root'; `$env:JAZZ_LLM_PROVIDER='ollama'; `$env:JAZZ_OLLAMA_AUTOSTART='true'; node $envArg '.\services\api\src\server.mjs'"
+$apiCommand = "Set-Location '$root'; `$env:PORT='$apiPort'; `$env:JAZZ_LLM_PROVIDER='ollama'; `$env:JAZZ_OLLAMA_AUTOSTART='true'; `$env:JAZZ_OLLAMA_FALLBACK='true'; node $envArg '.\services\api\src\server.mjs'"
 Start-Process powershell.exe -ArgumentList "-NoExit", "-Command", $apiCommand
 Start-Sleep -Seconds 2
 
-# Verify the exact API build. This catches stale local code immediately.
+$healthUrl = "http://127.0.0.1:$apiPort/health"
 try {
-  $apiHealth = Invoke-RestMethod "http://127.0.0.1:8787/health" -TimeoutSec 5
+  $apiHealth = Invoke-RestMethod $healthUrl -TimeoutSec 5
   if ($apiHealth.version -ne $expectedVersion) {
-    throw "Wrong Jazz API version is running. Expected $expectedVersion but got $($apiHealth.version)."
+    throw "Wrong Jazz API version. Expected $expectedVersion but got $($apiHealth.version)."
   }
-  Write-Host "Jazz API version verified: $($apiHealth.version)" -ForegroundColor Green
+  if ($apiHealth.provider -ne "ollama") {
+    throw "Wrong provider. Expected ollama but got $($apiHealth.provider)."
+  }
+  Write-Host "Jazz API verified: version=$($apiHealth.version), provider=$($apiHealth.provider), port=$apiPort" -ForegroundColor Green
 } catch {
-  Write-Warning "Jazz API verification failed: $($_.Exception.Message)"
+  throw "Jazz API verification failed: $($_.Exception.Message)"
 }
 
-# 5) Web UI on one fixed port, with Vite cache cleared.
-$webCommand = "Set-Location '$root\apps\web'; if (Test-Path '.\node_modules\.vite') { Remove-Item -Recurse -Force '.\node_modules\.vite' -ErrorAction SilentlyContinue }; pnpm dev -- --force --port 5173 --strictPort"
+# 5) Web UI — fixed port and fixed API target.
+$webCommand = "Set-Location '$root\apps\web'; `$env:JAZZ_API_PORT='$apiPort'; if (Test-Path '.\node_modules\.vite') { Remove-Item -Recurse -Force '.\node_modules\.vite' -ErrorAction SilentlyContinue }; pnpm dev -- --force --port $webPort --strictPort"
 Start-Process powershell.exe -ArgumentList "-NoExit", "-Command", $webCommand
-
 Start-Sleep -Seconds 2
+
 Write-Host ""
 Write-Host "Jazz health:" -ForegroundColor Cyan
-try {
-  $health = Invoke-RestMethod "http://127.0.0.1:8787/health" -TimeoutSec 5
-  $health | ConvertTo-Json -Depth 6
-} catch {
-  Write-Warning "Jazz API health check failed: $($_.Exception.Message)"
-}
-
+(Invoke-RestMethod $healthUrl -TimeoutSec 5) | ConvertTo-Json -Depth 6
 Write-Host ""
-Write-Host "Jazz startup completed. Open http://localhost:5173" -ForegroundColor Green
+Write-Host "Jazz startup completed. Open http://localhost:$webPort" -ForegroundColor Green
+Write-Host "Old API port 8787 is retired. The website now talks only to API port $apiPort." -ForegroundColor Green
