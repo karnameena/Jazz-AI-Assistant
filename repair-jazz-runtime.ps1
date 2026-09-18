@@ -6,6 +6,8 @@ Write-Host "Repairing Jazz runtime from origin/main..." -ForegroundColor Cyan
 
 # Keep private/local config untouched. Only source + generated dependency folders are refreshed.
 $runtimeFiles = @(
+  "package.json",
+  "pnpm-workspace.yaml",
   "services/api/src/server.mjs",
   "services/api/src/ollama.mjs",
   "services/api/src/tts.mjs",
@@ -54,6 +56,13 @@ if ($vite -notmatch 'require\.resolve\("react/package\.json"') {
   throw "Repair failed: hard React runtime pinning is missing."
 }
 
+# pnpm 11/12 requires explicit approval before running dependency build scripts.
+# Vite depends on esbuild's install step, so approve only that known dependency.
+$workspaceManifest = Get-Content ".\pnpm-workspace.yaml" -Raw
+if ($workspaceManifest -notmatch '(?m)^allowBuilds:\s*$' -or $workspaceManifest -notmatch '(?m)^\s+esbuild:\s*true\s*$') {
+  throw "Repair failed: pnpm allowBuilds approval for esbuild is missing."
+}
+
 # Stop old Jazz/Vite Node processes BEFORE touching node_modules. Otherwise Windows
 # can keep stale optimized React chunks open and the browser continues to hit them.
 Write-Host "Stopping stale Jazz web/API processes..." -ForegroundColor Yellow
@@ -80,7 +89,9 @@ if (Test-Path $rootNodeModules) { Remove-Item $rootNodeModules -Recurse -Force }
 $pnpm = Get-Command pnpm -ErrorAction Stop
 Write-Host "Installing one clean pnpm workspace dependency graph..." -ForegroundColor Cyan
 & $pnpm.Source install --force
-if ($LASTEXITCODE -ne 0) { throw "pnpm install failed while rebuilding Jazz dependencies." }
+if ($LASTEXITCODE -ne 0) {
+  throw "pnpm install failed while rebuilding Jazz dependencies. Check the pnpm output above; esbuild is explicitly approved in pnpm-workspace.yaml."
+}
 
 # Verify React and ReactDOM are exactly the versions Jazz web expects.
 $versionCheck = @'
@@ -100,6 +111,7 @@ Remove-Item (Join-Path $root "node_modules\.vite-jazz") -Recurse -Force -ErrorAc
 
 Write-Host "Runtime source repaired successfully." -ForegroundColor Green
 Write-Host "React runtime verified: one pinned React 18.3.1 + ReactDOM 18.3.1 installation." -ForegroundColor Green
+Write-Host "pnpm build approval verified: esbuild only." -ForegroundColor Green
 Write-Host "Private .env files were not changed." -ForegroundColor DarkGray
 Write-Host "Starting Jazz..." -ForegroundColor Cyan
 
