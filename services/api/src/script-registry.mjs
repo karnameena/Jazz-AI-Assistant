@@ -10,7 +10,7 @@ export const scripts = {
     file: "unlockmobile.ps1",
     files: ["unlockmobile.ps1"],
     description: "Run Mama's approved unlock-mobile workflow",
-    aliases: ["unlock mobile", "unlock my mobile", "unlock my phone", "unlock phone"],
+    aliases: ["unlock mobile", "unlock mobile jazz", "unlock my mobile", "unlock my phone", "unlock phone"],
     requiresConfirmation: false,
     category: "device",
     workflow: "script"
@@ -20,7 +20,8 @@ export const scripts = {
     files: ["pay-mom.ps1", "Payto_Mom.ps1", "paymom.ps1", "paymom.sh"],
     description: "Mama-owned payment workflow",
     aliases: ["pay mom", "pay to mom", "pay my mom", "pay to my mom", "send money to mom", "send money to my mom"],
-    requiresConfirmation: true,
+    // An explicit phrase such as "pay mom 1 rupee" is itself the user's command.
+    requiresConfirmation: false,
     category: "financial",
     workflow: "script"
   },
@@ -58,8 +59,12 @@ export function getScript(name) { return scripts[name] || null; }
 export function findScriptForMessage(message) {
   const lower = String(message || "").toLowerCase().replace(/\s+/g, " ").trim();
 
-  // Preserve the previous direct phrase-to-script behavior even when an amount
-  // appears between "pay" and "mom", e.g. "pay 1 rupee to mom".
+  if (/\bunlock\b[^\n]{0,40}\b(?:mobile|phone)\b/i.test(lower)) {
+    return ["unlockmobile", scripts.unlockmobile];
+  }
+
+  // Direct phrase-to-script behavior even when an amount appears between
+  // "pay" and "mom", e.g. "pay mom 1 rupee" or "pay 1 rupee to mom".
   if (/\b(?:pay|send)\b[^\n]{0,80}\b(?:my\s+)?mom\b/i.test(lower)) {
     return ["paymom", scripts.paymom];
   }
