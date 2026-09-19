@@ -40,6 +40,12 @@ function firstUsablePiper(candidates) {
     || "";
 }
 
+function piperLengthScale() {
+  const configured = Number(process.env.JAZZ_PIPER_LENGTH_SCALE || 0.88);
+  if (!Number.isFinite(configured)) return 0.88;
+  return Math.max(0.65, Math.min(1.25, configured));
+}
+
 export function ttsConfig() {
   const defaultRoot = path.join(repoRoot, "tools", "piper");
   const root = configuredPath(process.env.JAZZ_PIPER_ROOT, defaultRoot);
@@ -65,7 +71,14 @@ export function ttsConfig() {
     path.join(root, "espeak-ng-data")
   ]);
 
-  return { root, runtimeDir, executable, model, espeakData };
+  return {
+    root,
+    runtimeDir,
+    executable,
+    model,
+    espeakData,
+    lengthScale: piperLengthScale()
+  };
 }
 
 async function countRuntimeDlls(runtimeDir) {
@@ -102,6 +115,8 @@ export async function getTtsStatus() {
     modelFound: Boolean(modelStat),
     espeakData: config.espeakData,
     espeakDataFound: Boolean(espeakStat),
+    lengthScale: config.lengthScale,
+    speedProfile: config.lengthScale < 1 ? "faster" : config.lengthScale > 1 ? "slower" : "normal",
     setupScript: path.join(repoRoot, "tools", "piper", "setup-windows.ps1")
   };
 }
@@ -136,6 +151,7 @@ function runPiper(text, outputFile, config) {
     const args = [
       "--model", config.model,
       "--espeak_data", config.espeakData,
+      "--length_scale", String(config.lengthScale),
       "--output_file", outputFile
     ];
     const child = spawn(config.executable, args, {
@@ -192,6 +208,7 @@ export async function streamPiperRaw(text, onChunk) {
   const args = [
     "--model", config.model,
     "--espeak_data", config.espeakData,
+    "--length_scale", String(config.lengthScale),
     "--output-raw"
   ];
 
