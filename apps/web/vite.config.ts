@@ -29,6 +29,7 @@ export default defineConfig({
     include: ["react", "react/jsx-runtime", "react/jsx-dev-runtime", "react-dom", "react-dom/client", "lucide-react"]
   },
   server: {
+    host: "0.0.0.0",
     port: 5173,
     strictPort: true,
     proxy: {
