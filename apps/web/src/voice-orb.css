@@ -1,4 +1,4 @@
-/* Jazz crystal listening visualizer v3 — code only, no image assets. */
+/* Jazz crystal voice visualizer v4 — code only, no image assets. */
 
 /* Kill every previous listening/speaking visual. */
 html body .voice-listening-layer,
@@ -56,6 +56,7 @@ html body .chat-panel::after {
   place-items:center;
   filter:drop-shadow(0 0 20px rgba(69,214,255,.22));
   transform-origin:center;
+  will-change:transform,filter;
 }
 
 .jazz-glass-orb{
@@ -68,7 +69,7 @@ html body .chat-panel::after {
   overflow:hidden;
   transform:scale(.98);
   will-change:transform,filter,box-shadow;
-  transition:transform 24ms linear,filter 24ms linear,box-shadow 30ms linear;
+  transition:transform 18ms linear,filter 18ms linear,box-shadow 22ms linear;
   background:
     radial-gradient(circle at 30% 22%,rgba(255,255,255,.52),rgba(255,255,255,.07) 18%,transparent 31%),
     radial-gradient(circle at 72% 78%,rgba(234,64,255,.28),transparent 42%),
@@ -171,14 +172,19 @@ html body .chat-panel::after {
   filter:brightness(1.04) saturate(1.09);
 }
 
-/* Guaranteed speech pulse on every spoken phrase, even when browser TTS is the fallback. */
+/* While Jazz is speaking the complete round orb is always moving. The high point
+   of every bounce uses --jazz-voice-scale, which voice.ts continuously derives
+   from Piper's real RMS/peak signal, so louder syllables physically bounce higher. */
 .jazz-voice-stage.is-speaking .jazz-orb-shell{
-  animation:jazz-speech-shell-bounce .34s ease-in-out infinite alternate;
+  animation:jazz-frequency-shell-bounce .19s cubic-bezier(.22,.82,.32,1) infinite alternate;
+  filter:
+    drop-shadow(0 0 20px rgba(69,214,255,.28))
+    drop-shadow(0 0 18px rgba(228,72,255,.18));
 }
 
-/* Real Piper analyser adds a second, audio-accurate layer of motion. */
+/* Real Piper analyser drives scale, glow and the frequency bands every animation frame. */
 .jazz-voice-stage.is-speaking .jazz-glass-orb{
-  transform:scale(clamp(.97,var(--jazz-voice-scale,1),1.19));
+  transform:scale(clamp(.985,var(--jazz-voice-scale,1),1.22));
   filter:brightness(calc(1.03 + var(--jazz-voice-level,0)*.38)) saturate(calc(1.10 + var(--jazz-voice-mid,0)*.28));
   box-shadow:
     0 0 0 3px rgba(62,212,255,.10),
@@ -193,11 +199,26 @@ html body .chat-panel::after {
   filter:drop-shadow(0 0 5px #fff) drop-shadow(0 0 calc(12px + var(--jazz-voice-level,0)*10px) rgba(255,139,245,1)) drop-shadow(0 0 calc(24px + var(--jazz-voice-level,0)*18px) rgba(200,68,255,.95));
 }
 .jazz-voice-stage.is-speaking .jazz-wave-lines{
-  transform:scaleY(calc(1 + var(--jazz-voice-level,0)*.42));
-  animation-duration:.56s;
+  transform:scaleY(calc(1 + var(--jazz-voice-level,0)*.55));
+  animation-duration:.42s;
 }
-.jazz-voice-stage.is-speaking .jazz-wave-lines path{animation-duration:.62s}
-.jazz-voice-stage.is-speaking .jazz-frequency-ring-c{transform:translate(-50%,-50%) scale(calc(1 + var(--jazz-voice-level,0)*.09))}
+.jazz-voice-stage.is-speaking .jazz-wave-lines path{animation-duration:.54s}
+
+/* Bass, mids and treble affect different rings so the circular visual has obvious
+   real-frequency movement instead of one generic looping animation. */
+.jazz-voice-stage.is-speaking .jazz-frequency-ring-a{
+  opacity:calc(.45 + var(--jazz-voice-bass,0)*.55);
+}
+.jazz-voice-stage.is-speaking .jazz-frequency-ring-b{
+  opacity:calc(.40 + var(--jazz-voice-mid,0)*.60);
+}
+.jazz-voice-stage.is-speaking .jazz-frequency-ring-c{
+  transform:translate(-50%,-50%) scale(calc(1 + var(--jazz-voice-level,0)*.12));
+  opacity:calc(.42 + var(--jazz-voice-treble,0)*.58);
+}
+.jazz-voice-stage.is-speaking .jazz-frequency-ring-d{
+  opacity:calc(.25 + var(--jazz-voice-peak,0)*.55);
+}
 
 html[data-jazz-voice-state="listening"] .chat-messages,
 html[data-jazz-voice-state="speaking"] .chat-messages{opacity:.58!important;transition:opacity .14s ease}
@@ -207,7 +228,14 @@ html[data-jazz-voice-state="speaking"] .chat-messages{opacity:.58!important;tran
 @keyframes jazz-ring-spin{to{transform:translate(-50%,-50%) rotate(360deg)}}
 @keyframes jazz-ring-spin-reverse{to{transform:translate(-50%,-50%) rotate(-360deg)}}
 @keyframes jazz-ring-pulse{0%,100%{opacity:.40}50%{opacity:1}}
-@keyframes jazz-speech-shell-bounce{from{transform:translate(-50%,-50%) scale(.985)}to{transform:translate(-50%,-50%) scale(1.035)}}
+
+/* Low point stays compact; high point follows the live voice scale. This gives a
+   continuous bounce for every spoken response while preserving true amplitude sync. */
+@keyframes jazz-frequency-shell-bounce{
+  0%{transform:translate(-50%,-50%) translateY(5px) scale(.985)}
+  100%{transform:translate(-50%,-50%) translateY(-7px) scale(clamp(1,var(--jazz-voice-scale,1.02),1.16))}
+}
+
 @keyframes jazz-heart-idle{0%,100%{filter:drop-shadow(0 0 4px #fff) drop-shadow(0 0 11px rgba(255,139,245,.96)) drop-shadow(0 0 24px rgba(200,68,255,.82))}50%{filter:drop-shadow(0 0 6px #fff) drop-shadow(0 0 15px rgba(255,139,245,1)) drop-shadow(0 0 30px rgba(200,68,255,.98))}}
 
 @media(max-width:700px){
