@@ -7,12 +7,16 @@ export type VoiceCallbacks = {
 
 type VoiceState = "idle" | "listening" | "speaking" | "unsupported";
 
-/** Jazz voice engine: SpeechRecognition input + low-latency local Piper PCM streaming output. */
+/** Jazz voice engine: browser SpeechRecognition input + low-latency local Piper PCM streaming output. */
 export class JazzVoice {
   private recognition: any = null;
+  private recognitionCtor: any = null;
   private callbacks: VoiceCallbacks;
   private wakeEnabled = true;
   private listeningRequested = false;
+  private recognitionStarted = false;
+  private recognitionStarting = false;
+  private localRecognitionPrepared = false;
   private restartTimer: number | null = null;
   private restartAttempts = 0;
   private audioContext: AudioContext | null = null;
@@ -34,55 +38,104 @@ export class JazzVoice {
   constructor(callbacks: VoiceCallbacks = {}) {
     this.callbacks = callbacks;
     this.setVisualState("idle");
-    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const Recognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!Recognition) {
       this.setVisualState("unsupported");
       this.callbacks.onState?.("unsupported");
       return;
     }
+
+    this.recognitionCtor = Recognition;
     this.recognition = new Recognition();
     this.recognition.lang = "en-IN";
     this.recognition.interimResults = true;
-    this.recognition.continuous = true;
+    // Jazz needs one command at a time. Single-utterance recognition is much more
+    // reliable in Chromium than keeping one continuous Web Speech session alive.
+    this.recognition.continuous = false;
     this.recognition.maxAlternatives = 1;
 
     this.recognition.onstart = () => {
+      this.recognitionStarting = false;
+      this.recognitionStarted = true;
       this.restartAttempts = 0;
       this.setVisualState("listening");
       this.callbacks.onState?.("listening");
       void this.startMicMonitor();
     };
+
     this.recognition.onend = () => {
+      this.recognitionStarting = false;
+      this.recognitionStarted = false;
       if (!this.listeningRequested) {
         this.stopMicMonitor();
         this.setVisualState("idle");
         this.callbacks.onState?.("idle");
         return;
       }
-      this.scheduleRestart(300);
+      this.scheduleRestart(250);
     };
+
+    this.recognition.onnomatch = () => {
+      if (this.listeningRequested) {
+        this.callbacks.onError?.("I can hear the microphone, but I couldn't recognize those words. Please speak clearly and try again.");
+      }
+    };
+
     this.recognition.onerror = (event: any) => {
       const code = String(event?.error || "");
-      if (code === "aborted" || code === "no-speech") return;
-      if (code === "network") { this.scheduleRestart(650); return; }
+      this.recognitionStarting = false;
+      this.recognitionStarted = false;
+
+      if (code === "aborted") return;
+
+      if (code === "no-speech") {
+        if (this.listeningRequested) this.scheduleRestart(300);
+        return;
+      }
+
+      if (code === "network") {
+        // The microphone can be perfectly healthy while Chromium's remote speech
+        // service is unreachable. Do not silently spin forever and pretend Jazz is
+        // listening; tell the user what actually failed.
+        this.listeningRequested = false;
+        this.stopMicMonitor();
+        this.setVisualState("idle");
+        this.callbacks.onState?.("idle");
+        this.callbacks.onError?.("Your microphone is working, but the browser speech-to-text service could not connect. Chrome/Edge needs its speech service or an installed on-device English speech pack.");
+        return;
+      }
+
       if (code === "audio-capture") {
         this.listeningRequested = false;
         this.stopMicMonitor();
         this.setVisualState("idle");
         this.callbacks.onState?.("idle");
-        this.callbacks.onError?.("I lost access to the microphone. Please check microphone permission and try again.");
+        this.callbacks.onError?.("I lost access to the microphone. Please check the Windows/browser microphone input and try again.");
         return;
       }
+
       if (code === "not-allowed" || code === "service-not-allowed") {
         this.listeningRequested = false;
         this.stopMicMonitor();
         this.setVisualState("idle");
         this.callbacks.onState?.("idle");
-        this.callbacks.onError?.("Microphone permission is blocked. Please allow microphone access for Jazz in your browser.");
+        this.callbacks.onError?.("Microphone permission is blocked. Allow microphone access for localhost:5173 in the browser, then tap the microphone again.");
         return;
       }
-      this.scheduleRestart(850);
+
+      if (code === "language-not-supported") {
+        this.listeningRequested = false;
+        this.stopMicMonitor();
+        this.setVisualState("idle");
+        this.callbacks.onState?.("idle");
+        this.callbacks.onError?.("The browser speech engine does not have English (India) available. Enable/install English speech recognition in Chrome or Edge and try again.");
+        return;
+      }
+
+      this.callbacks.onError?.(`Browser speech recognition error: ${code || "unknown"}.`);
+      if (this.listeningRequested) this.scheduleRestart(650);
     };
+
     this.recognition.onresult = (event: any) => {
       let interim = "";
       let finalText = "";
@@ -91,8 +144,11 @@ export class JazzVoice {
         if (event.results[i].isFinal) finalText += text;
         else interim += text;
       }
-      if (interim) this.callbacks.onInterim?.(interim.trim());
-      if (finalText.trim()) this.callbacks.onFinal?.(this.stripWakePhrase(finalText.trim()));
+
+      const interimText = interim.trim();
+      const completedText = finalText.trim();
+      if (interimText) this.callbacks.onInterim?.(interimText);
+      if (completedText) this.callbacks.onFinal?.(this.stripWakePhrase(completedText));
     };
   }
 
@@ -126,7 +182,7 @@ export class JazzVoice {
   }
 
   private async ensureAudioContext() {
-    const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+    const AudioContextCtor = (window as any).AudioContext || (window as any).webkitAudioContext;
     if (!AudioContextCtor) return null;
     this.audioContext = this.audioContext || new AudioContextCtor();
     if (this.audioContext.state === "suspended") await this.audioContext.resume();
@@ -134,21 +190,31 @@ export class JazzVoice {
   }
 
   private async startMicMonitor() {
-    if (!navigator.mediaDevices?.getUserMedia || this.micStream) return;
-    try {
-      this.micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const context = await this.ensureAudioContext();
-      if (!context || !this.micStream) return;
-      this.micAnalyser = context.createAnalyser();
-      this.micAnalyser.fftSize = 256;
-      this.micAnalyser.smoothingTimeConstant = 0.45;
-      this.micSource = context.createMediaStreamSource(this.micStream);
-      this.micSource.connect(this.micAnalyser);
-      this.levelData = new Uint8Array(this.micAnalyser.fftSize);
-      this.readMicLevel();
-    } catch {
-      // Speech recognition remains usable without the visual monitor.
+    if (!navigator.mediaDevices?.getUserMedia) throw new Error("Browser microphone capture is unavailable.");
+
+    if (!this.micStream) {
+      this.micStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
+      });
     }
+
+    const activeTrack = this.micStream.getAudioTracks().find(track => track.readyState === "live" && track.enabled);
+    if (!activeTrack) throw new Error("No active microphone track is available.");
+
+    if (this.micAnalyser) return;
+    const context = await this.ensureAudioContext();
+    if (!context || !this.micStream) return;
+    this.micAnalyser = context.createAnalyser();
+    this.micAnalyser.fftSize = 256;
+    this.micAnalyser.smoothingTimeConstant = 0.45;
+    this.micSource = context.createMediaStreamSource(this.micStream);
+    this.micSource.connect(this.micAnalyser);
+    this.levelData = new Uint8Array(this.micAnalyser.fftSize);
+    this.readMicLevel();
   }
 
   private readMicLevel = () => {
@@ -177,6 +243,35 @@ export class JazzVoice {
     this.micAnalyser = null;
     this.micStream?.getTracks().forEach(track => track.stop());
     this.micStream = null;
+  }
+
+  /** Use Chromium's free on-device Web Speech model when the browser already has it,
+   * and install it when the browser exposes the standardized install API. If the
+   * browser does not support local recognition, Jazz falls back to normal Web Speech. */
+  private async prepareOnDeviceRecognition() {
+    if (this.localRecognitionPrepared || !this.recognition || !this.recognitionCtor) return;
+    this.localRecognitionPrepared = true;
+
+    if (!("processLocally" in this.recognition)) return;
+    const available = this.recognitionCtor.available;
+    if (typeof available !== "function") return;
+
+    try {
+      let status = await available.call(this.recognitionCtor, {
+        langs: ["en-IN"],
+        processLocally: true
+      });
+
+      if ((status === "downloadable" || status === "downloading") && typeof this.recognitionCtor.install === "function") {
+        const installed = await this.recognitionCtor.install({ langs: ["en-IN"] });
+        if (installed) status = "available";
+      }
+
+      if (status === "available") this.recognition.processLocally = true;
+    } catch {
+      // Older Chromium builds expose SpeechRecognition but not the local-pack API.
+      // Remote Web Speech remains the fallback in that case.
+    }
   }
 
   /** Prepare a Web Audio analyser for streamed PCM output. */
@@ -244,6 +339,23 @@ export class JazzVoice {
     this.streamPlaying = false;
   }
 
+  private startRecognitionNow() {
+    if (!this.recognition || !this.listeningRequested || this.recognitionStarting || this.recognitionStarted) return;
+    this.recognitionStarting = true;
+    try {
+      this.recognition.start();
+    } catch (error) {
+      this.recognitionStarting = false;
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/already started|recognition has already started/i.test(message)) {
+        this.listeningRequested = false;
+        this.setVisualState("idle");
+        this.callbacks.onState?.("idle");
+        this.callbacks.onError?.(`Jazz could not start browser speech recognition: ${message}`);
+      }
+    }
+  }
+
   private scheduleRestart(delay: number) {
     if (!this.listeningRequested || this.restartTimer !== null) return;
     if (this.restartAttempts >= 6) {
@@ -251,39 +363,65 @@ export class JazzVoice {
       this.stopMicMonitor();
       this.setVisualState("idle");
       this.callbacks.onState?.("idle");
-      this.callbacks.onError?.("Voice connection could not be restored. Tap the microphone to try again.");
+      this.callbacks.onError?.("Voice recognition could not stay connected. Tap the microphone to try again.");
       return;
     }
     this.restartAttempts += 1;
-    this.setVisualState("listening");
-    this.callbacks.onState?.("listening");
     this.restartTimer = window.setTimeout(() => {
       this.restartTimer = null;
-      try { this.recognition?.start(); }
-      catch { this.scheduleRestart(Math.min(1400, delay + 180)); }
+      this.startRecognitionNow();
     }, delay);
   }
 
   isSupported() { return Boolean(this.recognition); }
   setWakePhraseEnabled(enabled: boolean) { this.wakeEnabled = enabled; }
 
-  start() {
+  async start() {
     if (!this.recognition) {
-      this.callbacks.onError?.("Speech recognition is not supported by this browser. Chrome or Edge is recommended.");
+      this.callbacks.onError?.("Speech recognition is not supported by this browser. Use current Chrome or Edge.");
       return;
     }
+    if (this.listeningRequested && (this.recognitionStarted || this.recognitionStarting)) return;
+
     this.listeningRequested = true;
     this.restartAttempts = 0;
-    this.setVisualState("listening");
-    this.setLevel(0.12);
-    void this.ensureAudioContext();
-    if (this.restartTimer !== null) { window.clearTimeout(this.restartTimer); this.restartTimer = null; }
-    try { this.recognition.start(); } catch { /* already running */ }
+    this.setLevel(0.08);
+    if (this.restartTimer !== null) {
+      window.clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
+
+    try {
+      // Ask for the microphone explicitly first so permission/input problems are
+      // visible instead of leaving the UI in a fake "listening" state.
+      await this.startMicMonitor();
+      await this.prepareOnDeviceRecognition();
+      if (!this.listeningRequested) return;
+      this.startRecognitionNow();
+    } catch (error) {
+      this.listeningRequested = false;
+      this.stopMicMonitor();
+      this.setVisualState("idle");
+      this.callbacks.onState?.("idle");
+      const name = error instanceof DOMException ? error.name : "";
+      if (name === "NotAllowedError" || name === "SecurityError") {
+        this.callbacks.onError?.("Microphone permission is blocked. Click the lock/tune icon beside localhost:5173, set Microphone to Allow, then tap the mic again.");
+      } else if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+        this.callbacks.onError?.("No microphone was found. Check the Windows input device and try again.");
+      } else {
+        this.callbacks.onError?.(`Jazz could not open the microphone: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
   }
 
   stop() {
     this.listeningRequested = false;
-    if (this.restartTimer !== null) { window.clearTimeout(this.restartTimer); this.restartTimer = null; }
+    this.recognitionStarting = false;
+    this.recognitionStarted = false;
+    if (this.restartTimer !== null) {
+      window.clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
     this.stopMicMonitor();
     this.stopOutputMonitor(true);
     this.speechRunId += 1;
