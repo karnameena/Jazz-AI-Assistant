@@ -52,10 +52,12 @@ function planAndroidSteps(text) {
   ).filter(step => !reelsSteps.some(reel => overlaps(step, reel)));
   steps.push(...appSteps);
 
-  steps.push(...collectMatches(text, /\b(?:next\s+reel|scroll\s+down|next\s+video|swipe\s+up)\b/i,
-    () => ({ action: "scroll_down", args: {}, label: "scrolled down", waitAfter: 260 })));
-  steps.push(...collectMatches(text, /\b(?:previous\s+reel|scroll\s+up|previous\s+video|swipe\s+down)\b/i,
-    () => ({ action: "scroll_up", args: {}, label: "scrolled up", waitAfter: 260 })));
+  // Mama uses "scroll up" to mean the finger/gesture moves upward on the screen.
+  // In Android content terms that is the existing scroll_down gesture implementation.
+  steps.push(...collectMatches(text, /\b(?:next\s+reel|next\s+video|scroll\s+up|swipe\s+up)\b/i,
+    () => ({ action: "scroll_down", args: {}, label: "swiped up", waitAfter: 260 })));
+  steps.push(...collectMatches(text, /\b(?:previous\s+reel|previous\s+video|scroll\s+down|swipe\s+down)\b/i,
+    () => ({ action: "scroll_up", args: {}, label: "swiped down", waitAfter: 260 })));
   steps.push(...collectMatches(text, /\b(?:go\s+back|back)\b/i,
     () => ({ action: "back", args: {}, label: "went back", waitAfter: 220 })));
   steps.push(...collectMatches(text, /\b(?:go\s+home|home\s+screen|home)\b/i,
