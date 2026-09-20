@@ -7,7 +7,7 @@ const APP_PACKAGES = {
   "youtube music": "com.google.android.apps.youtube.music"
 };
 
-export const ANDROID_INTENTS_VERSION = "youtube-search-v2";
+export const ANDROID_INTENTS_VERSION = "youtube-search-v3";
 
 function deviceFor(text) {
   return /\btablet\b/i.test(text) ? "android-tablet" : "android-phone";
@@ -40,6 +40,7 @@ function cleanYouTubeQuery(raw) {
     .replace(/^youtube(?:\s+music)?\s+(?:for\s+)?/i, "")
     .replace(/\s+(?:on|in)\s+youtube(?:\s+music)?\s*$/i, "")
     .replace(/\s+(?:on|in)\s+(?:my\s+)?(?:mobile|phone|tablet)\s*$/i, "")
+    .replace(/\s+(?:please|jazz)\s*$/i, "")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -57,12 +58,14 @@ function youtubeSearchStep(query, index, length) {
 }
 
 function youtubeSearchSteps(text) {
-  // These are deterministic device commands and MUST NOT fall through to Ollama:
-  //   search AR Rahman song
+  // Deterministic local device commands. These must never be sent to Ollama.
+  // Examples:
+  //   search AR Rahman songs
   //   search for AR Rahman songs
   //   search tamil songs in youtube
   //   search youtube for AR Rahman songs
   //   youtube search AR Rahman songs
+  //   Jazz search AR Rahman songs
   const patterns = [
     /\byoutube\s+search(?:\s+for)?\s+(.+)$/i,
     /\bsearch\s+youtube\s+for\s+(.+)$/i,
@@ -104,12 +107,10 @@ function youtubePlaySteps(text) {
 function planAndroidSteps(text) {
   const steps = [];
 
-  // Search commands always go to YouTube control before general AI chat.
+  // Search commands always go through Android YouTube control before general AI chat.
   const searchSteps = youtubeSearchSteps(text);
   if (searchSteps.length) return searchSteps;
 
-  // Music/video play requests use the installed Android companion instead of a
-  // local youtube.ps1 file. Jazz opens YouTube search and selects a visible result.
   const playSteps = youtubePlaySteps(text);
   if (playSteps.length) return playSteps;
 
