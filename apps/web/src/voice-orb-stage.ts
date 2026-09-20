@@ -1,5 +1,8 @@
 const STAGE_ID = "jazz-voice-stage";
-const VISUALIZER_VERSION = "crystal-v4-frequency-sync";
+const VISUALIZER_VERSION = "crystal-v5-speaking-bounce";
+
+let bounceFrame: number | null = null;
+let bounceStartedAt = 0;
 
 function stageMarkup() {
   return `
@@ -53,6 +56,47 @@ function stageMarkup() {
     </div>`;
 }
 
+function voiceLevel() {
+  const raw = getComputedStyle(document.documentElement).getPropertyValue("--jazz-voice-level").trim();
+  const value = Number.parseFloat(raw);
+  return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0;
+}
+
+function stopSpeakingBounce() {
+  if (bounceFrame !== null) cancelAnimationFrame(bounceFrame);
+  bounceFrame = null;
+  bounceStartedAt = 0;
+  const shell = document.querySelector<HTMLElement>("#jazz-voice-stage .jazz-orb-shell");
+  if (shell) shell.style.top = "50%";
+}
+
+function runSpeakingBounce(now: number) {
+  const state = document.documentElement.dataset.jazzVoiceState || "idle";
+  const shell = document.querySelector<HTMLElement>("#jazz-voice-stage .jazz-orb-shell");
+  if (state !== "speaking" || !shell) {
+    stopSpeakingBounce();
+    return;
+  }
+
+  if (!bounceStartedAt) bounceStartedAt = now;
+  const elapsed = now - bounceStartedAt;
+  const level = voiceLevel();
+
+  // Guaranteed physical bounce while Jazz is speaking. The base movement keeps
+  // the orb visibly alive even between syllables; live voice level adds extra lift.
+  const amplitude = 7 + level * 10;
+  const y = Math.sin(elapsed / 92) * amplitude;
+  shell.style.top = `calc(50% + ${y.toFixed(2)}px)`;
+
+  bounceFrame = requestAnimationFrame(runSpeakingBounce);
+}
+
+function startSpeakingBounce() {
+  if (bounceFrame !== null) return;
+  bounceStartedAt = 0;
+  bounceFrame = requestAnimationFrame(runSpeakingBounce);
+}
+
 function ensureStage() {
   const panel = document.querySelector<HTMLElement>(".chat-panel");
   if (!panel) return;
@@ -70,6 +114,9 @@ function syncStage() {
   stage.classList.toggle("is-active", state === "listening" || state === "speaking");
   stage.classList.toggle("is-speaking", state === "speaking");
   stage.classList.toggle("is-listening", state === "listening");
+
+  if (state === "speaking") startSpeakingBounce();
+  else stopSpeakingBounce();
 }
 
 const rootObserver = new MutationObserver(syncStage);
