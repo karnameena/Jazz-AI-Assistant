@@ -31,7 +31,7 @@ function planAndroidSteps(text) {
   const reelsSteps = collectMatches(
     text,
     /\b(?:open|show|go\s+to|launch|start)\s+(?:instagram\s+)?reels?\b/i,
-    () => ({ action: "open_instagram_reels", args: {}, label: "opened Instagram Reels", waitAfter: 1900 })
+    () => ({ action: "open_instagram_reels", args: {}, label: "opened Instagram Reels", waitAfter: 2600 })
   );
   steps.push(...reelsSteps);
 
@@ -44,20 +44,21 @@ function planAndroidSteps(text) {
         action: "launch_app",
         args: { packageName: APP_PACKAGES[appName] },
         label: `opened ${match[1]}`,
-        // Instagram can take more than a second to become the active window after
-        // an unlock, so give AccessibilityService time before the next gesture.
-        waitAfter: appName === "instagram" ? 1700 : 1000
+        // Instagram can report that launch was requested before its window is actually
+        // focused. Wait long enough before the next gesture so a swipe is not sent to
+        // the previous app/home screen.
+        waitAfter: appName === "instagram" ? 3000 : 1000
       };
     }
   ).filter(step => !reelsSteps.some(reel => overlaps(step, reel)));
   steps.push(...appSteps);
 
   // Mama uses "scroll up" to mean the finger/gesture moves upward on the screen.
-  // In Android content terms that is the existing scroll_down gesture implementation.
+  // In Android content terms that is scroll_down: finger bottom -> top.
   steps.push(...collectMatches(text, /\b(?:next\s+reel|next\s+video|scroll\s+up|swipe\s+up)\b/i,
-    () => ({ action: "scroll_down", args: {}, label: "swiped up", waitAfter: 260 })));
+    () => ({ action: "scroll_down", args: {}, label: "swiped up", waitAfter: 450 })));
   steps.push(...collectMatches(text, /\b(?:previous\s+reel|previous\s+video|scroll\s+down|swipe\s+down)\b/i,
-    () => ({ action: "scroll_up", args: {}, label: "swiped down", waitAfter: 260 })));
+    () => ({ action: "scroll_up", args: {}, label: "swiped down", waitAfter: 450 })));
   steps.push(...collectMatches(text, /\b(?:go\s+back|back)\b/i,
     () => ({ action: "back", args: {}, label: "went back", waitAfter: 220 })));
   steps.push(...collectMatches(text, /\b(?:go\s+home|home\s+screen|home)\b/i,
