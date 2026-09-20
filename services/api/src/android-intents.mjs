@@ -7,6 +7,8 @@ const APP_PACKAGES = {
   "youtube music": "com.google.android.apps.youtube.music"
 };
 
+export const ANDROID_INTENTS_VERSION = "youtube-search-v2";
+
 function deviceFor(text) {
   return /\btablet\b/i.test(text) ? "android-tablet" : "android-phone";
 }
@@ -28,13 +30,14 @@ function overlaps(a, b) {
 function canonicalAppName(raw) {
   const value = String(raw || "").toLowerCase().trim();
   const compact = value.replace(/[\s'’-]+/g, "");
-  if (compact === "whatsapp" || compact === "whatsapp") return "whatsapp";
+  if (compact === "whatsapp") return "whatsapp";
   if (value === "youtube music") return "youtube music";
   return value;
 }
 
 function cleanYouTubeQuery(raw) {
   return String(raw || "")
+    .replace(/^youtube(?:\s+music)?\s+(?:for\s+)?/i, "")
     .replace(/\s+(?:on|in)\s+youtube(?:\s+music)?\s*$/i, "")
     .replace(/\s+(?:on|in)\s+(?:my\s+)?(?:mobile|phone|tablet)\s*$/i, "")
     .replace(/\s+/g, " ")
@@ -48,19 +51,33 @@ function youtubeSearchStep(query, index, length) {
     length,
     action: "open_url",
     args: { url: searchUrl },
-    label: `searched YouTube for ${query}`,
+    label: `searched YouTube for \"${query}\"`,
     waitAfter: 1500
   };
 }
 
 function youtubeSearchSteps(text) {
-  const match = text.match(/\bsearch(?:\s+for)?\s+(.+)$/i);
-  if (!match) return [];
+  // These are deterministic device commands and MUST NOT fall through to Ollama:
+  //   search AR Rahman song
+  //   search for AR Rahman songs
+  //   search tamil songs in youtube
+  //   search youtube for AR Rahman songs
+  //   youtube search AR Rahman songs
+  const patterns = [
+    /\byoutube\s+search(?:\s+for)?\s+(.+)$/i,
+    /\bsearch\s+youtube\s+for\s+(.+)$/i,
+    /\bsearch(?:\s+for)?\s+(.+)$/i
+  ];
 
-  const query = cleanYouTubeQuery(match[1]);
-  if (!query || /^(?:youtube|youtube music)$/i.test(query)) return [];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (!match) continue;
+    const query = cleanYouTubeQuery(match[1]);
+    if (!query || /^(?:youtube|youtube music)$/i.test(query)) return [];
+    return [youtubeSearchStep(query, match.index ?? 0, match[0].length)];
+  }
 
-  return [youtubeSearchStep(query, match.index ?? 0, match[0].length)];
+  return [];
 }
 
 function youtubePlaySteps(text) {
@@ -78,7 +95,7 @@ function youtubePlaySteps(text) {
       length: 0,
       action: "click_text",
       args: { text: query },
-      label: `selected the first matching result for ${query}`,
+      label: `selected the first matching result for \"${query}\"`,
       waitAfter: 600
     }
   ];
@@ -87,22 +104,14 @@ function youtubePlaySteps(text) {
 function planAndroidSteps(text) {
   const steps = [];
 
-  // Direct search requests are device commands, not general LLM questions.
-  // "search tamil songs" opens the YouTube results page immediately.
+  // Search commands always go to YouTube control before general AI chat.
   const searchSteps = youtubeSearchSteps(text);
-  if (searchSteps.length) {
-    steps.push(...searchSteps);
-    return steps;
-  }
+  if (searchSteps.length) return searchSteps;
 
   // Music/video play requests use the installed Android companion instead of a
-  // local youtube.ps1 file. Jazz opens the YouTube search and asks Accessibility
-  // to select the first visible result matching the requested words.
+  // local youtube.ps1 file. Jazz opens YouTube search and selects a visible result.
   const playSteps = youtubePlaySteps(text);
-  if (playSteps.length) {
-    steps.push(...playSteps);
-    return steps;
-  }
+  if (playSteps.length) return playSteps;
 
   const reelsSteps = collectMatches(
     text,
@@ -179,6 +188,7 @@ export async function handleAndroidIntent(message) {
     assistant: `Done, Mama — ${steps.map(step => step.label).join(", then ")} on ${device.name}.`,
     executed: true,
     tool: "android.sequence",
+    intentVersion: ANDROID_INTENTS_VERSION,
     steps: results
   };
 }
