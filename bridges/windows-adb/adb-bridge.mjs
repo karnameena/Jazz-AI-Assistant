@@ -280,18 +280,127 @@ async function wakeDevice(deviceId, target) {
   };
 }
 
+async function screenSize(serial) {
+  try {
+    const output = await run(["-s", serial, "shell", "wm", "size"], 5000);
+    const matches = [...output.matchAll(/(\d+)x(\d+)/g)];
+    const last = matches[matches.length - 1];
+    if (last) return { width: Number(last[1]), height: Number(last[2]) };
+  } catch {}
+  return { width: 1080, height: 2400 };
+}
+
+async function sendViaDirectAdb(deviceId, target, payload) {
+  const serial = await ensureConnected(deviceId, target);
+  const action = String(payload?.action || "");
+  const args = payload?.args || {};
+  const ok = (message, extra = {}) => ({ ok: true, message, transport: "adb-direct-fallback", deviceId, ...extra });
+
+  if (action === "launch_app") {
+    const pkg = String(args.packageName || "");
+    if (!/^[A-Za-z0-9._]+$/.test(pkg)) throw new Error("Invalid package name");
+    await run(["-s", serial, "shell", "monkey", "-p", pkg, "-c", "android.intent.category.LAUNCHER", "1"], 15000);
+    return ok("App launched through direct ADB", { packageName: pkg });
+  }
+  if (action === "home") {
+    await run(["-s", serial, "shell", "input", "keyevent", "KEYCODE_HOME"]);
+    return ok("Home opened through direct ADB");
+  }
+  if (action === "back") {
+    await run(["-s", serial, "shell", "input", "keyevent", "KEYCODE_BACK"]);
+    return ok("Back sent through direct ADB");
+  }
+  if (action === "recents") {
+    await run(["-s", serial, "shell", "input", "keyevent", "KEYCODE_APP_SWITCH"]);
+    return ok("Recents opened through direct ADB");
+  }
+  if (action === "notifications") {
+    await run(["-s", serial, "shell", "input", "keyevent", "KEYCODE_NOTIFICATION"]);
+    return ok("Notifications opened through direct ADB");
+  }
+  if (action === "tap") {
+    const x = Number(args.x); const y = Number(args.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error("Invalid tap coordinates");
+    await run(["-s", serial, "shell", "input", "tap", String(Math.round(x)), String(Math.round(y))]);
+    return ok("Tap sent through direct ADB");
+  }
+  if (action === "swipe") {
+    const x1 = Number(args.x1); const y1 = Number(args.y1); const x2 = Number(args.x2); const y2 = Number(args.y2);
+    const duration = Number(args.durationMs || 500);
+    if (![x1, y1, x2, y2, duration].every(Number.isFinite)) throw new Error("Invalid swipe coordinates");
+    await run(["-s", serial, "shell", "input", "swipe", String(Math.round(x1)), String(Math.round(y1)), String(Math.round(x2)), String(Math.round(y2)), String(Math.round(duration))]);
+    return ok("Swipe sent through direct ADB");
+  }
+  if (action === "scroll_down" || action === "scroll_up") {
+    const { width, height } = await screenSize(serial);
+    const x = Math.round(width * 0.5);
+    const yTop = Math.round(height * 0.28);
+    const yBottom = Math.round(height * 0.78);
+    const fromY = action === "scroll_down" ? yBottom : yTop;
+    const toY = action === "scroll_down" ? yTop : yBottom;
+    await run(["-s", serial, "shell", "input", "swipe", String(x), String(fromY), String(x), String(toY), "420"]);
+    return ok(action === "scroll_down" ? "Swiped up through direct ADB" : "Swiped down through direct ADB");
+  }
+  if (action === "open_url") {
+    const url = String(args.url || "");
+    if (!/^https?:\/\//i.test(url)) throw new Error("Invalid URL");
+    await run(["-s", serial, "shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", url], 15000);
+    return ok("URL opened through direct ADB", { url });
+  }
+  if (action === "dial_number") {
+    const number = String(args.number || "").replace(/[^0-9+]/g, "");
+    if (number.length < 3) throw new Error("Invalid phone number");
+    await run(["-s", serial, "shell", "am", "start", "-a", "android.intent.action.DIAL", "-d", `tel:${number}`], 15000);
+    return ok("Dialer opened through direct ADB", { number });
+  }
+  if (action === "open_instagram_reels") {
+    try {
+      await run(["-s", serial, "shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", "instagram://reels"], 15000);
+    } catch {
+      await run(["-s", serial, "shell", "monkey", "-p", "com.instagram.android", "-c", "android.intent.category.LAUNCHER", "1"], 15000);
+    }
+    return ok("Instagram Reels opened through direct ADB");
+  }
+  if (action === "device_info") {
+    const [model, manufacturer, version] = await Promise.all([
+      run(["-s", serial, "shell", "getprop", "ro.product.model"], 5000),
+      run(["-s", serial, "shell", "getprop", "ro.product.manufacturer"], 5000),
+      run(["-s", serial, "shell", "getprop", "ro.build.version.release"], 5000)
+    ]);
+    return ok("Device info read through direct ADB", { model, manufacturer, androidVersion: version });
+  }
+
+  throw new Error(`Android companion is unavailable and ${action} requires the companion Accessibility service.`);
+}
+
 async function sendToAndroid(deviceId, target, payload) {
-  await ensureForward(deviceId, target);
-  const response = await fetch(`http://127.0.0.1:${target.localPort}/command`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${target.token}` },
-    body: JSON.stringify(payload)
-  });
-  const text = await response.text();
-  let data;
-  try { data = JSON.parse(text); } catch { data = { message: text }; }
-  if (!response.ok) throw new Error(data?.error || "Android companion request failed");
-  return data;
+  let companionError = null;
+  try {
+    await ensureForward(deviceId, target);
+    const response = await fetch(`http://127.0.0.1:${target.localPort}/command`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${target.token}` },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(5000)
+    });
+    const text = await response.text();
+    let data;
+    try { data = JSON.parse(text); } catch { data = { message: text }; }
+    if (response.ok && data?.ok !== false) return data;
+    companionError = new Error(data?.error || data?.message || `Android companion request failed (${response.status})`);
+  } catch (error) {
+    companionError = error instanceof Error ? error : new Error(String(error));
+  }
+
+  try {
+    const fallback = await sendViaDirectAdb(deviceId, target, payload);
+    console.warn(`[ADB] Companion unavailable for ${payload?.action || "command"}; direct ADB fallback succeeded: ${companionError?.message || "unknown companion error"}`);
+    return fallback;
+  } catch (fallbackError) {
+    const companionMessage = companionError?.message || "Android companion request failed";
+    const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+    throw new Error(`${companionMessage}. Direct ADB fallback also failed: ${fallbackMessage}`);
+  }
 }
 
 async function reconnectLoop() {
@@ -337,7 +446,8 @@ const server = http.createServer(async (req, res) => {
       directReconnect: true,
       mdnsReconnect: true,
       scripts: true,
-      powershellScripts: true
+      powershellScripts: true,
+      directAdbFallback: true
     });
   }
   if (req.method === "GET" && req.url === "/devices") {
