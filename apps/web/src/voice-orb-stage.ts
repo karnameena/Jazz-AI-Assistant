@@ -1,5 +1,5 @@
 const STAGE_ID = "jazz-voice-stage";
-const VISUALIZER_VERSION = "crystal-v6-hard-speaking-bounce";
+const VISUALIZER_VERSION = "crystal-v7-1s-speaking-bounce";
 
 let animationFrame: number | null = null;
 let speakingStartedAt = 0;
@@ -94,10 +94,9 @@ function syncStageState(stage: HTMLElement, state: string) {
 }
 
 /**
- * One permanent RAF loop owns the speaking bounce. This intentionally does not
- * depend on CSS animation events, MutationObserver timing, Piper analyser startup,
- * or whether a syllable happens to be silent. If Jazz is in `speaking` state, the
- * complete circular shell physically moves every frame for the entire response.
+ * One permanent RAF loop owns the speaking bounce. While Jazz is speaking, the
+ * full orb completes one clearly visible bounce every second. Piper amplitude
+ * still adds extra height/energy so louder speech feels more alive.
  */
 function animateStage(now: number) {
   const stage = ensureStage();
@@ -112,16 +111,16 @@ function animateStage(now: number) {
         const elapsed = now - speakingStartedAt;
         const liveLevel = voiceLevel();
 
-        // Strong guaranteed bounce: around +/-16 px even during quiet gaps, rising
-        // above +/-30 px on louder Piper output. A second harmonic prevents the
-        // motion from looking like a tiny static CSS pulse.
-        const primary = Math.sin(elapsed / 82);
-        const secondary = Math.sin(elapsed / 41 + 0.65) * 0.24;
-        const motion = Math.max(-1, Math.min(1, primary + secondary));
-        const amplitude = 16 + liveLevel * 18;
-        const y = motion * amplitude;
-        const energy = Math.min(1, 0.30 + Math.abs(motion) * 0.42 + liveLevel * 0.45);
-        const scale = 1 + energy * 0.055;
+        // One complete bounce every 1000 ms. The baseline is a little larger than
+        // before, while live speech can push it higher without making it wild.
+        const cycleMs = 1000;
+        const phase = (elapsed % cycleMs) / cycleMs;
+        const primary = Math.sin(phase * Math.PI * 2);
+        const accent = Math.sin(phase * Math.PI) ** 2;
+        const amplitude = 22 + liveLevel * 20;
+        const y = primary * amplitude;
+        const energy = Math.min(1, 0.34 + accent * 0.46 + liveLevel * 0.38);
+        const scale = 1 + energy * 0.072;
 
         shell.style.top = "50%";
         shell.style.transform = `translate(-50%, calc(-50% + ${y.toFixed(2)}px)) scale(${scale.toFixed(3)})`;
