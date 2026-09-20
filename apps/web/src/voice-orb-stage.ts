@@ -1,5 +1,5 @@
 const STAGE_ID = "jazz-voice-stage";
-const VISUALIZER_VERSION = "crystal-v3";
+const VISUALIZER_VERSION = "crystal-v4-frequency-sync";
 
 function stageMarkup() {
   return `
