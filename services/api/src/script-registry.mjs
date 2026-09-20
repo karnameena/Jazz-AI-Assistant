@@ -41,8 +41,8 @@ export const scripts = {
   youtube: {
     file: "youtube.ps1",
     files: ["youtube.ps1", "youtube.sh"],
-    description: "Run Mama's approved YouTube automation",
-    aliases: ["play youtube", "open youtube", "play tamil songs", "tamil songs on youtube"],
+    description: "Run Mama's optional legacy YouTube script",
+    aliases: ["run youtube automation", "run youtube script"],
     requiresConfirmation: false,
     category: "media",
     workflow: "script"
