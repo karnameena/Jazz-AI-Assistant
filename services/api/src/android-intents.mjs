@@ -41,6 +41,28 @@ function cleanYouTubeQuery(raw) {
     .trim();
 }
 
+function youtubeSearchStep(query, index, length) {
+  const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
+  return {
+    index,
+    length,
+    action: "open_url",
+    args: { url: searchUrl },
+    label: `searched YouTube for ${query}`,
+    waitAfter: 1500
+  };
+}
+
+function youtubeSearchSteps(text) {
+  const match = text.match(/\bsearch(?:\s+for)?\s+(.+)$/i);
+  if (!match) return [];
+
+  const query = cleanYouTubeQuery(match[1]);
+  if (!query || /^(?:youtube|youtube music)$/i.test(query)) return [];
+
+  return [youtubeSearchStep(query, match.index ?? 0, match[0].length)];
+}
+
 function youtubePlaySteps(text) {
   const match = text.match(/\bplay\s+(.+)$/i);
   if (!match) return [];
@@ -48,16 +70,9 @@ function youtubePlaySteps(text) {
   const query = cleanYouTubeQuery(match[1]);
   if (!query || /^(?:youtube|youtube music)$/i.test(query)) return [];
 
-  const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
+  const searchStep = youtubeSearchStep(query, match.index ?? 0, match[0].length);
   return [
-    {
-      index: match.index ?? 0,
-      length: match[0].length,
-      action: "open_url",
-      args: { url: searchUrl },
-      label: `searched YouTube for ${query}`,
-      waitAfter: 3200
-    },
+    { ...searchStep, waitAfter: 3200 },
     {
       index: (match.index ?? 0) + match[0].length + 0.01,
       length: 0,
@@ -71,6 +86,14 @@ function youtubePlaySteps(text) {
 
 function planAndroidSteps(text) {
   const steps = [];
+
+  // Direct search requests are device commands, not general LLM questions.
+  // "search tamil songs" opens the YouTube results page immediately.
+  const searchSteps = youtubeSearchSteps(text);
+  if (searchSteps.length) {
+    steps.push(...searchSteps);
+    return steps;
+  }
 
   // Music/video play requests use the installed Android companion instead of a
   // local youtube.ps1 file. Jazz opens the YouTube search and asks Accessibility
