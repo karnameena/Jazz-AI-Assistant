@@ -38,18 +38,23 @@ function planAndroidSteps(text) {
   const appSteps = collectMatches(
     text,
     /\b(?:open|launch|start)\s+(instagram|youtube music|youtube|whatsapp)\b/i,
-    match => ({
-      action: "launch_app",
-      args: { packageName: APP_PACKAGES[String(match[1]).toLowerCase()] },
-      label: `opened ${match[1]}`,
-      waitAfter: 900
-    })
+    match => {
+      const appName = String(match[1]).toLowerCase();
+      return {
+        action: "launch_app",
+        args: { packageName: APP_PACKAGES[appName] },
+        label: `opened ${match[1]}`,
+        // Instagram can take more than a second to become the active window after
+        // an unlock, so give AccessibilityService time before the next gesture.
+        waitAfter: appName === "instagram" ? 1700 : 1000
+      };
+    }
   ).filter(step => !reelsSteps.some(reel => overlaps(step, reel)));
   steps.push(...appSteps);
 
-  steps.push(...collectMatches(text, /\b(?:next\s+reel|scroll\s+down|next\s+video)\b/i,
+  steps.push(...collectMatches(text, /\b(?:next\s+reel|scroll\s+down|next\s+video|swipe\s+up)\b/i,
     () => ({ action: "scroll_down", args: {}, label: "scrolled down", waitAfter: 260 })));
-  steps.push(...collectMatches(text, /\b(?:previous\s+reel|scroll\s+up|previous\s+video)\b/i,
+  steps.push(...collectMatches(text, /\b(?:previous\s+reel|scroll\s+up|previous\s+video|swipe\s+down)\b/i,
     () => ({ action: "scroll_up", args: {}, label: "scrolled up", waitAfter: 260 })));
   steps.push(...collectMatches(text, /\b(?:go\s+back|back)\b/i,
     () => ({ action: "back", args: {}, label: "went back", waitAfter: 220 })));
