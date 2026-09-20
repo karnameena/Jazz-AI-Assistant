@@ -25,6 +25,14 @@ function overlaps(a, b) {
   return a.index < b.index + b.length && b.index < a.index + a.length;
 }
 
+function canonicalAppName(raw) {
+  const value = String(raw || "").toLowerCase().trim();
+  const compact = value.replace(/[\s'’-]+/g, "");
+  if (compact === "whatsapp" || compact === "whatsapp") return "whatsapp";
+  if (value === "youtube music") return "youtube music";
+  return value;
+}
+
 function cleanYouTubeQuery(raw) {
   return String(raw || "")
     .replace(/\s+(?:on|in)\s+youtube(?:\s+music)?\s*$/i, "")
@@ -82,13 +90,13 @@ function planAndroidSteps(text) {
 
   const appSteps = collectMatches(
     text,
-    /\b(?:open|launch|start)\s+(instagram|youtube music|youtube|whatsapp)\b/i,
+    /\b(?:open|launch|start)\s+(instagram|youtube music|youtube|whatsapp|whats\s*app|what['’]?s\s*app)\b/i,
     match => {
-      const appName = String(match[1]).toLowerCase();
+      const appName = canonicalAppName(match[1]);
       return {
         action: "launch_app",
         args: { packageName: APP_PACKAGES[appName] },
-        label: `opened ${match[1]}`,
+        label: `opened ${appName === "whatsapp" ? "WhatsApp" : match[1]}`,
         waitAfter: appName === "instagram" ? 3000 : 1000
       };
     }
