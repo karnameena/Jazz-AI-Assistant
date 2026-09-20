@@ -25,8 +25,53 @@ function overlaps(a, b) {
   return a.index < b.index + b.length && b.index < a.index + a.length;
 }
 
+function cleanYouTubeQuery(raw) {
+  return String(raw || "")
+    .replace(/\s+(?:on|in)\s+youtube(?:\s+music)?\s*$/i, "")
+    .replace(/\s+(?:on|in)\s+(?:my\s+)?(?:mobile|phone|tablet)\s*$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function youtubePlaySteps(text) {
+  const match = text.match(/\bplay\s+(.+)$/i);
+  if (!match) return [];
+
+  const query = cleanYouTubeQuery(match[1]);
+  if (!query || /^(?:youtube|youtube music)$/i.test(query)) return [];
+
+  const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
+  return [
+    {
+      index: match.index ?? 0,
+      length: match[0].length,
+      action: "open_url",
+      args: { url: searchUrl },
+      label: `searched YouTube for ${query}`,
+      waitAfter: 3200
+    },
+    {
+      index: (match.index ?? 0) + match[0].length + 0.01,
+      length: 0,
+      action: "click_text",
+      args: { text: query },
+      label: `selected the first matching result for ${query}`,
+      waitAfter: 600
+    }
+  ];
+}
+
 function planAndroidSteps(text) {
   const steps = [];
+
+  // Music/video play requests use the installed Android companion instead of a
+  // local youtube.ps1 file. Jazz opens the YouTube search and asks Accessibility
+  // to select the first visible result matching the requested words.
+  const playSteps = youtubePlaySteps(text);
+  if (playSteps.length) {
+    steps.push(...playSteps);
+    return steps;
+  }
 
   const reelsSteps = collectMatches(
     text,
@@ -44,9 +89,6 @@ function planAndroidSteps(text) {
         action: "launch_app",
         args: { packageName: APP_PACKAGES[appName] },
         label: `opened ${match[1]}`,
-        // Instagram can report that launch was requested before its window is actually
-        // focused. Wait long enough before the next gesture so a swipe is not sent to
-        // the previous app/home screen.
         waitAfter: appName === "instagram" ? 3000 : 1000
       };
     }
