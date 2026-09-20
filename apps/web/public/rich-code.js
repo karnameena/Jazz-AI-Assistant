@@ -30,7 +30,7 @@
   };
 
   const builtinSets = {
-    python: new Set('print len range str int float list dict set tuple bool open input sum min max enumerate zip map filter isinstance super self'.split(' ')),
+    python: new Set('print len range str int float list dict set tuple bool open input sum min max enumerate zip map filter isinstance super self requests'.split(' ')),
     javascript: new Set('console Math JSON Object Array String Number Boolean Promise Date Map Set fetch window document navigator localStorage'.split(' ')),
     typescript: new Set('console Math JSON Object Array String Number Boolean Promise Date Map Set fetch window document navigator localStorage'.split(' ')),
     powershell: new Set('Write-Host Write-Output Get-Item Get-ChildItem Set-Location Test-Path Start-Process Stop-Process Invoke-RestMethod Invoke-WebRequest'.split(' '))
@@ -77,26 +77,10 @@
   }
 
   function highlightHtml(code) {
-    let out = '';
-    let last = 0;
-    const tagPattern = /(&lt;!--[\s\S]*?--&gt;|<\/?[A-Za-z][^>]*>)/g;
-    for (const match of code.matchAll(tagPattern)) {
-      const index = match.index ?? 0;
-      out += escapeHtml(code.slice(last, index));
-      const raw = match[0];
-      if (raw.startsWith('&lt;!--')) {
-        out += `<span class="jz-syn-comment">${raw}</span>`;
-      } else {
-        const escaped = escapeHtml(raw)
-          .replace(/(&lt;\/?)([A-Za-z][\w:-]*)/g, '$1<span class="jz-syn-tag">$2</span>')
-          .replace(/\s([A-Za-z_:][-\w:.]*)(=)/g, ' <span class="jz-syn-attr">$1</span>$2')
-          .replace(/(&quot;.*?&quot;|&#39;.*?&#39;)/g, '<span class="jz-syn-string">$1</span>');
-        out += escaped;
-      }
-      last = index + raw.length;
-    }
-    out += escapeHtml(code.slice(last));
-    return out;
+    return escapeHtml(code)
+      .replace(/(&lt;\/?)([A-Za-z][\w:-]*)/g, '$1<span class="jz-syn-tag">$2</span>')
+      .replace(/\s([A-Za-z_:][-\w:.]*)(=)/g, ' <span class="jz-syn-attr">$1</span>$2')
+      .replace(/(&quot;.*?&quot;|&#39;.*?&#39;)/g, '<span class="jz-syn-string">$1</span>');
   }
 
   function highlight(code, lang) {
@@ -106,12 +90,12 @@
 
   function parseFences(source) {
     const parts = [];
-    const regex = /```\s*([\w+#.-]*)\s*\n?([\s\S]*?)```/g;
+    const regex = /```\s*([\w+#.-]*)[^\S\r\n]*(?:\r?\n)?([\s\S]*?)```/g;
     let last = 0;
     let match;
     while ((match = regex.exec(source)) !== null) {
       if (match.index > last) parts.push({ type: 'text', value: source.slice(last, match.index) });
-      parts.push({ type: 'code', language: match[1] || '', value: match[2].replace(/^\n/, '').replace(/\s+$/, '') });
+      parts.push({ type: 'code', language: match[1] || '', value: match[2].replace(/^\s*\r?\n/, '').replace(/\s+$/, '') });
       last = regex.lastIndex;
     }
     if (!parts.some(part => part.type === 'code')) return null;
@@ -145,8 +129,12 @@
       event.stopPropagation();
       try {
         await copyText(code);
-        button.innerHTML = `${CHECK_ICON}<span>Copied!</span>`;
-        window.setTimeout(() => { button.innerHTML = `${COPY_ICON}<span>Copy code</span>`; }, 1400);
+        button.classList.add('copied');
+        button.innerHTML = `${CHECK_ICON}<span>Copied</span>`;
+        window.setTimeout(() => {
+          button.classList.remove('copied');
+          button.innerHTML = `${COPY_ICON}<span>Copy code</span>`;
+        }, 1400);
       } catch {
         button.querySelector('span').textContent = 'Copy failed';
         window.setTimeout(() => { button.innerHTML = `${COPY_ICON}<span>Copy code</span>`; }, 1400);
@@ -157,27 +145,81 @@
 
   function renderCodeCard(code, language) {
     const lang = normalizeLanguage(language);
-    const card = document.createElement('div');
+    const card = document.createElement('section');
     card.className = `jazz-code-card jazz-${lang.key}`;
 
     const header = document.createElement('div');
     header.className = 'jazz-code-header';
+
     const label = document.createElement('span');
     label.className = 'jazz-code-language';
     label.textContent = lang.label;
-    header.append(label, makeCopyButton(code));
 
     const pre = document.createElement('pre');
     const codeEl = document.createElement('code');
     codeEl.innerHTML = highlight(code, lang.key);
     pre.appendChild(codeEl);
+
+    header.append(label, makeCopyButton(code));
     card.append(header, pre);
     return card;
   }
 
+  function appendInlineMarkdown(container, line) {
+    const regex = /(`[^`]+`|\*\*[^*]+\*\*)/g;
+    let last = 0;
+    for (const match of line.matchAll(regex)) {
+      const index = match.index ?? 0;
+      if (index > last) container.append(document.createTextNode(line.slice(last, index)));
+      const token = match[0];
+      const element = document.createElement(token.startsWith('`') ? 'code' : 'strong');
+      element.className = token.startsWith('`') ? 'jazz-inline-code' : '';
+      element.textContent = token.startsWith('`') ? token.slice(1, -1) : token.slice(2, -2);
+      container.append(element);
+      last = index + token.length;
+    }
+    if (last < line.length) container.append(document.createTextNode(line.slice(last)));
+  }
+
+  function renderProse(text) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'jazz-rich-prose';
+    const normalized = String(text || '').trim();
+    if (!normalized) return wrapper;
+
+    for (const rawLine of normalized.split(/\r?\n/)) {
+      const line = rawLine.trimEnd();
+      if (!line.trim()) {
+        const spacer = document.createElement('div');
+        spacer.className = 'jazz-prose-spacer';
+        wrapper.appendChild(spacer);
+        continue;
+      }
+
+      if (/^[-*]\s+/.test(line)) {
+        const row = document.createElement('div');
+        row.className = 'jazz-prose-list-item';
+        const bullet = document.createElement('span');
+        bullet.textContent = '•';
+        const copy = document.createElement('span');
+        appendInlineMarkdown(copy, line.replace(/^[-*]\s+/, ''));
+        row.append(bullet, copy);
+        wrapper.appendChild(row);
+        continue;
+      }
+
+      const paragraph = document.createElement('div');
+      paragraph.className = 'jazz-prose-line';
+      appendInlineMarkdown(paragraph, line);
+      wrapper.appendChild(paragraph);
+    }
+    return wrapper;
+  }
+
   function renderRichMessage(target) {
     if (!(target instanceof HTMLElement)) return;
-    if (target.querySelector('.jazz-code-card')) return;
+    if (target.dataset.jazzRichSource === target.textContent && target.querySelector('.jazz-code-card')) return;
+
     const source = target.textContent || '';
     if (!source.includes('```')) return;
     const parts = parseFences(source);
@@ -186,15 +228,11 @@
     const wrapper = document.createElement('div');
     wrapper.className = 'jazz-rich-message';
     for (const part of parts) {
-      if (part.type === 'code') {
-        wrapper.appendChild(renderCodeCard(part.value, part.language));
-      } else if (part.value.trim()) {
-        const prose = document.createElement('div');
-        prose.className = 'jazz-rich-prose';
-        prose.textContent = part.value.trim();
-        wrapper.appendChild(prose);
-      }
+      if (part.type === 'code') wrapper.appendChild(renderCodeCard(part.value, part.language));
+      else if (part.value.trim()) wrapper.appendChild(renderProse(part.value));
     }
+
+    target.dataset.jazzRichSource = source;
     target.replaceChildren(wrapper);
   }
 
@@ -204,7 +242,7 @@
 
   function scheduleScan() {
     window.clearTimeout(scanTimer);
-    scanTimer = window.setTimeout(scan, 220);
+    scanTimer = window.setTimeout(scan, 120);
   }
 
   const observer = new MutationObserver(scheduleScan);
