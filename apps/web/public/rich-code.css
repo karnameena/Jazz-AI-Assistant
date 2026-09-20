@@ -1,0 +1,32 @@
+/* ChatGPT-style code answers for Jazz. Loaded independently so the chat runtime stays lightweight. */
+.jazz-rich-message{display:flex;flex-direction:column;gap:12px;min-width:0}
+.jazz-rich-prose{white-space:pre-wrap;overflow-wrap:anywhere}
+.jazz-code-card{width:min(100%,760px);overflow:hidden;border:1px solid rgba(255,255,255,.10);border-radius:13px;background:#0d1117;box-shadow:0 12px 32px rgba(0,0,0,.28);margin:3px 0 5px}
+.jazz-code-header{height:42px;display:flex;align-items:center;justify-content:space-between;padding:0 12px 0 15px;background:#161b22;border-bottom:1px solid rgba(255,255,255,.075);color:#9da7b5;font-size:11px;font-weight:700;letter-spacing:.01em}
+.jazz-code-language{display:flex;align-items:center;gap:7px;text-transform:none}
+.jazz-code-language::before{content:"";width:7px;height:7px;border-radius:50%;background:#55d7ff;box-shadow:0 0 10px rgba(85,215,255,.5)}
+.jazz-copy-code{border:0;background:transparent;color:#b6bfcb;display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 7px;border-radius:7px;font:inherit;cursor:pointer;transition:background .16s ease,color .16s ease}
+.jazz-copy-code:hover{background:rgba(255,255,255,.07);color:#fff}
+.jazz-copy-code svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.8}
+.jazz-code-card pre{margin:0;padding:16px 17px 18px;overflow-x:auto;background:#0d1117;color:#e6edf3;font-family:"Cascadia Code","SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;font-size:13px;line-height:1.68;tab-size:2;white-space:pre;text-align:left}
+.jazz-code-card code{font:inherit;color:inherit;background:transparent;border:0;padding:0}
+.jazz-code-card pre::-webkit-scrollbar{height:8px}
+.jazz-code-card pre::-webkit-scrollbar-track{background:#0d1117}
+.jazz-code-card pre::-webkit-scrollbar-thumb{background:#30363d;border-radius:99px}
+.jz-syn-keyword{color:#ff7b72}
+.jz-syn-string{color:#a5d6ff}
+.jz-syn-comment{color:#8b949e;font-style:italic}
+.jz-syn-number{color:#79c0ff}
+.jz-syn-builtin{color:#d2a8ff}
+.jz-syn-tag{color:#7ee787}
+.jz-syn-attr{color:#79c0ff}
+.jz-syn-punctuation{color:#c9d1d9}
+.jazz-javascript .jz-syn-keyword,.jazz-typescript .jz-syn-keyword{color:#ff7b72}
+.jazz-python .jz-syn-keyword{color:#ff7b72}
+.jazz-python .jz-syn-builtin{color:#d2a8ff}
+.jazz-json .jz-syn-string{color:#a5d6ff}
+.jazz-html .jz-syn-tag{color:#7ee787}
+.jazz-css .jz-syn-keyword{color:#d2a8ff}
+.jazz-powershell .jz-syn-keyword,.jazz-shell .jz-syn-keyword{color:#ff7b72}
+.jazz-bubble:has(.jazz-code-card){max-width:min(92%,820px)!important}
+@media(max-width:650px){.jazz-code-card{border-radius:11px}.jazz-code-card pre{font-size:12px;padding:14px 14px 16px}.jazz-code-header{height:39px;padding-left:12px}.jazz-bubble:has(.jazz-code-card){max-width:96%!important}}
