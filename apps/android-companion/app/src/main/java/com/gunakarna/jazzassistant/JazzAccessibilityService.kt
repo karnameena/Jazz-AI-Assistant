@@ -5,9 +5,9 @@ import android.accessibilityservice.GestureDescription
 import android.content.Intent
 import android.graphics.Path
 import android.net.Uri
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import android.provider.Settings
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityEvent
 
@@ -65,11 +65,22 @@ class JazzAccessibilityService : AccessibilityService() {
 
     private fun launchApp(pkg: String): Map<String, Any?> = try {
         require(pkg.matches(Regex("^[A-Za-z0-9._]+$"))) { "Invalid package name" }
-        val intent = packageManager.getLaunchIntentForPackage(pkg) ?: error("App not found")
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        startActivity(intent)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            // Android 13+ can launch a known package with an IntentSender even when
+            // package visibility would make getLaunchIntentForPackage return null.
+            val sender = packageManager.getLaunchIntentSenderForPackage(pkg)
+            sender.sendIntent(this, 0, null, null, null)
+        } else {
+            val intent = packageManager.getLaunchIntentForPackage(pkg) ?: error("App not found: $pkg")
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(intent)
+        }
+
         mapOf("ok" to true, "message" to "App launch requested", "packageName" to pkg)
-    } catch (e: Exception) { mapOf("ok" to false, "error" to e.message) }
+    } catch (e: Exception) {
+        mapOf("ok" to false, "error" to (e.message ?: "App not found: $pkg"), "packageName" to pkg)
+    }
 
     // Opens Android's dialer with the number filled in. Jazz deliberately does not
     // place the call itself, so the user retains the final OS/user confirmation.
