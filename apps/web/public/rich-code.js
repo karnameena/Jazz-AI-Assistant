@@ -44,15 +44,17 @@
 
   function normalizeMarkdownSource(value) {
     let text = String(value || '');
-
-    // Some local models escape Markdown backticks before returning them, producing
-    // literal text such as \`\`\`python ... \`\`\`. Convert only escaped triple
-    // fences back to normal Markdown fences; ordinary code content is left alone.
     text = text.split('\\`\\`\\`').join('```');
-
-    // Be tolerant of four-or-more backticks accidentally emitted around a block.
     text = text.replace(/`{4,}/g, '```');
     return text;
+  }
+
+  function normalizeCodeText(value) {
+    let code = String(value || '');
+    // Some local models return escaped newlines/tabs literally inside fenced code.
+    if (!code.includes('\n') && /\\n/.test(code)) code = code.replace(/\\n/g, '\n');
+    if (/\\t/.test(code)) code = code.replace(/\\t/g, '\t');
+    return code.replace(/^\s*\r?\n/, '').replace(/\s+$/, '');
   }
 
   function escapeHtml(value) {
@@ -108,12 +110,22 @@
     let match;
     while ((match = regex.exec(source)) !== null) {
       if (match.index > last) parts.push({ type: 'text', value: source.slice(last, match.index) });
-      parts.push({ type: 'code', language: match[1] || '', value: match[2].replace(/^\s*\r?\n/, '').replace(/\s+$/, '') });
+      parts.push({ type: 'code', language: match[1] || '', value: normalizeCodeText(match[2]) });
       last = regex.lastIndex;
     }
     if (!parts.some(part => part.type === 'code')) return null;
     if (last < source.length) parts.push({ type: 'text', value: source.slice(last) });
     return parts;
+  }
+
+  function detectBareCode(source) {
+    const text = normalizeCodeText(source).trim();
+    if (!text || text.length < 8) return null;
+    if (/^(?:from\s+\S+\s+import\s+|import\s+\S+|def\s+\w+\s*\(|class\s+\w+\b)/.test(text)) return { language: 'python', code: text };
+    if (/^(?:const|let|var|function|async\s+function|import|export)\b/.test(text)) return { language: 'javascript', code: text };
+    if (/^(?:param\s*\(|\$[A-Za-z_]|Get-|Set-|Invoke-|Write-|Start-|Stop-)/i.test(text)) return { language: 'powershell', code: text };
+    if (/^(?:#!\/|sudo\s+|apt\s+|npm\s+|pnpm\s+|git\s+|adb\s+)/.test(text)) return { language: 'shell', code: text };
+    return null;
   }
 
   async function copyText(text) {
@@ -158,6 +170,7 @@
 
   function renderCodeCard(code, language) {
     const lang = normalizeLanguage(language);
+    const normalizedCode = normalizeCodeText(code);
     const card = document.createElement('section');
     card.className = `jazz-code-card jazz-${lang.key}`;
 
@@ -170,10 +183,10 @@
 
     const pre = document.createElement('pre');
     const codeEl = document.createElement('code');
-    codeEl.innerHTML = highlight(code, lang.key);
+    codeEl.innerHTML = highlight(normalizedCode, lang.key);
     pre.appendChild(codeEl);
 
-    header.append(label, makeCopyButton(code));
+    header.append(label, makeCopyButton(normalizedCode));
     card.append(header, pre);
     return card;
   }
@@ -231,20 +244,26 @@
 
   function renderRichMessage(target) {
     if (!(target instanceof HTMLElement)) return;
+    if (target.closest('.jazz-rich-message')) return;
 
     const rawSource = target.textContent || '';
     if (target.dataset.jazzRichSource === rawSource && target.querySelector('.jazz-code-card')) return;
 
     const source = normalizeMarkdownSource(rawSource);
-    if (!source.includes('```')) return;
-    const parts = parseFences(source);
-    if (!parts) return;
+    const parts = source.includes('```') ? parseFences(source) : null;
+    const bare = !parts ? detectBareCode(source) : null;
+    if (!parts && !bare) return;
 
     const wrapper = document.createElement('div');
     wrapper.className = 'jazz-rich-message';
-    for (const part of parts) {
-      if (part.type === 'code') wrapper.appendChild(renderCodeCard(part.value, part.language));
-      else if (part.value.trim()) wrapper.appendChild(renderProse(part.value));
+
+    if (parts) {
+      for (const part of parts) {
+        if (part.type === 'code') wrapper.appendChild(renderCodeCard(part.value, part.language));
+        else if (part.value.trim()) wrapper.appendChild(renderProse(part.value));
+      }
+    } else if (bare) {
+      wrapper.appendChild(renderCodeCard(bare.code, bare.language));
     }
 
     target.dataset.jazzRichSource = rawSource;
@@ -257,7 +276,7 @@
 
   function scheduleScan() {
     window.clearTimeout(scanTimer);
-    scanTimer = window.setTimeout(scan, 120);
+    scanTimer = window.setTimeout(scan, 80);
   }
 
   const observer = new MutationObserver(scheduleScan);
