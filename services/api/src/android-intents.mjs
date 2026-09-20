@@ -7,7 +7,7 @@ const APP_PACKAGES = {
   "youtube music": "com.google.android.apps.youtube.music"
 };
 
-export const ANDROID_INTENTS_VERSION = "compound-sequence-v5";
+export const ANDROID_INTENTS_VERSION = "compound-sequence-v6";
 
 function deviceFor(text) {
   return /\btablet\b/i.test(text) ? "android-tablet" : "android-phone";
@@ -61,7 +61,7 @@ function youtubeSearchStep(query, index, length) {
     action: "open_url",
     args: { url: searchUrl },
     label: `searched YouTube for \"${query}\"`,
-    waitAfter: 1500
+    waitAfter: 1800
   };
 }
 
@@ -92,14 +92,14 @@ function youtubePlaySteps(text) {
 
   const searchStep = youtubeSearchStep(query, match.index ?? 0, match[0].length);
   return [
-    { ...searchStep, waitAfter: 3200 },
+    { ...searchStep, waitAfter: 3400 },
     {
       index: (match.index ?? 0) + match[0].length + 0.01,
       length: 0,
       action: "click_text",
       args: { text: query },
       label: `selected the first matching result for \"${query}\"`,
-      waitAfter: 600
+      waitAfter: 700
     }
   ];
 }
@@ -107,9 +107,8 @@ function youtubePlaySteps(text) {
 function planAndroidSteps(text) {
   const steps = [];
 
-  // Registered scripts participate in the SAME ordered command plan as normal
-  // Android actions. This lets one spoken request execute in order, e.g.:
-  // "Hey Jazz unlock mobile and open Instagram scroll down".
+  // Registered scripts and normal Android actions share one ordered execution plan.
+  // Example: "Hey Jazz unlock mobile and open Instagram scroll up" executes all 3.
   steps.push(...collectMatches(
     text,
     /\bunlock\s+(?:my\s+)?(?:mobile|phone)(?:\s+jazz)?\b/i,
@@ -117,7 +116,7 @@ function planAndroidSteps(text) {
       scriptName: "unlockmobile",
       args: { request: match[0] },
       label: "ran unlockmobile.ps1",
-      waitAfter: 700
+      waitAfter: 1200
     })
   ));
 
@@ -130,7 +129,7 @@ function planAndroidSteps(text) {
         scriptName: "paymom",
         args: { amount, request: match[0] },
         label: amount !== null ? `ran pay-mom.ps1 for ₹${amount}` : "ran pay-mom.ps1",
-        waitAfter: 700
+        waitAfter: 800
       };
     }
   ));
@@ -142,7 +141,7 @@ function planAndroidSteps(text) {
       scriptName: "screenshot",
       args: { request: match[0] },
       label: "ran screenshot script",
-      waitAfter: 500
+      waitAfter: 600
     })
   ));
 
@@ -155,7 +154,7 @@ function planAndroidSteps(text) {
   const reelsSteps = collectMatches(
     text,
     /\b(?:open|show|go\s+to|launch|start)\s+(?:instagram\s+)?reels?\b/i,
-    () => ({ action: "open_instagram_reels", args: {}, label: "opened Instagram Reels", waitAfter: 2600 })
+    () => ({ action: "open_instagram_reels", args: {}, label: "opened Instagram Reels", waitAfter: 4200 })
   );
   steps.push(...reelsSteps);
 
@@ -168,22 +167,22 @@ function planAndroidSteps(text) {
         action: "launch_app",
         args: { packageName: APP_PACKAGES[appName] },
         label: `opened ${appName === "whatsapp" ? "WhatsApp" : match[1]}`,
-        waitAfter: appName === "instagram" ? 3000 : 1000
+        // Instagram often needs several seconds before it accepts a gesture after launch.
+        waitAfter: appName === "instagram" ? 5500 : 1500
       };
     }
   ).filter(step => !reelsSteps.some(reel => overlaps(step, reel)));
   steps.push(...appSteps);
 
-  // Mama uses "scroll up" to mean the finger/gesture moves upward on the screen.
-  // In Android content terms that is scroll_down: finger bottom -> top.
+  // Mama uses "scroll up" to mean the finger moves upward: bottom -> top.
   steps.push(...collectMatches(text, /\b(?:next\s+reel|next\s+video|scroll\s+up|swipe\s+up)\b/i,
-    () => ({ action: "scroll_down", args: {}, label: "swiped up", waitAfter: 450 })));
+    () => ({ action: "scroll_down", args: {}, label: "swiped up", waitBefore: 500, waitAfter: 700 })));
   steps.push(...collectMatches(text, /\b(?:previous\s+reel|previous\s+video|scroll\s+down|swipe\s+down)\b/i,
-    () => ({ action: "scroll_up", args: {}, label: "swiped down", waitAfter: 450 })));
+    () => ({ action: "scroll_up", args: {}, label: "swiped down", waitBefore: 500, waitAfter: 700 })));
   steps.push(...collectMatches(text, /\b(?:go\s+back|back)\b/i,
-    () => ({ action: "back", args: {}, label: "went back", waitAfter: 220 })));
+    () => ({ action: "back", args: {}, label: "went back", waitAfter: 300 })));
   steps.push(...collectMatches(text, /\b(?:go\s+home|home\s+screen|home)\b/i,
-    () => ({ action: "home", args: {}, label: "opened Home", waitAfter: 220 })));
+    () => ({ action: "home", args: {}, label: "opened Home", waitAfter: 300 })));
   steps.push(...collectMatches(text, /\b(?:read|what(?:'s|\s+is)\s+on)\s+(?:the\s+)?screen\b/i,
     () => ({ action: "read_screen", args: {}, label: "read the screen", waitAfter: 0 })));
 
@@ -204,15 +203,19 @@ export async function handleAndroidIntent(message) {
   const results = [];
   for (const step of steps) {
     try {
+      if (step.waitBefore) await wait(step.waitBefore);
+
       const result = step.scriptName
         ? await sendAndroidScript(deviceId, step.scriptName, step.args || {})
         : await sendAndroidCommand(deviceId, step.action, step.args || {});
       const actionName = step.scriptName ? `script:${step.scriptName}` : step.action;
-      results.push({ action: actionName, ok: result?.ok !== false, result });
+      results.push({ action: actionName, label: step.label, ok: result?.ok !== false, result });
+
       if (result?.ok === false) {
         return {
           assistant: result.message || `I couldn't ${step.label} on ${device.name}.`,
           executed: results.some(item => item.ok),
+          intentVersion: ANDROID_INTENTS_VERSION,
           steps: results
         };
       }
@@ -221,6 +224,7 @@ export async function handleAndroidIntent(message) {
       return {
         assistant: `I couldn't control ${device.name}: ${error instanceof Error ? error.message : String(error)}`,
         executed: results.some(item => item.ok),
+        intentVersion: ANDROID_INTENTS_VERSION,
         steps: results
       };
     }
