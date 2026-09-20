@@ -42,6 +42,19 @@
     return { label: match[0], key: match[1] };
   }
 
+  function normalizeMarkdownSource(value) {
+    let text = String(value || '');
+
+    // Some local models escape Markdown backticks before returning them, producing
+    // literal text such as \`\`\`python ... \`\`\`. Convert only escaped triple
+    // fences back to normal Markdown fences; ordinary code content is left alone.
+    text = text.split('\\`\\`\\`').join('```');
+
+    // Be tolerant of four-or-more backticks accidentally emitted around a block.
+    text = text.replace(/`{4,}/g, '```');
+    return text;
+  }
+
   function escapeHtml(value) {
     return String(value)
       .replace(/&/g, '&amp;')
@@ -218,9 +231,11 @@
 
   function renderRichMessage(target) {
     if (!(target instanceof HTMLElement)) return;
-    if (target.dataset.jazzRichSource === target.textContent && target.querySelector('.jazz-code-card')) return;
 
-    const source = target.textContent || '';
+    const rawSource = target.textContent || '';
+    if (target.dataset.jazzRichSource === rawSource && target.querySelector('.jazz-code-card')) return;
+
+    const source = normalizeMarkdownSource(rawSource);
     if (!source.includes('```')) return;
     const parts = parseFences(source);
     if (!parts) return;
@@ -232,7 +247,7 @@
       else if (part.value.trim()) wrapper.appendChild(renderProse(part.value));
     }
 
-    target.dataset.jazzRichSource = source;
+    target.dataset.jazzRichSource = rawSource;
     target.replaceChildren(wrapper);
   }
 
