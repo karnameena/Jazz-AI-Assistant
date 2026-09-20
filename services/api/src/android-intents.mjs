@@ -1,4 +1,4 @@
-import { getDevice, sendAndroidCommand } from "./device-bridge.mjs";
+import { getDevice, sendAndroidCommand, sendAndroidScript } from "./device-bridge.mjs";
 
 const APP_PACKAGES = {
   instagram: "com.instagram.android",
@@ -7,7 +7,7 @@ const APP_PACKAGES = {
   "youtube music": "com.google.android.apps.youtube.music"
 };
 
-export const ANDROID_INTENTS_VERSION = "youtube-search-v4";
+export const ANDROID_INTENTS_VERSION = "compound-sequence-v5";
 
 function deviceFor(text) {
   return /\btablet\b/i.test(text) ? "android-tablet" : "android-phone";
@@ -35,6 +35,14 @@ function canonicalAppName(raw) {
   return value;
 }
 
+function extractAmount(text) {
+  const value = String(text || "");
+  const match =
+    value.match(/(?:₹|rs\.?|inr\s*)\s*(\d+(?:\.\d+)?)/i) ||
+    value.match(/\b(\d+(?:\.\d+)?)\s*(?:rupees?|rs)\b/i);
+  return match ? Number(match[1]) : null;
+}
+
 function cleanYouTubeQuery(raw) {
   return String(raw || "")
     .replace(/^youtube(?:\s+music)?\s+(?:for\s+)?/i, "")
@@ -58,16 +66,6 @@ function youtubeSearchStep(query, index, length) {
 }
 
 function youtubeSearchSteps(text) {
-  // These are deterministic local Android commands. They must be resolved here
-  // BEFORE Jazz calls Ollama, including short follow-ups after opening YouTube.
-  // Examples:
-  //   search AR Rahman songs
-  //   search for AR Rahman songs
-  //   find AR Rahman songs
-  //   search tamil songs in youtube
-  //   search youtube for AR Rahman songs
-  //   youtube search AR Rahman songs
-  //   Jazz search AR Rahman songs
   const patterns = [
     /\byoutube\s+search(?:\s+for)?\s+(.+)$/i,
     /\bsearch\s+youtube\s+for\s+(.+)$/i,
@@ -109,12 +107,50 @@ function youtubePlaySteps(text) {
 function planAndroidSteps(text) {
   const steps = [];
 
-  // Search/play commands are intentionally checked before all general chat.
+  // Registered scripts participate in the SAME ordered command plan as normal
+  // Android actions. This lets one spoken request execute in order, e.g.:
+  // "Hey Jazz unlock mobile and open Instagram scroll down".
+  steps.push(...collectMatches(
+    text,
+    /\bunlock\s+(?:my\s+)?(?:mobile|phone)(?:\s+jazz)?\b/i,
+    match => ({
+      scriptName: "unlockmobile",
+      args: { request: match[0] },
+      label: "ran unlockmobile.ps1",
+      waitAfter: 700
+    })
+  ));
+
+  steps.push(...collectMatches(
+    text,
+    /\b(?:pay|send)\b[^,;\n]{0,70}?\b(?:my\s+)?(?:mom|momma|mummy)\b(?:\s+(?:₹|rs\.?|inr)?\s*\d+(?:\.\d+)?\s*(?:rupees?|rs)?)?/i,
+    match => {
+      const amount = extractAmount(match[0]);
+      return {
+        scriptName: "paymom",
+        args: { amount, request: match[0] },
+        label: amount !== null ? `ran pay-mom.ps1 for ₹${amount}` : "ran pay-mom.ps1",
+        waitAfter: 700
+      };
+    }
+  ));
+
+  steps.push(...collectMatches(
+    text,
+    /\b(?:take\s+(?:a\s+)?screenshot|screenshot\s+(?:my\s+)?phone)\b/i,
+    match => ({
+      scriptName: "screenshot",
+      args: { request: match[0] },
+      label: "ran screenshot script",
+      waitAfter: 500
+    })
+  ));
+
   const searchSteps = youtubeSearchSteps(text);
-  if (searchSteps.length) return searchSteps;
+  if (searchSteps.length && steps.length === 0) return searchSteps;
 
   const playSteps = youtubePlaySteps(text);
-  if (playSteps.length) return playSteps;
+  if (playSteps.length && steps.length === 0) return playSteps;
 
   const reelsSteps = collectMatches(
     text,
@@ -168,8 +204,11 @@ export async function handleAndroidIntent(message) {
   const results = [];
   for (const step of steps) {
     try {
-      const result = await sendAndroidCommand(deviceId, step.action, step.args);
-      results.push({ action: step.action, ok: result?.ok !== false, result });
+      const result = step.scriptName
+        ? await sendAndroidScript(deviceId, step.scriptName, step.args || {})
+        : await sendAndroidCommand(deviceId, step.action, step.args || {});
+      const actionName = step.scriptName ? `script:${step.scriptName}` : step.action;
+      results.push({ action: actionName, ok: result?.ok !== false, result });
       if (result?.ok === false) {
         return {
           assistant: result.message || `I couldn't ${step.label} on ${device.name}.`,
