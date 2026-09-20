@@ -22,6 +22,8 @@ $runtimeFiles = @(
   "apps/web/index.html",
   "apps/web/public/api-runtime.js",
   "apps/web/public/favicon.svg",
+  "apps/web/public/rich-code.js",
+  "apps/web/public/rich-code.css",
   "apps/web/src/api-runtime.ts",
   "apps/web/src/main.tsx",
   "apps/web/src/voice.ts",
@@ -47,6 +49,14 @@ if ($server -match 'I tried the configured model and resilient fallbacks') {
 $apiRuntime = Get-Content ".\apps\web\public\api-runtime.js" -Raw
 if ($apiRuntime -notmatch 'window\.location\.origin') {
   throw "Repair failed: web API runtime is not LAN-safe/same-origin."
+}
+
+$indexHtml = Get-Content ".\apps\web\index.html" -Raw
+if ($indexHtml -notmatch 'rich-code\.js' -or $indexHtml -notmatch 'rich-code\.css') {
+  throw "Repair failed: Jazz rich code renderer is not loaded by index.html."
+}
+if (-not (Test-Path ".\apps\web\public\rich-code.js") -or -not (Test-Path ".\apps\web\public\rich-code.css")) {
+  throw "Repair failed: Jazz rich code renderer assets are missing."
 }
 
 $vite = Get-Content ".\apps\web\vite.config.ts" -Raw
@@ -115,6 +125,7 @@ Remove-Item (Join-Path $root "node_modules\.vite-jazz") -Recurse -Force -ErrorAc
 
 Write-Host "Runtime source repaired successfully." -ForegroundColor Green
 Write-Host "React runtime verified: one pinned React 18.3.1 + ReactDOM 18.3.1 installation." -ForegroundColor Green
+Write-Host "Jazz rich-code renderer verified." -ForegroundColor Green
 Write-Host "Jazz web LAN access verified: Vite listens on 0.0.0.0 and /api stays same-origin." -ForegroundColor Green
 Write-Host "pnpm build approval verified: esbuild only." -ForegroundColor Green
 Write-Host "Private .env files were not changed." -ForegroundColor DarkGray
