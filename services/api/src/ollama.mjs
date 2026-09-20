@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 
 const DEFAULT_URL = "http://127.0.0.1:11434";
 const DEFAULT_MODEL = "qwen2.5:7b";
+const PREFERRED_MODELS = ["qwen3:8b", "qwen3:1.7b", "qwen3:0.6b", DEFAULT_MODEL];
 let autoStartAttempted = false;
 
 export function ollamaConfig() {
@@ -68,19 +69,43 @@ export async function ensureOllamaReady() {
   return status;
 }
 
+function findInstalledModel(installed, requested) {
+  return installed.find(name => name === requested || name.startsWith(`${requested}:`)) || null;
+}
+
 async function resolveModel() {
   const config = ollamaConfig();
   const status = await ensureOllamaReady();
   if (!status.ok) throw new Error(`Ollama is not running at ${config.url}. Install/start Ollama or run start-jazz.ps1.`);
 
   if (config.model) {
-    const exact = status.models.find(name => name === config.model || name.startsWith(`${config.model}:`));
+    const exact = findInstalledModel(status.models, config.model);
     if (exact) return exact;
     throw new Error(`Ollama model '${config.model}' is not installed. Installed models: ${status.models.join(", ") || "none"}.`);
   }
 
+  for (const preferred of PREFERRED_MODELS) {
+    const match = findInstalledModel(status.models, preferred);
+    if (match) return match;
+  }
+
   if (status.models.length) return status.models[0];
   throw new Error(`Ollama is running but has no models installed. Run: ollama pull ${config.fallbackModel}`);
+}
+
+function chatPayload(model, systemInstruction, message, stream) {
+  return {
+    model,
+    think: false,
+    stream,
+    messages: [
+      { role: "system", content: systemInstruction },
+      { role: "user", content: message }
+    ],
+    options: {
+      temperature: Number(process.env.JAZZ_OLLAMA_TEMPERATURE || 0.45)
+    }
+  };
 }
 
 export async function callOllama(message, systemInstruction) {
@@ -89,15 +114,7 @@ export async function callOllama(message, systemInstruction) {
   const response = await fetchWithTimeout(`${config.url}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model,
-      stream: false,
-      messages: [
-        { role: "system", content: systemInstruction },
-        { role: "user", content: message }
-      ],
-      options: { temperature: 0.6 }
-    })
+    body: JSON.stringify(chatPayload(model, systemInstruction, message, false))
   }, Number(process.env.JAZZ_OLLAMA_TIMEOUT_MS || 120000));
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
@@ -115,15 +132,7 @@ export async function streamOllama(message, systemInstruction, onText) {
   const response = await fetch(`${config.url}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model,
-      stream: true,
-      messages: [
-        { role: "system", content: systemInstruction },
-        { role: "user", content: message }
-      ],
-      options: { temperature: 0.6 }
-    })
+    body: JSON.stringify(chatPayload(model, systemInstruction, message, true))
   });
   if (!response.ok || !response.body) {
     const detail = await response.text().catch(() => "");
