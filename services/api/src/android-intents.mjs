@@ -7,7 +7,7 @@ const APP_PACKAGES = {
   "youtube music": "com.google.android.apps.youtube.music"
 };
 
-export const ANDROID_INTENTS_VERSION = "compound-sequence-v7";
+export const ANDROID_INTENTS_VERSION = "compound-sequence-v8-scripted-instagram";
 
 function deviceFor(text) {
   return /\btablet\b/i.test(text) ? "android-tablet" : "android-phone";
@@ -104,21 +104,21 @@ function youtubePlaySteps(text) {
   ];
 }
 
-function planAndroidSteps(text) {
+function planAndroidSteps(rawText) {
+  const text = String(rawText || "").replace(/^\s*(?:hey\s+)?jazz[,\s:-]*/i, "").trim();
   const steps = [];
 
-  // Registered scripts and normal Android actions share one ordered execution plan.
-  // A compound request such as "unlock mobile and open Instagram scroll up" must
-  // execute every requested step rather than matching only the app/gesture part.
+  // Script-owned commands are deliberately planned here before generic app/gesture
+  // actions so compound requests cannot bypass the registered workflows.
   steps.push(...collectMatches(
     text,
     /\bunlock(?:\s+(?:my\s+)?(?:mobile|phone))?(?:\s+jazz)?\b/i,
     match => ({
       scriptName: "unlockmobile",
-      args: { request: match[0] },
+      args: { request: text },
       label: "executed unlockmobile.ps1",
       waitForUnlock: true,
-      waitAfter: 250
+      waitAfter: 150
     })
   ));
 
@@ -129,7 +129,7 @@ function planAndroidSteps(text) {
       const amount = extractAmount(match[0]);
       return {
         scriptName: "paymom",
-        args: { amount, request: match[0] },
+        args: { amount, request: text },
         label: amount !== null ? `executed pay-mom.ps1 for ₹${amount}` : "executed pay-mom.ps1",
         waitAfter: 800
       };
@@ -141,7 +141,7 @@ function planAndroidSteps(text) {
     /\b(?:take\s+(?:a\s+)?screenshot|screenshot\s+(?:my\s+)?phone)\b/i,
     match => ({
       scriptName: "screenshot",
-      args: { request: match[0] },
+      args: { request: text },
       label: "executed screenshot script",
       waitAfter: 600
     })
@@ -160,26 +160,54 @@ function planAndroidSteps(text) {
   );
   steps.push(...reelsSteps);
 
+  // Normal "open Instagram" commands now use the registered instagram.ps1 workflow.
+  // That script launches Instagram through direct ADB, verifies it is foreground,
+  // and handles an attached scroll/swipe request itself. This prevents a false
+  // "Done" response when Accessibility reports success but nothing moved on-screen.
+  const instagramSwipeUp = /\b(?:next\s+reel|next\s+video|scroll\s+up|swipe\s+up)\b/i.test(text);
+  const instagramSwipeDown = /\b(?:previous\s+reel|previous\s+video|scroll\s+down|swipe\s+down)\b/i.test(text);
+  const instagramSteps = collectMatches(
+    text,
+    /\b(?:open|launch|start)\s+instagram\b/i,
+    match => ({
+      scriptName: "instagram",
+      args: { request: text, scrollUp: instagramSwipeUp, scrollDown: instagramSwipeDown },
+      label: instagramSwipeUp
+        ? "executed instagram.ps1 and swiped up"
+        : instagramSwipeDown
+          ? "executed instagram.ps1 and swiped down"
+          : "executed instagram.ps1 and opened Instagram",
+      waitAfter: 250
+    })
+  ).filter(step => !reelsSteps.some(reel => overlaps(step, reel)));
+  steps.push(...instagramSteps);
+
   const appSteps = collectMatches(
     text,
-    /\b(?:open|launch|start)\s+(instagram|youtube music|youtube|whatsapp|whats\s*app|what['’]?s\s*app)\b/i,
+    /\b(?:open|launch|start)\s+(youtube music|youtube|whatsapp|whats\s*app|what['’]?s\s*app)\b/i,
     match => {
       const appName = canonicalAppName(match[1]);
       return {
         action: "launch_app",
         args: { packageName: APP_PACKAGES[appName] },
         label: `opened ${appName === "whatsapp" ? "WhatsApp" : match[1]}`,
-        waitAfter: appName === "instagram" ? 5500 : 1500
+        waitAfter: 1500
       };
     }
-  ).filter(step => !reelsSteps.some(reel => overlaps(step, reel)));
+  );
   steps.push(...appSteps);
 
-  // Mama uses "scroll up" to mean the finger moves upward: bottom -> top.
-  steps.push(...collectMatches(text, /\b(?:next\s+reel|next\s+video|scroll\s+up|swipe\s+up)\b/i,
-    () => ({ action: "scroll_down", args: {}, label: "swiped up", waitBefore: 500, waitAfter: 700 })));
-  steps.push(...collectMatches(text, /\b(?:previous\s+reel|previous\s+video|scroll\s+down|swipe\s+down)\b/i,
-    () => ({ action: "scroll_up", args: {}, label: "swiped down", waitBefore: 500, waitAfter: 700 })));
+  // If Instagram is being opened in the same request, instagram.ps1 owns the
+  // attached swipe. Standalone gestures still use the Android command transport.
+  if (!instagramSteps.length || !instagramSwipeUp) {
+    steps.push(...collectMatches(text, /\b(?:next\s+reel|next\s+video|scroll\s+up|swipe\s+up)\b/i,
+      () => ({ action: "scroll_down", args: {}, label: "swiped up", waitBefore: 500, waitAfter: 700 })));
+  }
+  if (!instagramSteps.length || !instagramSwipeDown) {
+    steps.push(...collectMatches(text, /\b(?:previous\s+reel|previous\s+video|scroll\s+down|swipe\s+down)\b/i,
+      () => ({ action: "scroll_up", args: {}, label: "swiped down", waitBefore: 500, waitAfter: 700 })));
+  }
+
   steps.push(...collectMatches(text, /\b(?:go\s+back|back)\b/i,
     () => ({ action: "back", args: {}, label: "went back", waitAfter: 300 })));
   steps.push(...collectMatches(text, /\b(?:go\s+home|home\s+screen|home)\b/i,
@@ -235,22 +263,30 @@ export async function handleAndroidIntent(message) {
         };
       }
 
-      // After the unlock script, wait for Android to report that the keyguard is
-      // actually gone before continuing with the rest of a compound request.
-      // This lets one voice command continue automatically after normal device
-      // authentication, instead of opening apps while the phone is still locked.
       if (step.waitForUnlock) {
-        const unlockState = await waitUntilUnlocked(deviceId);
+        let unlockState;
+
+        // unlockmobile.ps1 now checks the keyguard itself through direct ADB for
+        // compound requests. Use that verified result first; only fall back to the
+        // companion screen_state command when the script could not determine it.
+        if (result?.locked === false) {
+          unlockState = { ok: true, state: { locked: false, source: "unlockmobile.ps1" } };
+        } else if (result?.waitedForAuthentication === true) {
+          unlockState = { ok: false, state: { locked: result?.locked ?? null, source: "unlockmobile.ps1" } };
+        } else {
+          unlockState = await waitUntilUnlocked(deviceId);
+        }
+
         results.push({
           action: "wait_for_unlock",
-          label: unlockState.ok ? "confirmed Mobile was unlocked" : "waited for Mobile authentication",
+          label: unlockState.ok ? "confirmed Mobile was unlocked" : "Mobile is still locked",
           ok: unlockState.ok,
           result: unlockState
         });
 
-        if (!unlockState.ok && steps.length > 1) {
+        if (!unlockState.ok) {
           return {
-            assistant: "I executed unlockmobile.ps1 and woke Mobile, but it is still locked. Authenticate on the device within 20 seconds, then Jazz can continue the remaining actions from one command.",
+            assistant: result?.message || "unlockmobile.ps1 executed, but Mobile is still locked. Authenticate on the device before Jazz continues with the remaining actions.",
             executed: true,
             waitingForAuthentication: true,
             intentVersion: ANDROID_INTENTS_VERSION,
