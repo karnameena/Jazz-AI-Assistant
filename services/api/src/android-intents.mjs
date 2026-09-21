@@ -7,7 +7,7 @@ const APP_PACKAGES = {
   "youtube music": "com.google.android.apps.youtube.music"
 };
 
-export const ANDROID_INTENTS_VERSION = "compound-sequence-v9-companion-apps";
+export const ANDROID_INTENTS_VERSION = "compound-sequence-v10-friendly-messages";
 
 function deviceFor(text) {
   return /\btablet\b/i.test(text) ? "android-tablet" : "android-phone";
@@ -98,7 +98,7 @@ function youtubePlaySteps(text) {
       length: 0,
       action: "click_text",
       args: { text: query },
-      label: `selected the first matching result for \"${query}\"`,
+      label: `played \"${query}\"`,
       waitAfter: 700
     }
   ];
@@ -108,22 +108,18 @@ function planAndroidSteps(rawText) {
   const text = String(rawText || "").replace(/^\s*(?:hey\s+)?jazz[,\s:-]*/i, "").trim();
   const steps = [];
 
-  // Unlock remains the one explicit PowerShell workflow requested by Mama.
-  // Once the device is unlocked, normal app/UI commands go through the Android
-  // companion accessibility service rather than ADB shell scripts.
   steps.push(...collectMatches(
     text,
     /\bunlock(?:\s+(?:my\s+)?(?:mobile|phone))?(?:\s+jazz)?\b/i,
-    match => ({
+    () => ({
       scriptName: "unlockmobile",
       args: { request: text },
-      label: "executed unlockmobile.ps1",
+      label: "completed the unlock action",
       waitForUnlock: true,
       waitAfter: 150
     })
   ));
 
-  // Payment remains an explicitly registered local script workflow.
   steps.push(...collectMatches(
     text,
     /\b(?:pay|send)\b[^,;\n]{0,70}?\b(?:my\s+)?(?:mom|momma|mummy)\b(?:\s+(?:₹|rs\.?|inr)?\s*\d+(?:\.\d+)?\s*(?:rupees?|rs)?)?/i,
@@ -132,7 +128,7 @@ function planAndroidSteps(rawText) {
       return {
         scriptName: "paymom",
         args: { amount, request: text },
-        label: amount !== null ? `executed pay-mom.ps1 for ₹${amount}` : "executed pay-mom.ps1",
+        label: amount !== null ? `paid Mom ₹${amount}` : "completed the payment to Mom",
         waitAfter: 800
       };
     }
@@ -141,10 +137,10 @@ function planAndroidSteps(rawText) {
   steps.push(...collectMatches(
     text,
     /\b(?:take\s+(?:a\s+)?screenshot|screenshot\s+(?:my\s+)?phone)\b/i,
-    match => ({
+    () => ({
       scriptName: "screenshot",
       args: { request: text },
-      label: "executed screenshot script",
+      label: "took a screenshot",
       waitAfter: 600
     })
   ));
@@ -158,21 +154,17 @@ function planAndroidSteps(rawText) {
   const reelsSteps = collectMatches(
     text,
     /\b(?:open|show|go\s+to|launch|start)\s+(?:instagram\s+)?reels?\b/i,
-    () => ({ action: "open_instagram_reels", args: {}, label: "opened Instagram Reels with Android companion", waitAfter: 4200 })
+    () => ({ action: "open_instagram_reels", args: {}, label: "opened Instagram Reels", waitAfter: 4200 })
   );
   steps.push(...reelsSteps);
 
-  const instagramSwipeUp = /\b(?:next\s+reel|next\s+video|scroll\s+up|swipe\s+up)\b/i.test(text);
-  const instagramSwipeDown = /\b(?:previous\s+reel|previous\s+video|scroll\s+down|swipe\s+down)\b/i.test(text);
-
-  // Instagram is now a companion-app action: no instagram.ps1 / shell automation.
   const instagramSteps = collectMatches(
     text,
     /\b(?:open|launch|start)\s+instagram\b/i,
     () => ({
       action: "launch_app",
       args: { packageName: APP_PACKAGES.instagram },
-      label: "opened Instagram with Android companion",
+      label: "opened Instagram",
       waitAfter: 1800
     })
   ).filter(step => !reelsSteps.some(reel => overlaps(step, reel)));
@@ -186,26 +178,25 @@ function planAndroidSteps(rawText) {
       return {
         action: "launch_app",
         args: { packageName: APP_PACKAGES[appName] },
-        label: `opened ${appName === "whatsapp" ? "WhatsApp" : match[1]} with Android companion`,
+        label: `opened ${appName === "whatsapp" ? "WhatsApp" : match[1]}`,
         waitAfter: 1500
       };
     }
   );
   steps.push(...appSteps);
 
-  // Gestures are dispatched by JazzAccessibilityService inside the Android companion.
   steps.push(...collectMatches(text, /\b(?:next\s+reel|next\s+video|scroll\s+up|swipe\s+up)\b/i,
-    () => ({ action: "scroll_down", args: {}, label: "swiped up with Android companion", waitBefore: instagramSteps.length ? 500 : 0, waitAfter: 700 })));
+    () => ({ action: "scroll_down", args: {}, label: "swiped up", waitBefore: instagramSteps.length ? 500 : 0, waitAfter: 700 })));
 
   steps.push(...collectMatches(text, /\b(?:previous\s+reel|previous\s+video|scroll\s+down|swipe\s+down)\b/i,
-    () => ({ action: "scroll_up", args: {}, label: "swiped down with Android companion", waitBefore: instagramSteps.length ? 500 : 0, waitAfter: 700 })));
+    () => ({ action: "scroll_up", args: {}, label: "swiped down", waitBefore: instagramSteps.length ? 500 : 0, waitAfter: 700 })));
 
   steps.push(...collectMatches(text, /\b(?:go\s+back|back)\b/i,
-    () => ({ action: "back", args: {}, label: "went back with Android companion", waitAfter: 300 })));
+    () => ({ action: "back", args: {}, label: "went back", waitAfter: 300 })));
   steps.push(...collectMatches(text, /\b(?:go\s+home|home\s+screen|home)\b/i,
-    () => ({ action: "home", args: {}, label: "opened Home with Android companion", waitAfter: 300 })));
+    () => ({ action: "home", args: {}, label: "opened Home", waitAfter: 300 })));
   steps.push(...collectMatches(text, /\b(?:read|what(?:'s|\s+is)\s+on)\s+(?:the\s+)?screen\b/i,
-    () => ({ action: "read_screen", args: {}, label: "read the screen with Android companion", waitAfter: 0 })));
+    () => ({ action: "read_screen", args: {}, label: "read the screen", waitAfter: 0 })));
 
   return steps.sort((a, b) => a.index - b.index);
 }
@@ -248,7 +239,7 @@ export async function handleAndroidIntent(message) {
 
       if (result?.ok === false) {
         return {
-          assistant: result.message || `I couldn't ${step.label} on ${device.name}.`,
+          assistant: `I couldn't complete that action on ${device.name}.`,
           executed: results.some(item => item.ok),
           intentVersion: ANDROID_INTENTS_VERSION,
           steps: results
@@ -259,16 +250,15 @@ export async function handleAndroidIntent(message) {
         let unlockState;
 
         if (result?.locked === false) {
-          unlockState = { ok: true, state: { locked: false, source: "unlockmobile.ps1" } };
+          unlockState = { ok: true, state: { locked: false } };
         } else if (result?.waitedForAuthentication === true) {
-          unlockState = { ok: false, state: { locked: result?.locked ?? null, source: "unlockmobile.ps1" } };
+          unlockState = { ok: false, state: { locked: result?.locked ?? null } };
         } else {
-          // After unlockmobile.ps1 runs, ask the Android companion for keyguard state.
           unlockState = await waitUntilUnlocked(deviceId);
         }
 
         results.push({
-          action: "companion:wait_for_unlock",
+          action: "wait_for_unlock",
           label: unlockState.ok ? "confirmed Mobile was unlocked" : "Mobile is still locked",
           ok: unlockState.ok,
           result: unlockState
@@ -276,7 +266,7 @@ export async function handleAndroidIntent(message) {
 
         if (!unlockState.ok) {
           return {
-            assistant: result?.message || "unlockmobile.ps1 executed, but Mobile is still locked. Authenticate on the device before Jazz continues with the remaining companion actions.",
+            assistant: "Mobile is still locked. Authenticate on the device, then tell me what you want me to do next.",
             executed: true,
             waitingForAuthentication: true,
             intentVersion: ANDROID_INTENTS_VERSION,
@@ -286,9 +276,9 @@ export async function handleAndroidIntent(message) {
       }
 
       if (step.waitAfter) await wait(step.waitAfter);
-    } catch (error) {
+    } catch {
       return {
-        assistant: `I couldn't control ${device.name}: ${error instanceof Error ? error.message : String(error)}`,
+        assistant: `I couldn't complete that action on ${device.name}.`,
         executed: results.some(item => item.ok),
         intentVersion: ANDROID_INTENTS_VERSION,
         steps: results
@@ -296,8 +286,9 @@ export async function handleAndroidIntent(message) {
     }
   }
 
+  const summary = steps.map(step => step.label).join(", then ");
   return {
-    assistant: `Done, Mama — ${steps.map(step => step.label).join(", then ")} on ${device.name}.`,
+    assistant: `Done, Mama — ${summary}. What would you like me to do next?`,
     executed: true,
     tool: "android.sequence",
     intentVersion: ANDROID_INTENTS_VERSION,
