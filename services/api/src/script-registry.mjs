@@ -42,8 +42,11 @@ export const scripts = {
   youtube: {
     file: "YouTube automation",
     files: ["youtube.ps1", "youtube.sh"],
-    description: "Optional legacy YouTube script; normal YouTube commands use Android companion",
-    aliases: ["run youtube automation", "run youtube script"],
+    description: "Run Mama's approved YouTube search-and-play workflow",
+    aliases: [
+      "run youtube automation", "run youtube script",
+      "play youtube", "play tamil songs", "tamil songs on youtube"
+    ],
     requiresConfirmation: false,
     category: "media",
     workflow: "script"
@@ -72,6 +75,16 @@ export function findScriptForMessage(message) {
   // "pay mom 1 rupee", "pay 1 rupee to mom", "pay momma", "pay to my mummy".
   if (/\b(?:pay|send)\b[^\n]{0,100}\b(?:my\s+)?(?:mom|momma|mummy)\b/i.test(lower)) {
     return ["paymom", scripts.paymom];
+  }
+
+  // YouTube play requests must execute youtube.ps1, not fall through to Ollama or
+  // the generic Android companion sequence. Examples:
+  // "open YouTube and play Vaathi Coming" and "play Vaathi Coming on YouTube".
+  if (
+    /\byoutube\b[^\n]{0,100}\bplay\b\s+.+$/i.test(lower) ||
+    /\bplay\b\s+.+?\s+\b(?:on|in)\s+youtube\b/i.test(lower)
+  ) {
+    return ["youtube", scripts.youtube];
   }
 
   return Object.entries(scripts).find(([, script]) =>
