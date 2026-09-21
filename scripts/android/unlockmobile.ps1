@@ -9,20 +9,77 @@ if ([string]::IsNullOrWhiteSpace($Serial)) {
 }
 
 $adb = if ($env:ADB_PATH) { $env:ADB_PATH } else { "adb" }
+$request = ""
+try {
+    if ($env:JAZZ_SCRIPT_ARGS) {
+        $scriptArgs = $env:JAZZ_SCRIPT_ARGS | ConvertFrom-Json
+        if ($scriptArgs.request) { $request = [string]$scriptArgs.request }
+    }
+} catch {}
 
-# Registered workflow for the phrase "unlock mobile".
-# Jazz wakes the device through ADB; PIN/biometric authentication stays on-device.
-& $adb -s $Serial shell input keyevent KEYCODE_WAKEUP
-if ($LASTEXITCODE -ne 0) {
-    throw "ADB could not wake the Android device."
+function Invoke-AdbText {
+    param([string[]]$Arguments)
+    $output = & $adb -s $Serial @Arguments 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "ADB failed: $($output -join ' ')"
+    }
+    return ($output -join "`n")
 }
 
+function Get-DeviceLocked {
+    try {
+        $trust = Invoke-AdbText @("shell", "dumpsys", "trust")
+        $match = [regex]::Match($trust, 'deviceLocked=(true|false)', 'IgnoreCase')
+        if ($match.Success) {
+            return ($match.Groups[1].Value -ieq "true")
+        }
+    } catch {}
+
+    try {
+        $window = Invoke-AdbText @("shell", "dumpsys", "window", "policy")
+        if ($window -match '(?i)(?:keyguardShowing|showing)=true') { return $true }
+        if ($window -match '(?i)(?:keyguardShowing|showing)=false') { return $false }
+    } catch {}
+
+    return $null
+}
+
+Invoke-AdbText @("shell", "input", "keyevent", "KEYCODE_WAKEUP") | Out-Null
 Start-Sleep -Milliseconds 500
 
+$compoundRequest = $request -match '(?i)\b(?:open|launch|start|scroll|swipe|reels?|youtube|instagram|whatsapp|home|back)\b'
+$locked = Get-DeviceLocked
+$waited = $false
+
+if ($compoundRequest -and $locked -ne $false) {
+    $waited = $true
+    $deadline = (Get-Date).AddSeconds(20)
+    do {
+        Start-Sleep -Milliseconds 500
+        $locked = Get-DeviceLocked
+        if ($locked -eq $false) { break }
+    } while ((Get-Date) -lt $deadline)
+}
+
+if ($locked -eq $false) {
+    [pscustomobject]@{
+        ok                      = $true
+        status                  = "unlocked"
+        message                 = "unlockmobile.ps1 executed. Mobile is awake and unlocked."
+        script                  = "unlockmobile.ps1"
+        executedScript          = $true
+        locked                  = $false
+        waitedForAuthentication = $waited
+    } | ConvertTo-Json -Compress
+    exit 0
+}
+
 [pscustomobject]@{
-    ok             = $true
-    status         = "authentication_required"
-    message        = "Hey Mama, the unlock workflow ran. What do you want me to do next?"
-    script         = "unlockmobile.ps1"
-    executedScript = $true
+    ok                      = $true
+    status                  = "authentication_required"
+    message                 = "unlockmobile.ps1 executed. Mobile is awake, but the keyguard is still locked. Authenticate on the device before the remaining actions can continue."
+    script                  = "unlockmobile.ps1"
+    executedScript          = $true
+    locked                  = if ($null -eq $locked) { $null } else { [bool]$locked }
+    waitedForAuthentication = $waited
 } | ConvertTo-Json -Compress
