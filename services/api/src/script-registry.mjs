@@ -4,19 +4,20 @@ import { basename, resolve } from "node:path";
 const scriptRoot = resolve(process.env.JAZZ_SCRIPT_ROOT || "scripts/android");
 
 // Explicit allow-list. Natural-language routing may select only these registered
-// workflows. Jazz never executes an arbitrary path supplied by the LLM/user.
+// workflows. Internal filenames stay separate from user-facing names so Jazz does
+// not expose implementation details in normal conversation.
 export const scripts = {
   unlockmobile: {
-    file: "unlockmobile.ps1",
+    file: "mobile unlock",
     files: ["unlockmobile.ps1"],
-    description: "Run Mama's approved unlock-mobile workflow",
+    description: "Run Mama's approved mobile unlock workflow",
     aliases: ["unlock mobile", "unlock mobile jazz", "unlock my mobile", "unlock my phone", "unlock phone"],
     requiresConfirmation: false,
     category: "device",
     workflow: "script"
   },
   paymom: {
-    file: "pay-mom.ps1",
+    file: "Mom payment",
     files: ["pay-mom.ps1", "Payto_Mom.ps1", "paymom.ps1", "paymom.sh"],
     description: "Mama-owned payment workflow",
     aliases: [
@@ -30,7 +31,7 @@ export const scripts = {
     workflow: "script"
   },
   instagram: {
-    file: "instagram.ps1",
+    file: "Instagram automation",
     files: ["instagram.ps1", "instagram.sh", "insta.sh"],
     description: "Optional legacy Instagram script; normal Instagram commands use Android companion",
     aliases: ["run instagram script", "run legacy instagram script"],
@@ -39,7 +40,7 @@ export const scripts = {
     workflow: "script"
   },
   youtube: {
-    file: "youtube.ps1",
+    file: "YouTube automation",
     files: ["youtube.ps1", "youtube.sh"],
     description: "Optional legacy YouTube script; normal YouTube commands use Android companion",
     aliases: ["run youtube automation", "run youtube script"],
@@ -48,7 +49,7 @@ export const scripts = {
     workflow: "script"
   },
   screenshot: {
-    file: "screenshot.ps1",
+    file: "phone screenshot",
     files: ["screenshot.ps1", "screenshot.sh"],
     description: "Run Mama's approved Android screenshot workflow",
     aliases: ["take a screenshot", "take screenshot", "screenshot my phone"],
