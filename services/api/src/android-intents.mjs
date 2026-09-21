@@ -7,7 +7,7 @@ const APP_PACKAGES = {
   "youtube music": "com.google.android.apps.youtube.music"
 };
 
-export const ANDROID_INTENTS_VERSION = "compound-sequence-v11-clean-replies";
+export const ANDROID_INTENTS_VERSION = "compound-sequence-v12-youtube-play";
 
 function deviceFor(text) {
   return /\btablet\b/i.test(text) ? "android-tablet" : "android-phone";
@@ -55,6 +55,7 @@ function extractAmount(text) {
 function cleanYouTubeQuery(raw) {
   return String(raw || "")
     .replace(/^youtube(?:\s+music)?\s+(?:for\s+)?/i, "")
+    .replace(/\s+(?:and\s+then\s+|then\s+|and\s+)?play(?:\s+(?:it|this|the\s+(?:song|video)))?\s*$/i, "")
     .replace(/\s+(?:on|in)\s+youtube(?:\s+music)?\s*$/i, "")
     .replace(/\s+(?:on|in)\s+(?:my\s+)?(?:mobile|phone|tablet)\s*$/i, "")
     .replace(/\s+(?:please|jazz)\s*$/i, "")
@@ -74,6 +75,17 @@ function youtubeSearchStep(query, index, length) {
   };
 }
 
+function youtubeResultClickStep(query, index) {
+  return {
+    index,
+    length: 0,
+    action: "click_text",
+    args: { text: query },
+    label: `played \"${query}\"`,
+    waitAfter: 800
+  };
+}
+
 function youtubeSearchSteps(text) {
   const patterns = [
     /\byoutube\s+search(?:\s+for)?\s+(.+)$/i,
@@ -84,9 +96,18 @@ function youtubeSearchSteps(text) {
   for (const pattern of patterns) {
     const match = text.match(pattern);
     if (!match) continue;
+
+    const requestedPlay = /\b(?:and\s+then\s+|then\s+|and\s+)?play(?:\s+(?:it|this|the\s+(?:song|video)))?\s*$/i.test(match[1]);
     const query = cleanYouTubeQuery(match[1]);
     if (!query || /^(?:youtube|youtube music)$/i.test(query)) return [];
-    return [youtubeSearchStep(query, match.index ?? 0, match[0].length)];
+
+    const searchStep = youtubeSearchStep(query, match.index ?? 0, match[0].length);
+    if (!requestedPlay) return [searchStep];
+
+    return [
+      { ...searchStep, waitAfter: 3600 },
+      youtubeResultClickStep(query, (match.index ?? 0) + match[0].length + 0.01)
+    ];
   }
 
   return [];
@@ -101,15 +122,8 @@ function youtubePlaySteps(text) {
 
   const searchStep = youtubeSearchStep(query, match.index ?? 0, match[0].length);
   return [
-    { ...searchStep, waitAfter: 3400 },
-    {
-      index: (match.index ?? 0) + match[0].length + 0.01,
-      length: 0,
-      action: "click_text",
-      args: { text: query },
-      label: `played \"${query}\"`,
-      waitAfter: 700
-    }
+    { ...searchStep, waitAfter: 3600 },
+    youtubeResultClickStep(query, (match.index ?? 0) + match[0].length + 0.01)
   ];
 }
 
