@@ -21,20 +21,32 @@ if ($LASTEXITCODE -ne 0) { throw "Could not refresh the Jazz Android control fil
 
 $intentFile = ".\services\api\src\android-intents.mjs"
 $intentText = Get-Content $intentFile -Raw
-$expectedIntentVersion = 'compound-sequence-v9-companion-apps'
-if ($intentText -notmatch [regex]::Escape($expectedIntentVersion)) {
-  throw "Android control repair failed: expected $expectedIntentVersion."
+
+# Do not hard-code an old intent-router version here. The router version changes as
+# Android command handling is improved. Verify the current router structurally instead.
+$versionMatch = [regex]::Match(
+  $intentText,
+  'ANDROID_INTENTS_VERSION\s*=\s*["'']([^"'']+)["'']'
+)
+if (-not $versionMatch.Success) {
+  throw "Android control repair failed: ANDROID_INTENTS_VERSION is missing."
+}
+$currentIntentVersion = $versionMatch.Groups[1].Value
+
+if ($intentText -notmatch 'scriptName:\s*["'']unlockmobile["'']') {
+  throw "Android control repair failed: unlock mobile is not routed to unlockmobile script."
+}
+if ($intentText -notmatch 'scriptName:\s*["'']paymom["'']') {
+  throw "Android control repair failed: pay-to-mom is not routed to paymom script."
 }
 
 if (-not (Test-Path ".\scripts\android\unlockmobile.ps1")) {
   throw "unlockmobile.ps1 is missing after repair."
 }
 
-# Instagram/app control is handled by the Android companion in v9, not by
-# instagram.ps1. Payment remains a separately registered local script if present.
-Write-Host "Android command router verified: $expectedIntentVersion" -ForegroundColor Green
-Write-Host "unlockmobile.ps1 verified." -ForegroundColor Green
-Write-Host "Instagram/app control verified as Android companion workflow." -ForegroundColor Green
+Write-Host "Android command router verified: $currentIntentVersion" -ForegroundColor Green
+Write-Host "unlock mobile -> unlockmobile.ps1 routing verified." -ForegroundColor Green
+Write-Host "pay ... mom -> paymom registered-script routing verified." -ForegroundColor Green
 
 # Prefer the one active IPv4:port ADB transport when Windows shows both a TCP
 # transport and an mDNS alias for the same physical phone. Do not rewrite .env;
