@@ -7,7 +7,7 @@ const APP_PACKAGES = {
   "youtube music": "com.google.android.apps.youtube.music"
 };
 
-export const ANDROID_INTENTS_VERSION = "compound-sequence-v17-youtube-search-click-play";
+export const ANDROID_INTENTS_VERSION = "compound-sequence-v18-youtube-script-play";
 
 function deviceFor(text) {
   return /\btablet\b/i.test(text) ? "android-tablet" : "android-phone";
@@ -82,17 +82,16 @@ function youtubeSearchStep(query, index, length, waitAfter = 2200) {
 }
 
 function youtubePlaySequence(query, index, length) {
-  return [
-    youtubeSearchStep(query, index, length, 2600),
-    {
-      index: index + 0.01,
-      length: 0,
-      action: "click_text",
-      args: { text: query },
-      label: `opened and played \"${query}\"`,
-      waitAfter: 800
-    }
-  ];
+  // Natural YouTube play commands intentionally run the approved youtube.ps1
+  // workflow. Do not replace this with generic open_url/click_text actions.
+  return [{
+    index,
+    length,
+    scriptName: "youtube",
+    args: { query },
+    label: `played \"${query}\" on YouTube`,
+    waitAfter: 500
+  }];
 }
 
 function youtubeSearchSteps(text) {
