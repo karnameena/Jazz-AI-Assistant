@@ -7,7 +7,7 @@ const APP_PACKAGES = {
   "youtube music": "com.google.android.apps.youtube.music"
 };
 
-export const ANDROID_INTENTS_VERSION = "compound-sequence-v8-scripted-instagram";
+export const ANDROID_INTENTS_VERSION = "compound-sequence-v9-companion-apps";
 
 function deviceFor(text) {
   return /\btablet\b/i.test(text) ? "android-tablet" : "android-phone";
@@ -108,8 +108,9 @@ function planAndroidSteps(rawText) {
   const text = String(rawText || "").replace(/^\s*(?:hey\s+)?jazz[,\s:-]*/i, "").trim();
   const steps = [];
 
-  // Script-owned commands are deliberately planned here before generic app/gesture
-  // actions so compound requests cannot bypass the registered workflows.
+  // Unlock remains the one explicit PowerShell workflow requested by Mama.
+  // Once the device is unlocked, normal app/UI commands go through the Android
+  // companion accessibility service rather than ADB shell scripts.
   steps.push(...collectMatches(
     text,
     /\bunlock(?:\s+(?:my\s+)?(?:mobile|phone))?(?:\s+jazz)?\b/i,
@@ -122,6 +123,7 @@ function planAndroidSteps(rawText) {
     })
   ));
 
+  // Payment remains an explicitly registered local script workflow.
   steps.push(...collectMatches(
     text,
     /\b(?:pay|send)\b[^,;\n]{0,70}?\b(?:my\s+)?(?:mom|momma|mummy)\b(?:\s+(?:₹|rs\.?|inr)?\s*\d+(?:\.\d+)?\s*(?:rupees?|rs)?)?/i,
@@ -156,28 +158,22 @@ function planAndroidSteps(rawText) {
   const reelsSteps = collectMatches(
     text,
     /\b(?:open|show|go\s+to|launch|start)\s+(?:instagram\s+)?reels?\b/i,
-    () => ({ action: "open_instagram_reels", args: {}, label: "opened Instagram Reels", waitAfter: 4200 })
+    () => ({ action: "open_instagram_reels", args: {}, label: "opened Instagram Reels with Android companion", waitAfter: 4200 })
   );
   steps.push(...reelsSteps);
 
-  // Normal "open Instagram" commands now use the registered instagram.ps1 workflow.
-  // That script launches Instagram through direct ADB, verifies it is foreground,
-  // and handles an attached scroll/swipe request itself. This prevents a false
-  // "Done" response when Accessibility reports success but nothing moved on-screen.
   const instagramSwipeUp = /\b(?:next\s+reel|next\s+video|scroll\s+up|swipe\s+up)\b/i.test(text);
   const instagramSwipeDown = /\b(?:previous\s+reel|previous\s+video|scroll\s+down|swipe\s+down)\b/i.test(text);
+
+  // Instagram is now a companion-app action: no instagram.ps1 / shell automation.
   const instagramSteps = collectMatches(
     text,
     /\b(?:open|launch|start)\s+instagram\b/i,
-    match => ({
-      scriptName: "instagram",
-      args: { request: text, scrollUp: instagramSwipeUp, scrollDown: instagramSwipeDown },
-      label: instagramSwipeUp
-        ? "executed instagram.ps1 and swiped up"
-        : instagramSwipeDown
-          ? "executed instagram.ps1 and swiped down"
-          : "executed instagram.ps1 and opened Instagram",
-      waitAfter: 250
+    () => ({
+      action: "launch_app",
+      args: { packageName: APP_PACKAGES.instagram },
+      label: "opened Instagram with Android companion",
+      waitAfter: 1800
     })
   ).filter(step => !reelsSteps.some(reel => overlaps(step, reel)));
   steps.push(...instagramSteps);
@@ -190,30 +186,26 @@ function planAndroidSteps(rawText) {
       return {
         action: "launch_app",
         args: { packageName: APP_PACKAGES[appName] },
-        label: `opened ${appName === "whatsapp" ? "WhatsApp" : match[1]}`,
+        label: `opened ${appName === "whatsapp" ? "WhatsApp" : match[1]} with Android companion`,
         waitAfter: 1500
       };
     }
   );
   steps.push(...appSteps);
 
-  // If Instagram is being opened in the same request, instagram.ps1 owns the
-  // attached swipe. Standalone gestures still use the Android command transport.
-  if (!instagramSteps.length || !instagramSwipeUp) {
-    steps.push(...collectMatches(text, /\b(?:next\s+reel|next\s+video|scroll\s+up|swipe\s+up)\b/i,
-      () => ({ action: "scroll_down", args: {}, label: "swiped up", waitBefore: 500, waitAfter: 700 })));
-  }
-  if (!instagramSteps.length || !instagramSwipeDown) {
-    steps.push(...collectMatches(text, /\b(?:previous\s+reel|previous\s+video|scroll\s+down|swipe\s+down)\b/i,
-      () => ({ action: "scroll_up", args: {}, label: "swiped down", waitBefore: 500, waitAfter: 700 })));
-  }
+  // Gestures are dispatched by JazzAccessibilityService inside the Android companion.
+  steps.push(...collectMatches(text, /\b(?:next\s+reel|next\s+video|scroll\s+up|swipe\s+up)\b/i,
+    () => ({ action: "scroll_down", args: {}, label: "swiped up with Android companion", waitBefore: instagramSteps.length ? 500 : 0, waitAfter: 700 })));
+
+  steps.push(...collectMatches(text, /\b(?:previous\s+reel|previous\s+video|scroll\s+down|swipe\s+down)\b/i,
+    () => ({ action: "scroll_up", args: {}, label: "swiped down with Android companion", waitBefore: instagramSteps.length ? 500 : 0, waitAfter: 700 })));
 
   steps.push(...collectMatches(text, /\b(?:go\s+back|back)\b/i,
-    () => ({ action: "back", args: {}, label: "went back", waitAfter: 300 })));
+    () => ({ action: "back", args: {}, label: "went back with Android companion", waitAfter: 300 })));
   steps.push(...collectMatches(text, /\b(?:go\s+home|home\s+screen|home)\b/i,
-    () => ({ action: "home", args: {}, label: "opened Home", waitAfter: 300 })));
+    () => ({ action: "home", args: {}, label: "opened Home with Android companion", waitAfter: 300 })));
   steps.push(...collectMatches(text, /\b(?:read|what(?:'s|\s+is)\s+on)\s+(?:the\s+)?screen\b/i,
-    () => ({ action: "read_screen", args: {}, label: "read the screen", waitAfter: 0 })));
+    () => ({ action: "read_screen", args: {}, label: "read the screen with Android companion", waitAfter: 0 })));
 
   return steps.sort((a, b) => a.index - b.index);
 }
@@ -251,7 +243,7 @@ export async function handleAndroidIntent(message) {
       const result = step.scriptName
         ? await sendAndroidScript(deviceId, step.scriptName, step.args || {})
         : await sendAndroidCommand(deviceId, step.action, step.args || {});
-      const actionName = step.scriptName ? `script:${step.scriptName}` : step.action;
+      const actionName = step.scriptName ? `script:${step.scriptName}` : `companion:${step.action}`;
       results.push({ action: actionName, label: step.label, ok: result?.ok !== false, result });
 
       if (result?.ok === false) {
@@ -266,19 +258,17 @@ export async function handleAndroidIntent(message) {
       if (step.waitForUnlock) {
         let unlockState;
 
-        // unlockmobile.ps1 now checks the keyguard itself through direct ADB for
-        // compound requests. Use that verified result first; only fall back to the
-        // companion screen_state command when the script could not determine it.
         if (result?.locked === false) {
           unlockState = { ok: true, state: { locked: false, source: "unlockmobile.ps1" } };
         } else if (result?.waitedForAuthentication === true) {
           unlockState = { ok: false, state: { locked: result?.locked ?? null, source: "unlockmobile.ps1" } };
         } else {
+          // After unlockmobile.ps1 runs, ask the Android companion for keyguard state.
           unlockState = await waitUntilUnlocked(deviceId);
         }
 
         results.push({
-          action: "wait_for_unlock",
+          action: "companion:wait_for_unlock",
           label: unlockState.ok ? "confirmed Mobile was unlocked" : "Mobile is still locked",
           ok: unlockState.ok,
           result: unlockState
@@ -286,7 +276,7 @@ export async function handleAndroidIntent(message) {
 
         if (!unlockState.ok) {
           return {
-            assistant: result?.message || "unlockmobile.ps1 executed, but Mobile is still locked. Authenticate on the device before Jazz continues with the remaining actions.",
+            assistant: result?.message || "unlockmobile.ps1 executed, but Mobile is still locked. Authenticate on the device before Jazz continues with the remaining companion actions.",
             executed: true,
             waitingForAuthentication: true,
             intentVersion: ANDROID_INTENTS_VERSION,
