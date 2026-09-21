@@ -391,13 +391,11 @@ if ([string]::IsNullOrWhiteSpace($query)) {
     throw "youtube.ps1 received an empty YouTube query."
 }
 
-# Ensure the package really exists before trying to automate it.
 $packagePath = (& $adb -s $Serial shell pm path $youtubePackage 2>$null | Out-String)
 if ($LASTEXITCODE -ne 0 -or $packagePath -notmatch '^package:') {
     throw "The YouTube Android app ($youtubePackage) is not installed or is disabled on this device."
 }
 
-# Wake the device but never type credentials.
 & $adb -s $Serial shell input keyevent KEYCODE_WAKEUP | Out-Null
 if ($LASTEXITCODE -ne 0) {
     throw "ADB could not wake the Android device."
@@ -419,9 +417,6 @@ $screen = Get-ScreenSize
 $uiText = Get-UiXml -Attempts 9
 $resultTarget = Find-BestResult -XmlText $uiText -SearchQuery $query -ScreenWidth $screen.Width -ScreenHeight $screen.Height
 
-# SEARCH intent can open YouTube yet leave it on a screen that exposes too little
-# accessibility text. In that case, redo the search through YouTube's own UI rather
-# than falling back to a browser URL.
 if ($null -eq $resultTarget -and $launchMethod -eq 'android-search-intent') {
     Start-YouTubeHome
     Invoke-InAppSearch -SearchQuery $query
@@ -431,8 +426,6 @@ if ($null -eq $resultTarget -and $launchMethod -eq 'android-search-intent') {
 }
 
 if ($null -eq $resultTarget) {
-    # We are on a confirmed native YouTube results screen at this point. Use a
-    # conservative first-result coordinate rather than opening any browser URL.
     $resultTarget = [pscustomobject]@{
         X      = [int]($screen.Width * 0.50)
         Y      = [int]($screen.Height * 0.34)
@@ -453,8 +446,6 @@ if ($LASTEXITCODE -ne 0) {
 
 Start-Sleep -Seconds 4
 
-# If a result unexpectedly bounced to an external browser/custom tab, recover once
-# by returning to native YouTube and repeating only the in-app workflow.
 if (-not (Test-YouTubeForeground)) {
     & $adb -s $Serial shell input keyevent KEYCODE_BACK 2>$null | Out-Null
     Start-Sleep -Milliseconds 500
@@ -483,11 +474,10 @@ if (-not (Test-YouTubeForeground)) {
 }
 
 if (-not (Test-YouTubeForeground)) {
-    $snapshot = (Get-ForegroundSnapshot -replace '\s+', ' ').Trim()
+    $snapshot = (((Get-ForegroundSnapshot) -replace '\s+', ' ').Trim())
     throw "The result was selected, but Android moved away from native YouTube. Foreground: $snapshot"
 }
 
-# Explicit PLAY, not a play/pause toggle.
 & $adb -s $Serial shell input keyevent KEYCODE_MEDIA_PLAY | Out-Null
 Start-Sleep -Milliseconds 900
 
