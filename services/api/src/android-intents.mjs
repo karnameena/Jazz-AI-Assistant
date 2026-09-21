@@ -7,7 +7,7 @@ const APP_PACKAGES = {
   "youtube music": "com.google.android.apps.youtube.music"
 };
 
-export const ANDROID_INTENTS_VERSION = "compound-sequence-v12-youtube-play";
+export const ANDROID_INTENTS_VERSION = "compound-sequence-v13-youtube-tap";
 
 function deviceFor(text) {
   return /\btablet\b/i.test(text) ? "android-tablet" : "android-phone";
@@ -63,6 +63,15 @@ function cleanYouTubeQuery(raw) {
     .trim();
 }
 
+function clickableYouTubeText(query) {
+  const cleaned = String(query || "")
+    .replace(/\s+(?:official\s+)?(?:video\s+)?song\s*$/i, "")
+    .replace(/\s+(?:official\s+)?video\s*$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleaned || query;
+}
+
 function youtubeSearchStep(query, index, length) {
   const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
   return {
@@ -80,7 +89,7 @@ function youtubeResultClickStep(query, index) {
     index,
     length: 0,
     action: "click_text",
-    args: { text: query },
+    args: { text: clickableYouTubeText(query) },
     label: `played \"${query}\"`,
     waitAfter: 800
   };
@@ -105,7 +114,7 @@ function youtubeSearchSteps(text) {
     if (!requestedPlay) return [searchStep];
 
     return [
-      { ...searchStep, waitAfter: 3600 },
+      { ...searchStep, waitAfter: 4200 },
       youtubeResultClickStep(query, (match.index ?? 0) + match[0].length + 0.01)
     ];
   }
@@ -122,7 +131,7 @@ function youtubePlaySteps(text) {
 
   const searchStep = youtubeSearchStep(query, match.index ?? 0, match[0].length);
   return [
-    { ...searchStep, waitAfter: 3600 },
+    { ...searchStep, waitAfter: 4200 },
     youtubeResultClickStep(query, (match.index ?? 0) + match[0].length + 0.01)
   ];
 }
