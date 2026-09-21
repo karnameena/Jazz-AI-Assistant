@@ -7,7 +7,7 @@ const APP_PACKAGES = {
   "youtube music": "com.google.android.apps.youtube.music"
 };
 
-export const ANDROID_INTENTS_VERSION = "compound-sequence-v15-youtube-script-play";
+export const ANDROID_INTENTS_VERSION = "compound-sequence-v16-youtube-direct-play";
 
 function deviceFor(text) {
   return /\btablet\b/i.test(text) ? "android-tablet" : "android-phone";
@@ -53,14 +53,20 @@ function extractAmount(text) {
 }
 
 function cleanYouTubeQuery(raw) {
-  return String(raw || "")
+  let value = String(raw || "").trim();
+  value = value
     .replace(/^youtube(?:\s+music)?\s+(?:for\s+)?/i, "")
+    .replace(/^\s*(?:the\s+)?(?:song|video|music|track)\s+/i, "")
+    .replace(/^[\s'"‘’“”`]+/, "")
+    .replace(/[\s'"‘’“”`.,!?;:]+$/, "")
     .replace(/\s+(?:and\s+then\s+|then\s+|and\s+)?play(?:\s+(?:it|this|the\s+(?:song|video)))?\s*$/i, "")
     .replace(/\s+(?:on|in)\s+youtube(?:\s+music)?\s*$/i, "")
     .replace(/\s+(?:on|in)\s+(?:my\s+)?(?:mobile|phone|tablet)\s*$/i, "")
     .replace(/\s+(?:please|jazz)\s*$/i, "")
+    .replace(/[\s'"‘’“”`.,!?;:]+$/, "")
     .replace(/\s+/g, " ")
     .trim();
+  return value;
 }
 
 function youtubeSearchStep(query, index, length) {
@@ -297,9 +303,9 @@ export async function handleAndroidIntent(message) {
       }
 
       if (step.waitAfter) await wait(step.waitAfter);
-    } catch {
+    } catch (error) {
       return {
-        assistant: `I couldn't complete ${cleanActionLabel(step.label) || "that action"}.`,
+        assistant: `I couldn't complete ${cleanActionLabel(step.label) || "that action"}: ${error instanceof Error ? error.message : String(error)}`,
         executed: results.some(item => item.ok),
         intentVersion: ANDROID_INTENTS_VERSION,
         steps: results
