@@ -33,6 +33,41 @@ if (-not (Test-Path ".\scripts\android\instagram.ps1")) {
   throw "instagram.ps1 is missing after repair."
 }
 
+# Prefer the one active IPv4:port ADB transport when Windows shows both a TCP
+# transport and an mDNS alias for the same physical phone. Do not rewrite .env;
+# this override is inherited only by the restarted Jazz bridge process.
+try {
+  $bridgeEnv = Join-Path $root "bridges\windows-adb\.env"
+  $adbPath = "adb"
+  if (Test-Path $bridgeEnv) {
+    foreach ($line in Get-Content $bridgeEnv) {
+      if ($line -match '^\s*ADB_PATH\s*=\s*(.+?)\s*$') {
+        $candidate = $Matches[1].Trim().Trim('"').Trim("'")
+        if ($candidate) { $adbPath = $candidate }
+        break
+      }
+    }
+  }
+
+  $adbOutput = & $adbPath devices 2>$null
+  $tcpSerials = @(
+    $adbOutput |
+      ForEach-Object {
+        if ($_ -match '^\s*(\d{1,3}(?:\.\d{1,3}){3}:\d+)\s+device\b') { $Matches[1] }
+      } |
+      Sort-Object -Unique
+  )
+
+  if ($tcpSerials.Count -eq 1) {
+    $env:JAZZ_ANDROID_PHONE_SERIAL = $tcpSerials[0]
+    Write-Host "Using active phone ADB transport: $($tcpSerials[0])" -ForegroundColor Green
+  } elseif ($tcpSerials.Count -gt 1) {
+    Write-Warning "More than one TCP ADB device is active; keeping the configured Jazz phone identity."
+  }
+} catch {
+  Write-Warning "Could not auto-select the active TCP ADB transport: $($_.Exception.Message)"
+}
+
 Write-Host "Android command router verified: compound-sequence-v8-scripted-instagram" -ForegroundColor Green
 Write-Host "unlockmobile.ps1 verified." -ForegroundColor Green
 Write-Host "instagram.ps1 verified." -ForegroundColor Green
