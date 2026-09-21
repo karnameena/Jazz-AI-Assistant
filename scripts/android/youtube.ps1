@@ -58,7 +58,8 @@ function Get-UiXml {
 
 function Get-Bounds {
     param($Node)
-    if ($null -eq $Node -or $null -eq $Node.GetAttribute) { return $null }
+    if ($null -eq $Node) { return $null }
+
     $bounds = [string]$Node.GetAttribute('bounds')
     $m = [regex]::Match($bounds, '\[(\d+),(\d+)\]\[(\d+),(\d+)\]')
     if (-not $m.Success) { return $null }
@@ -134,6 +135,7 @@ function Find-BestResult {
         $nodeWidth = $bounds.X2 - $bounds.X1
         $nodeHeight = $bounds.Y2 - $bounds.Y1
 
+        # Exclude the top search box/header and bottom navigation.
         if ($centerY -lt [int]($ScreenHeight * 0.14) -or $centerY -gt [int]($ScreenHeight * 0.91)) { continue }
         if ($nodeWidth -gt [int]($ScreenWidth * 0.98) -and $nodeHeight -gt [int]($ScreenHeight * 0.55)) { continue }
 
@@ -149,7 +151,7 @@ function Find-BestResult {
         if ($labelLower.Contains($queryLower)) { $score += 120 }
         if ($matchedTokens -eq $tokens.Count -and $tokens.Count -gt 0) { $score += 45 }
         if ($labelLower -match '\b(?:official|video|audio|lyric|lyrics|song)\b') { $score += 6 }
-        if ([string]$targetNode.GetAttribute('clickable') -eq 'true') { $score += 8 }
+        if (([string]$targetNode.GetAttribute('clickable')) -eq 'true') { $score += 8 }
 
         if ($matchedTokens -gt 0 -and $score -gt $bestScore) {
             $bestScore = $score
@@ -163,7 +165,7 @@ function Find-BestResult {
         }
 
         $looksLikeNavigation = $labelLower -match '^(home|shorts|subscriptions|library|you|search|create|notifications?)$'
-        if (-not $looksLikeNavigation -and [string]$targetNode.GetAttribute('clickable') -eq 'true') {
+        if (-not $looksLikeNavigation -and (([string]$targetNode.GetAttribute('clickable')) -eq 'true')) {
             $distance = [math]::Abs($centerY - ($ScreenHeight * 0.36))
             if ($distance -lt $fallbackDistance) {
                 $fallbackDistance = $distance
@@ -180,6 +182,20 @@ function Find-BestResult {
 
     if ($null -ne $best) { return $best }
     return $fallback
+}
+
+function Open-YouTubeResultsUrl {
+    param([string]$SearchQuery)
+
+    $encoded = [uri]::EscapeDataString($SearchQuery)
+    $searchUrl = "https://www.youtube.com/results?search_query=$encoded"
+    return Invoke-AdbCapture @(
+        '-s', $Serial,
+        'shell', 'am', 'start', '-W',
+        '-a', 'android.intent.action.VIEW',
+        '-d', $searchUrl,
+        '-p', $youtubePackage
+    )
 }
 
 $request = $null
@@ -226,9 +242,9 @@ if ($LASTEXITCODE -ne 0) {
 }
 Start-Sleep -Milliseconds 450
 
-# If keyguard is visibly active, do not pretend YouTube can be controlled behind it.
+# Do not report success if Android is still presenting the keyguard.
 $windowPolicy = (& $adb -s $Serial shell dumpsys window policy 2>$null | Out-String)
-if ($windowPolicy -match '(?i)(?:isKeyguardShowing|mShowingLockscreen|showing)\s*=\s*true') {
+if ($windowPolicy -match '(?i)(?:isKeyguardShowing|mShowingLockscreen|mKeyguardShowing|keyguardShowing)\s*=\s*true') {
     throw "Mobile is locked. Unlock the phone first, then ask Jazz to play '$query' on YouTube."
 }
 
@@ -236,8 +252,9 @@ if ($windowPolicy -match '(?i)(?:isKeyguardShowing|mShowingLockscreen|showing)\s
 & $adb -s $Serial shell am force-stop $youtubePackage | Out-Null
 Start-Sleep -Milliseconds 500
 
-# 3) Open YouTube search. Prefer Android's SEARCH intent because it lands directly
-# inside the YouTube app. Fall back to the package-scoped YouTube results URL.
+# 3) Prefer Android's SEARCH intent. If that intent is unsupported, or it opens
+# YouTube without exposing a matching search result, automatically retry with the
+# package-scoped YouTube results URL.
 $launchMethod = "android-search-intent"
 $searchLaunch = Invoke-AdbCapture @(
     '-s', $Serial,
@@ -249,15 +266,7 @@ $searchLaunch = Invoke-AdbCapture @(
 
 if ($searchLaunch.ExitCode -ne 0 -or (Has-RealLaunchError $searchLaunch.Output)) {
     $launchMethod = "youtube-results-url"
-    $encoded = [uri]::EscapeDataString($query)
-    $searchUrl = "https://www.youtube.com/results?search_query=$encoded"
-    $searchLaunch = Invoke-AdbCapture @(
-        '-s', $Serial,
-        'shell', 'am', 'start', '-W',
-        '-a', 'android.intent.action.VIEW',
-        '-d', $searchUrl,
-        '-p', $youtubePackage
-    )
+    $searchLaunch = Open-YouTubeResultsUrl -SearchQuery $query
 }
 
 if ($searchLaunch.ExitCode -ne 0 -or (Has-RealLaunchError $searchLaunch.Output)) {
@@ -274,16 +283,25 @@ if ($foreground -and $foreground -notmatch 'com\.google\.android\.youtube') {
     throw "YouTube did not become the foreground app after searching for '$query'."
 }
 
-# 4) Read the real YouTube UI and find the best matching result. The matcher scores
-# exact title text, query tokens, and clickable ancestors instead of blindly tapping
-# a fixed coordinate.
+# 4) Read the real YouTube UI and find the best matching result. Exact title/token
+# matching is preferred. If SEARCH intent did not produce a usable result, retry the
+# URL strategy before falling back to a screen-relative tap.
 $screen = Get-ScreenSize
 $uiText = Get-UiXml -Attempts 8
 $resultTarget = Find-BestResult -XmlText $uiText -SearchQuery $query -ScreenWidth $screen.Width -ScreenHeight $screen.Height
 
+if (($null -eq $resultTarget -or $resultTarget.Method -ne 'ui-text-match') -and $launchMethod -eq 'android-search-intent') {
+    $urlLaunch = Open-YouTubeResultsUrl -SearchQuery $query
+    if ($urlLaunch.ExitCode -eq 0 -and -not (Has-RealLaunchError $urlLaunch.Output)) {
+        $launchMethod = "youtube-results-url-after-search-intent"
+        Start-Sleep -Seconds 4
+        $uiText = Get-UiXml -Attempts 8
+        $urlTarget = Find-BestResult -XmlText $uiText -SearchQuery $query -ScreenWidth $screen.Width -ScreenHeight $screen.Height
+        if ($null -ne $urlTarget) { $resultTarget = $urlTarget }
+    }
+}
+
 if ($null -eq $resultTarget) {
-    # Last-resort coordinate is relative to the real screen size and aimed at the
-    # first result card, not a hard-coded device-specific pixel position.
     $resultTarget = [pscustomobject]@{
         X      = [int]($screen.Width * 0.50)
         Y      = [int]($screen.Height * 0.36)
