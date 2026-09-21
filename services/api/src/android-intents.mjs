@@ -7,7 +7,7 @@ const APP_PACKAGES = {
   "youtube music": "com.google.android.apps.youtube.music"
 };
 
-export const ANDROID_INTENTS_VERSION = "compound-sequence-v10-friendly-messages";
+export const ANDROID_INTENTS_VERSION = "compound-sequence-v11-clean-replies";
 
 function deviceFor(text) {
   return /\btablet\b/i.test(text) ? "android-tablet" : "android-phone";
@@ -25,6 +25,15 @@ function collectMatches(text, regex, makeStep) {
 
 function overlaps(a, b) {
   return a.index < b.index + b.length && b.index < a.index + a.length;
+}
+
+function cleanActionLabel(label) {
+  return String(label || "")
+    .replace(/\s+with\s+Android\s+companion\b/gi, "")
+    .replace(/\s+using\s+Android\s+companion\b/gi, "")
+    .replace(/\s+on\s+(?:Mobile|Tablet)\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function canonicalAppName(raw) {
@@ -234,12 +243,13 @@ export async function handleAndroidIntent(message) {
       const result = step.scriptName
         ? await sendAndroidScript(deviceId, step.scriptName, step.args || {})
         : await sendAndroidCommand(deviceId, step.action, step.args || {});
-      const actionName = step.scriptName ? `script:${step.scriptName}` : `companion:${step.action}`;
-      results.push({ action: actionName, label: step.label, ok: result?.ok !== false, result });
+      const actionName = step.scriptName ? `script:${step.scriptName}` : `android:${step.action}`;
+      const friendlyLabel = cleanActionLabel(step.label);
+      results.push({ action: actionName, label: friendlyLabel, ok: result?.ok !== false, result });
 
       if (result?.ok === false) {
         return {
-          assistant: `I couldn't complete that action on ${device.name}.`,
+          assistant: `I couldn't complete ${friendlyLabel || "that action"}.`,
           executed: results.some(item => item.ok),
           intentVersion: ANDROID_INTENTS_VERSION,
           steps: results
@@ -278,7 +288,7 @@ export async function handleAndroidIntent(message) {
       if (step.waitAfter) await wait(step.waitAfter);
     } catch {
       return {
-        assistant: `I couldn't complete that action on ${device.name}.`,
+        assistant: `I couldn't complete ${cleanActionLabel(step.label) || "that action"}.`,
         executed: results.some(item => item.ok),
         intentVersion: ANDROID_INTENTS_VERSION,
         steps: results
@@ -286,9 +296,9 @@ export async function handleAndroidIntent(message) {
     }
   }
 
-  const summary = steps.map(step => step.label).join(", then ");
+  const summary = steps.map(step => cleanActionLabel(step.label)).filter(Boolean).join(", then ");
   return {
-    assistant: `Done, Mama — ${summary}. What would you like me to do next?`,
+    assistant: `Done, Mama — ${summary}.`,
     executed: true,
     tool: "android.sequence",
     intentVersion: ANDROID_INTENTS_VERSION,
