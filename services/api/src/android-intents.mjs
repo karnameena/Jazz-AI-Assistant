@@ -7,7 +7,7 @@ const APP_PACKAGES = {
   "youtube music": "com.google.android.apps.youtube.music"
 };
 
-export const ANDROID_INTENTS_VERSION = "compound-sequence-v6";
+export const ANDROID_INTENTS_VERSION = "compound-sequence-v7";
 
 function deviceFor(text) {
   return /\btablet\b/i.test(text) ? "android-tablet" : "android-phone";
@@ -108,15 +108,17 @@ function planAndroidSteps(text) {
   const steps = [];
 
   // Registered scripts and normal Android actions share one ordered execution plan.
-  // Example: "Hey Jazz unlock mobile and open Instagram scroll up" executes all 3.
+  // A compound request such as "unlock mobile and open Instagram scroll up" must
+  // execute every requested step rather than matching only the app/gesture part.
   steps.push(...collectMatches(
     text,
-    /\bunlock\s+(?:my\s+)?(?:mobile|phone)(?:\s+jazz)?\b/i,
+    /\bunlock(?:\s+(?:my\s+)?(?:mobile|phone))?(?:\s+jazz)?\b/i,
     match => ({
       scriptName: "unlockmobile",
       args: { request: match[0] },
-      label: "ran unlockmobile.ps1",
-      waitAfter: 1200
+      label: "executed unlockmobile.ps1",
+      waitForUnlock: true,
+      waitAfter: 250
     })
   ));
 
@@ -128,7 +130,7 @@ function planAndroidSteps(text) {
       return {
         scriptName: "paymom",
         args: { amount, request: match[0] },
-        label: amount !== null ? `ran pay-mom.ps1 for ₹${amount}` : "ran pay-mom.ps1",
+        label: amount !== null ? `executed pay-mom.ps1 for ₹${amount}` : "executed pay-mom.ps1",
         waitAfter: 800
       };
     }
@@ -140,7 +142,7 @@ function planAndroidSteps(text) {
     match => ({
       scriptName: "screenshot",
       args: { request: match[0] },
-      label: "ran screenshot script",
+      label: "executed screenshot script",
       waitAfter: 600
     })
   ));
@@ -167,7 +169,6 @@ function planAndroidSteps(text) {
         action: "launch_app",
         args: { packageName: APP_PACKAGES[appName] },
         label: `opened ${appName === "whatsapp" ? "WhatsApp" : match[1]}`,
-        // Instagram often needs several seconds before it accepts a gesture after launch.
         waitAfter: appName === "instagram" ? 5500 : 1500
       };
     }
@@ -187,6 +188,20 @@ function planAndroidSteps(text) {
     () => ({ action: "read_screen", args: {}, label: "read the screen", waitAfter: 0 })));
 
   return steps.sort((a, b) => a.index - b.index);
+}
+
+async function waitUntilUnlocked(deviceId, timeoutMs = 20000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      const state = await sendAndroidCommand(deviceId, "screen_state", {});
+      if (state?.ok !== false && state?.locked === false) {
+        return { ok: true, state };
+      }
+    } catch {}
+    await wait(500);
+  }
+  return { ok: false };
 }
 
 export async function handleAndroidIntent(message) {
@@ -219,6 +234,31 @@ export async function handleAndroidIntent(message) {
           steps: results
         };
       }
+
+      // After the unlock script, wait for Android to report that the keyguard is
+      // actually gone before continuing with the rest of a compound request.
+      // This lets one voice command continue automatically after normal device
+      // authentication, instead of opening apps while the phone is still locked.
+      if (step.waitForUnlock) {
+        const unlockState = await waitUntilUnlocked(deviceId);
+        results.push({
+          action: "wait_for_unlock",
+          label: unlockState.ok ? "confirmed Mobile was unlocked" : "waited for Mobile authentication",
+          ok: unlockState.ok,
+          result: unlockState
+        });
+
+        if (!unlockState.ok && steps.length > 1) {
+          return {
+            assistant: "I executed unlockmobile.ps1 and woke Mobile, but it is still locked. Authenticate on the device within 20 seconds, then Jazz can continue the remaining actions from one command.",
+            executed: true,
+            waitingForAuthentication: true,
+            intentVersion: ANDROID_INTENTS_VERSION,
+            steps: results
+          };
+        }
+      }
+
       if (step.waitAfter) await wait(step.waitAfter);
     } catch (error) {
       return {
