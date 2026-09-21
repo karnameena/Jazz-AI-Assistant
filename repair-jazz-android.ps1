@@ -10,7 +10,6 @@ $files = @(
   "services/api/src/script-registry.mjs",
   "bridges/windows-adb/adb-bridge.mjs",
   "scripts/android/unlockmobile.ps1",
-  "scripts/android/instagram.ps1",
   "start-jazz.ps1"
 )
 
@@ -22,16 +21,20 @@ if ($LASTEXITCODE -ne 0) { throw "Could not refresh the Jazz Android control fil
 
 $intentFile = ".\services\api\src\android-intents.mjs"
 $intentText = Get-Content $intentFile -Raw
-if ($intentText -notmatch 'compound-sequence-v8-scripted-instagram') {
-  throw "Android control repair failed: expected compound-sequence-v8-scripted-instagram."
+$expectedIntentVersion = 'compound-sequence-v9-companion-apps'
+if ($intentText -notmatch [regex]::Escape($expectedIntentVersion)) {
+  throw "Android control repair failed: expected $expectedIntentVersion."
 }
 
 if (-not (Test-Path ".\scripts\android\unlockmobile.ps1")) {
   throw "unlockmobile.ps1 is missing after repair."
 }
-if (-not (Test-Path ".\scripts\android\instagram.ps1")) {
-  throw "instagram.ps1 is missing after repair."
-}
+
+# Instagram/app control is handled by the Android companion in v9, not by
+# instagram.ps1. Payment remains a separately registered local script if present.
+Write-Host "Android command router verified: $expectedIntentVersion" -ForegroundColor Green
+Write-Host "unlockmobile.ps1 verified." -ForegroundColor Green
+Write-Host "Instagram/app control verified as Android companion workflow." -ForegroundColor Green
 
 # Prefer the one active IPv4:port ADB transport when Windows shows both a TCP
 # transport and an mDNS alias for the same physical phone. Do not rewrite .env;
@@ -63,14 +66,12 @@ try {
     Write-Host "Using active phone ADB transport: $($tcpSerials[0])" -ForegroundColor Green
   } elseif ($tcpSerials.Count -gt 1) {
     Write-Warning "More than one TCP ADB device is active; keeping the configured Jazz phone identity."
+  } else {
+    Write-Warning "No active IPv4:port ADB phone transport was detected. Jazz will use its configured/reconnect identity."
   }
 } catch {
   Write-Warning "Could not auto-select the active TCP ADB transport: $($_.Exception.Message)"
 }
 
-Write-Host "Android command router verified: compound-sequence-v8-scripted-instagram" -ForegroundColor Green
-Write-Host "unlockmobile.ps1 verified." -ForegroundColor Green
-Write-Host "instagram.ps1 verified." -ForegroundColor Green
 Write-Host "Restarting Jazz so no stale API/ADB bridge remains..." -ForegroundColor Yellow
-
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\start-jazz.ps1"
