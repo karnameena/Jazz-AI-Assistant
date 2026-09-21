@@ -16,6 +16,7 @@ $runtimeFiles = @(
   "services/api/src/script-registry.mjs",
   "bridges/windows-adb/adb-bridge.mjs",
   "scripts/android/unlockmobile.ps1",
+  "scripts/android/youtube.ps1",
   "tools/piper/setup-windows.ps1",
   "apps/web/package.json",
   "apps/web/vite.config.ts",
