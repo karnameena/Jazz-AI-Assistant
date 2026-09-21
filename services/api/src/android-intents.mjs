@@ -7,7 +7,7 @@ const APP_PACKAGES = {
   "youtube music": "com.google.android.apps.youtube.music"
 };
 
-export const ANDROID_INTENTS_VERSION = "compound-sequence-v16-youtube-direct-play";
+export const ANDROID_INTENTS_VERSION = "compound-sequence-v17-youtube-search-click-play";
 
 function deviceFor(text) {
   return /\btablet\b/i.test(text) ? "android-tablet" : "android-phone";
@@ -69,7 +69,7 @@ function cleanYouTubeQuery(raw) {
   return value;
 }
 
-function youtubeSearchStep(query, index, length) {
+function youtubeSearchStep(query, index, length, waitAfter = 2200) {
   const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
   return {
     index,
@@ -77,8 +77,22 @@ function youtubeSearchStep(query, index, length) {
     action: "open_url",
     args: { url: searchUrl },
     label: `searched YouTube for \"${query}\"`,
-    waitAfter: 1800
+    waitAfter
   };
+}
+
+function youtubePlaySequence(query, index, length) {
+  return [
+    youtubeSearchStep(query, index, length, 2600),
+    {
+      index: index + 0.01,
+      length: 0,
+      action: "click_text",
+      args: { text: query },
+      label: `opened and played \"${query}\"`,
+      waitAfter: 800
+    }
+  ];
 }
 
 function youtubeSearchSteps(text) {
@@ -97,14 +111,7 @@ function youtubeSearchSteps(text) {
     if (!query || /^(?:youtube|youtube music)$/i.test(query)) return [];
 
     if (requestedPlay) {
-      return [{
-        index: match.index ?? 0,
-        length: match[0].length,
-        scriptName: "youtube",
-        args: { query, request: text },
-        label: `played \"${query}\" on YouTube`,
-        waitAfter: 500
-      }];
+      return youtubePlaySequence(query, match.index ?? 0, match[0].length);
     }
 
     return [youtubeSearchStep(query, match.index ?? 0, match[0].length)];
@@ -120,14 +127,7 @@ function youtubePlaySteps(text) {
   const query = cleanYouTubeQuery(match[1]);
   if (!query || /^(?:youtube|youtube music)$/i.test(query)) return [];
 
-  return [{
-    index: match.index ?? 0,
-    length: match[0].length,
-    scriptName: "youtube",
-    args: { query, request: text },
-    label: `played \"${query}\" on YouTube`,
-    waitAfter: 500
-  }];
+  return youtubePlaySequence(query, match.index ?? 0, match[0].length);
 }
 
 function planAndroidSteps(rawText) {
