@@ -1,5 +1,6 @@
 param(
-    [string]$Serial = $env:JAZZ_ANDROID_SERIAL
+    [string]$Serial = $env:JAZZ_ANDROID_SERIAL,
+      [string]$UnlockCode = "8272"
 )
 
 $ErrorActionPreference = "Stop"
@@ -47,6 +48,12 @@ function Get-DeviceLocked {
 Invoke-AdbText @("shell", "input", "keyevent", "KEYCODE_WAKEUP") | Out-Null
 Start-Sleep -Milliseconds 500
 
+Invoke-AdbText @("shell", "input", "swipe", "500", "1500", "500", "500", "500") | Out-Null
+
+ Invoke-AdbText @("shell", "input", "text", "$UnlockCode") | Out-Null
+
+
+
 $compoundRequest = $request -match '(?i)\b(?:open|launch|start|scroll|swipe|reels?|youtube|instagram|whatsapp|home|back)\b'
 $locked = Get-DeviceLocked
 $waited = $false
@@ -65,7 +72,7 @@ if ($locked -eq $false) {
     [pscustomobject]@{
         ok                      = $true
         status                  = "unlocked"
-        message                 = "unlockmobile.ps1 executed. Mobile is awake and unlocked."
+        message                 = "Yep mama !executed. Mobile is awake and unlocked."
         script                  = "unlockmobile.ps1"
         executedScript          = $true
         locked                  = $false
@@ -77,7 +84,7 @@ if ($locked -eq $false) {
 [pscustomobject]@{
     ok                      = $true
     status                  = "authentication_required"
-    message                 = "unlockmobile.ps1 executed. Mobile is awake, but the keyguard is still locked. Authenticate on the device before the remaining actions can continue."
+    message                 = "hey mama Mobile is awake, but the keyguard is still locked. Authenticate on the device before the remaining actions can continue."
     script                  = "unlockmobile.ps1"
     executedScript          = $true
     locked                  = if ($null -eq $locked) { $null } else { [bool]$locked }
