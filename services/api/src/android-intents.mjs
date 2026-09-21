@@ -7,7 +7,7 @@ const APP_PACKAGES = {
   "youtube music": "com.google.android.apps.youtube.music"
 };
 
-export const ANDROID_INTENTS_VERSION = "compound-sequence-v14-youtube-direct-play";
+export const ANDROID_INTENTS_VERSION = "compound-sequence-v15-youtube-script-play";
 
 function deviceFor(text) {
   return /\btablet\b/i.test(text) ? "android-tablet" : "android-phone";
@@ -94,8 +94,8 @@ function youtubeSearchSteps(text) {
       return [{
         index: match.index ?? 0,
         length: match[0].length,
-        action: "play_youtube",
-        args: { query },
+        scriptName: "youtube",
+        args: { query, request: text },
         label: `played \"${query}\" on YouTube`,
         waitAfter: 500
       }];
@@ -117,8 +117,8 @@ function youtubePlaySteps(text) {
   return [{
     index: match.index ?? 0,
     length: match[0].length,
-    action: "play_youtube",
-    args: { query },
+    scriptName: "youtube",
+    args: { query, request: text },
     label: `played \"${query}\" on YouTube`,
     waitAfter: 500
   }];
