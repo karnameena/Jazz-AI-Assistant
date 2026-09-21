@@ -49,10 +49,15 @@ if ([string]::IsNullOrWhiteSpace($query)) {
 if ($LASTEXITCODE -ne 0) {
     throw "ADB could not wake the Android device."
 }
-Start-Sleep -Milliseconds 500
+Start-Sleep -Milliseconds 400
 
-# Open YouTube search results directly in the installed YouTube app. This is more
-# reliable on recent YouTube/Android versions than ACTION_SEARCH.
+# Start from a clean YouTube task. When YouTube was already open Android returned
+# "Activity not started, its current task has been brought to the front" even though
+# the command succeeded. The old script incorrectly treated that normal warning as
+# a failure. Force-stopping first also makes the search deep-link deterministic.
+& $adb -s $Serial shell am force-stop com.google.android.youtube | Out-Null
+Start-Sleep -Milliseconds 350
+
 $encoded = [uri]::EscapeDataString($query)
 $searchUrl = "https://www.youtube.com/results?search_query=$encoded"
 $viewArgs = @(
@@ -64,11 +69,25 @@ $viewArgs = @(
 )
 
 $viewOutput = (& $adb @viewArgs 2>&1 | Out-String)
-if ($LASTEXITCODE -ne 0 -or $viewOutput -match '(?i)error:|unable to resolve intent|activity not started') {
+$viewExit = $LASTEXITCODE
+
+# Do not fail merely because Android prints "Activity not started". That message can
+# mean the existing task was reused successfully. Fail only for a real adb/intent error.
+$realLaunchError = $viewOutput -match '(?im)^\s*(?:error:|exception|unable to resolve intent|security exception|java\.lang\.)'
+if ($viewExit -ne 0 -or $realLaunchError) {
     throw "Could not open YouTube search results for '$query'. $($viewOutput.Trim())"
 }
 
 Start-Sleep -Seconds 4
+
+# Confirm YouTube actually became the foreground app before interacting with it.
+$foreground = (& $adb -s $Serial shell dumpsys activity activities 2>$null |
+    Select-String -Pattern 'mResumedActivity|topResumedActivity' |
+    Select-Object -First 4 |
+    Out-String)
+if ($foreground -and $foreground -notmatch 'com\.google\.android\.youtube') {
+    throw "YouTube did not become the active app after opening search results."
+}
 
 # Read the actual YouTube accessibility tree and tap the result whose visible text
 # best matches the requested song. This avoids hard-coded coordinates where possible.
@@ -159,11 +178,14 @@ if ($LASTEXITCODE -ne 0) {
 
 Start-Sleep -Seconds 3
 
-# Explicitly request PLAY so an already-opened result does not get toggled back to pause.
+# Explicitly request PLAY so an opened result starts/resumes playback.
 & $adb -s $Serial shell input keyevent KEYCODE_MEDIA_PLAY | Out-Null
 Start-Sleep -Milliseconds 700
 
-$activity = (& $adb -s $Serial shell dumpsys activity activities 2>$null | Select-String -Pattern 'mResumedActivity|topResumedActivity' | Select-Object -First 3 | Out-String)
+$activity = (& $adb -s $Serial shell dumpsys activity activities 2>$null |
+    Select-String -Pattern 'mResumedActivity|topResumedActivity' |
+    Select-Object -First 3 |
+    Out-String)
 if ($activity -and $activity -notmatch 'com\.google\.android\.youtube') {
     throw "The YouTube result was selected, but YouTube is not the active app."
 }
