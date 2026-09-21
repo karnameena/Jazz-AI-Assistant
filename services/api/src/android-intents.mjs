@@ -7,7 +7,7 @@ const APP_PACKAGES = {
   "youtube music": "com.google.android.apps.youtube.music"
 };
 
-export const ANDROID_INTENTS_VERSION = "compound-sequence-v13-youtube-tap";
+export const ANDROID_INTENTS_VERSION = "compound-sequence-v14-youtube-direct-play";
 
 function deviceFor(text) {
   return /\btablet\b/i.test(text) ? "android-tablet" : "android-phone";
@@ -63,15 +63,6 @@ function cleanYouTubeQuery(raw) {
     .trim();
 }
 
-function clickableYouTubeText(query) {
-  const cleaned = String(query || "")
-    .replace(/\s+(?:official\s+)?(?:video\s+)?song\s*$/i, "")
-    .replace(/\s+(?:official\s+)?video\s*$/i, "")
-    .replace(/\s+/g, " ")
-    .trim();
-  return cleaned || query;
-}
-
 function youtubeSearchStep(query, index, length) {
   const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
   return {
@@ -81,17 +72,6 @@ function youtubeSearchStep(query, index, length) {
     args: { url: searchUrl },
     label: `searched YouTube for \"${query}\"`,
     waitAfter: 1800
-  };
-}
-
-function youtubeResultClickStep(query, index) {
-  return {
-    index,
-    length: 0,
-    action: "click_text",
-    args: { text: clickableYouTubeText(query) },
-    label: `played \"${query}\"`,
-    waitAfter: 800
   };
 }
 
@@ -110,13 +90,18 @@ function youtubeSearchSteps(text) {
     const query = cleanYouTubeQuery(match[1]);
     if (!query || /^(?:youtube|youtube music)$/i.test(query)) return [];
 
-    const searchStep = youtubeSearchStep(query, match.index ?? 0, match[0].length);
-    if (!requestedPlay) return [searchStep];
+    if (requestedPlay) {
+      return [{
+        index: match.index ?? 0,
+        length: match[0].length,
+        action: "play_youtube",
+        args: { query },
+        label: `played \"${query}\" on YouTube`,
+        waitAfter: 500
+      }];
+    }
 
-    return [
-      { ...searchStep, waitAfter: 4200 },
-      youtubeResultClickStep(query, (match.index ?? 0) + match[0].length + 0.01)
-    ];
+    return [youtubeSearchStep(query, match.index ?? 0, match[0].length)];
   }
 
   return [];
@@ -129,11 +114,14 @@ function youtubePlaySteps(text) {
   const query = cleanYouTubeQuery(match[1]);
   if (!query || /^(?:youtube|youtube music)$/i.test(query)) return [];
 
-  const searchStep = youtubeSearchStep(query, match.index ?? 0, match[0].length);
-  return [
-    { ...searchStep, waitAfter: 4200 },
-    youtubeResultClickStep(query, (match.index ?? 0) + match[0].length + 0.01)
-  ];
+  return [{
+    index: match.index ?? 0,
+    length: match[0].length,
+    action: "play_youtube",
+    args: { query },
+    label: `played \"${query}\" on YouTube`,
+    waitAfter: 500
+  }];
 }
 
 function planAndroidSteps(rawText) {
