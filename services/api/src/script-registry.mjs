@@ -32,8 +32,8 @@ export const scripts = {
   instagram: {
     file: "instagram.ps1",
     files: ["instagram.ps1", "instagram.sh", "insta.sh"],
-    description: "Run Mama's approved Instagram automation",
-    aliases: ["run instagram automation", "instagram automation", "open instagram"],
+    description: "Optional legacy Instagram script; normal Instagram commands use Android companion",
+    aliases: ["run instagram script", "run legacy instagram script"],
     requiresConfirmation: false,
     category: "social",
     workflow: "script"
@@ -41,7 +41,7 @@ export const scripts = {
   youtube: {
     file: "youtube.ps1",
     files: ["youtube.ps1", "youtube.sh"],
-    description: "Run Mama's optional legacy YouTube script",
+    description: "Optional legacy YouTube script; normal YouTube commands use Android companion",
     aliases: ["run youtube automation", "run youtube script"],
     requiresConfirmation: false,
     category: "media",
