@@ -5,6 +5,7 @@ Set-Location $root
 $expectedVersion = "0.10.0-local"
 $apiPort = 8797
 $sttPort = 8798
+$recoveryPort = 8799
 $webPort = 5173
 $bridgePort = 9899
 $logDir = Join-Path $root ".jazz\logs"
@@ -14,6 +15,7 @@ Write-Host "Jazz startup" -ForegroundColor Cyan
 Write-Host "Root: $root"
 Write-Host "API port: $apiPort"
 Write-Host "Local STT port: $sttPort"
+Write-Host "Recovery proxy port: $recoveryPort"
 
 function Test-Http($url) {
   try {
@@ -41,7 +43,7 @@ function Stop-StaleJazzNodeProcesses {
       Where-Object {
         $_.Name -match '^node(\.exe)?$' -and
         $_.CommandLine -match $needle -and
-        ($_.CommandLine -match 'server\.mjs' -or $_.CommandLine -match 'adb-bridge\.mjs' -or $_.CommandLine -match 'services\\stt' -or $_.CommandLine -match 'vite')
+        ($_.CommandLine -match 'server\.mjs' -or $_.CommandLine -match 'adb-bridge\.mjs' -or $_.CommandLine -match 'services\\stt' -or $_.CommandLine -match 'services\\recovery-local' -or $_.CommandLine -match 'vite')
       } |
       ForEach-Object {
         Write-Host "Stopping stale Jazz Node process PID $($_.ProcessId)..." -ForegroundColor DarkYellow
@@ -76,6 +78,7 @@ Stop-StaleJazzNodeProcesses
 Stop-PortListener 8787
 Stop-PortListener $apiPort
 Stop-PortListener $sttPort
+Stop-PortListener $recoveryPort
 Stop-PortListener $bridgePort
 Stop-PortListener $webPort
 Start-Sleep -Milliseconds 600
@@ -217,7 +220,7 @@ try {
   Write-Warning "Local Whisper STT is not ready; browser recognition will remain as fallback: $($_.Exception.Message)"
 }
 
-# 4) Windows ADB bridge.
+# 4) Windows ADB bridge. Existing local control flow is unchanged.
 try {
   $bridgeEnv = Join-Path $root "bridges\windows-adb\.env"
   $bridgeFile = Join-Path $root "bridges\windows-adb\adb-bridge.mjs"
@@ -244,7 +247,39 @@ try {
   Write-Warning "ADB bridge startup failed: $($_.Exception.Message)"
 }
 
-# 5) Piper. Require the complete runtime path and a real synthesis test. If either
+# 5) Dedicated local recovery proxy. It is intentionally isolated from the ADB,
+# PowerShell script, Accessibility, Ollama and normal Android-command paths.
+$recoveryOut = Join-Path $logDir "recovery.out.log"
+$recoveryErr = Join-Path $logDir "recovery.err.log"
+try {
+  $recoveryServer = Join-Path $root "services\recovery-local\server.mjs"
+  $recoveryEnv = Join-Path $root "services\recovery-local\.env"
+  if (-not (Test-Path $recoveryServer)) { throw "Recovery proxy server is missing: $recoveryServer" }
+  Remove-Item $recoveryOut,$recoveryErr -Force -ErrorAction SilentlyContinue
+  $recoveryArgs = @()
+  if (Test-Path $recoveryEnv) { $recoveryArgs += "--env-file=$recoveryEnv" }
+  $recoveryArgs += $recoveryServer
+  $recoveryProcess = Start-Process -FilePath $node.Source -ArgumentList $recoveryArgs -WorkingDirectory $root -WindowStyle Hidden -RedirectStandardOutput $recoveryOut -RedirectStandardError $recoveryErr -PassThru
+  for ($attempt = 1; $attempt -le 16; $attempt++) {
+    Start-Sleep -Milliseconds 250
+    if (Test-Http "http://127.0.0.1:$recoveryPort/health") { break }
+    if ($recoveryProcess.HasExited) { break }
+  }
+  if (Test-Http "http://127.0.0.1:$recoveryPort/health") {
+    $recoveryHealth = Invoke-RestMethod "http://127.0.0.1:$recoveryPort/health" -TimeoutSec 3
+    Write-Host "Recovery proxy READY on port $recoveryPort, configured=$($recoveryHealth.configured), PID=$($recoveryProcess.Id)" -ForegroundColor Green
+    if (-not $recoveryHealth.configured) {
+      Write-Warning "Recovery proxy is running but not paired to a hosted relay. Copy services/recovery-local/.env.example to .env and configure the relay URL/owner token."
+    }
+  } else {
+    Show-LogTail $recoveryErr "Recovery proxy errors"
+    Write-Warning "Recovery proxy did not become ready. Existing Jazz functions are unaffected."
+  }
+} catch {
+  Write-Warning "Recovery proxy startup failed; existing Jazz functions are unaffected: $($_.Exception.Message)"
+}
+
+# 6) Piper. Require the complete runtime path and a real synthesis test. If either
 # check fails, repair once and retry automatically.
 try {
   $piperSetup = Join-Path $root "tools\piper\setup-windows.ps1"
@@ -283,7 +318,7 @@ try {
   Write-Warning "Piper TTS is not ready; browser TTS fallback remains available: $($_.Exception.Message)"
 }
 
-# 6) Web UI. Clear both old and new Vite caches; vite.config.ts deduplicates
+# 7) Web UI. Clear both old and new Vite caches; vite.config.ts deduplicates
 # react/react-dom so lucide-react and the app share the same hook dispatcher.
 try {
   $webCommand = "Set-Location '$root\apps\web'; `$env:JAZZ_API_PORT='$apiPort'; `$env:JAZZ_STT_PORT='$sttPort'; Remove-Item -Recurse -Force '.\node_modules\.vite' -ErrorAction SilentlyContinue; Remove-Item -Recurse -Force '.\node_modules\.vite-jazz' -ErrorAction SilentlyContinue; pnpm exec vite --force --port $webPort --strictPort"
@@ -298,8 +333,10 @@ Write-Host "Jazz health:" -ForegroundColor Cyan
 (Invoke-RestMethod $healthUrl -TimeoutSec 5) | ConvertTo-Json -Depth 6
 Write-Host ""
 Write-Host "Jazz startup completed." -ForegroundColor Green
-Write-Host "Web: http://localhost:$webPort/?v=20260922-stt1" -ForegroundColor Green
+Write-Host "Web: http://localhost:$webPort/?v=20260922-recovery1" -ForegroundColor Green
 Write-Host "API: http://127.0.0.1:$apiPort/health" -ForegroundColor Green
 Write-Host "STT: http://127.0.0.1:$sttPort/health" -ForegroundColor Green
+Write-Host "Recovery: http://127.0.0.1:$recoveryPort/health" -ForegroundColor Green
 Write-Host "API logs: $apiOut ; $apiErr" -ForegroundColor DarkGray
 Write-Host "STT logs: $sttOut ; $sttErr" -ForegroundColor DarkGray
+Write-Host "Recovery logs: $recoveryOut ; $recoveryErr" -ForegroundColor DarkGray
