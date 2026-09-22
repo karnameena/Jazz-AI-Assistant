@@ -21,10 +21,15 @@ class LostDeviceManager(private val context: Context) {
         prefs.edit().putBoolean(LOST_MODE, enabled).apply()
         RecoveryHeartbeatWorker.schedule(context)
         if (enabled) {
-            ContextCompat.startForegroundService(
-                context,
-                RecoveryForegroundService.intent(context)
-            )
+            try {
+                ContextCompat.startForegroundService(
+                    context,
+                    RecoveryForegroundService.intent(context)
+                )
+            } catch (_: Exception) {
+                // Android can temporarily refuse foreground-service starts depending
+                // on app/device state. The WorkManager heartbeat remains scheduled.
+            }
         } else {
             context.stopService(RecoveryForegroundService.intent(context))
         }
