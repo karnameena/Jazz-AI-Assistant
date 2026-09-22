@@ -253,7 +253,7 @@ function App() {
           <DashboardCard icon={<Sparkles />} title="Quick Actions" action="Edit"><div className="quick-actions-grid">{quickActionList.map(action => <QuickAction key={action.label} {...action} />)}</div></DashboardCard>
           <DashboardCard icon={<Smartphone />} title="Devices" action={showAllDevices ? "Collapse" : "See all"} actionClick={() => setShowAllDevices(v => !v)}><div className="device-list">{(visibleDevices.length ? visibleDevices : [{ id: "android-phone", name: "Android Phone", kind: "android", status: "not configured", bridge: false }]).map(device => <DeviceRow key={device.id} device={device} onClick={() => setShowAllDevices(true)} />)}</div></DashboardCard>
           <DashboardCard icon={<Bell />} title="Upcoming Reminders" action="See all"><div className="reminder-list">{reminders.length ? reminders.slice(0, 3).map(item => <ReminderRow key={item.id} item={item} />) : <div className="empty-row">No reminders yet. Use Set Reminder.</div>}</div></DashboardCard>
-          <div className="status-card"><div className="status-top"><div><div className="status-heading"><span className="status-icon"><Zap size={16} /></span><strong>Jazz Status</strong></div><p>Voice assistant ready • {voiceState === "listening" ? "listening..." : voiceState === "speaking" ? "speaking..." : "online"}</p></div><span className="online-badge">Online</span></div><div className="status-wave">{Array.from({ length: 22 }, (_, i) => <i key={i} style={{ height: `${6 + ((i * 11) % 27)}px` }} />}</div></div>
+          <div className="status-card"><div className="status-top"><div><div className="status-heading"><span className="status-icon"><Zap size={16} /></span><strong>Jazz Status</strong></div><p>Voice assistant ready • {voiceState === "listening" ? "listening..." : voiceState === "speaking" ? "speaking..." : "online"}</p></div><span className="online-badge">Online</span></div><div className="status-wave">{Array.from({ length: 22 }, (_, i) => <i key={i} style={{ height: `${6 + ((i * 11) % 27)}px` }} />)}</div></div>
         </aside>
       </div>
       <section className="analytics-row"><div className="activity-card"><div className="analytics-heading"><div><span className="heading-icon blue"><Activity size={16} /></span><strong>Activity Overview</strong></div><button>This Week <ChevronDown size={14} /></button></div><div className="activity-content"><div className="productivity-ring"><span>68%</span><small>Productivity Score</small></div><div className="activity-legend"><Legend dot="purple" label="Chats" value="42%" /><Legend dot="cyan" label="Tasks" value="28%" /><Legend dot="green" label="Automations" value="18%" /><Legend dot="blue" label="Learning" value="12%" /></div></div></div></section></div>
@@ -267,9 +267,43 @@ function App() {
 
 function NavItem({ icon, text, active, badge, dropdown, onClick }: { icon: React.ReactNode; text: string; active?: boolean; badge?: string; dropdown?: boolean; onClick?: () => void }) { return <button className={`nav-item ${active ? "active" : ""}`} onClick={onClick}>{React.cloneElement(icon as React.ReactElement, { size: 18 })}<span>{text}</span>{badge && <em>{badge}</em>}{dropdown && <ChevronDown size={15} className="nav-chevron" />}</button>; }
 function ChatMessage({ message }: { message: Message }) { return message.sender === "user" ? <div className="message-row user-row"><div className="user-bubble"><div>{message.text}</div><small>{message.time}<Check size={12} /><Check size={12} className="check-overlap" /></small></div></div> : <div className="message-row jazz-row"><div className="jazz-avatar"><Wave /></div><div className="jazz-bubble"><div>{message.text || <span className="streaming-cursor">▌</span>}</div><small>{message.time}</small></div></div>; }
-function VoiceListeningBubble({ transcript }: { transcript: string }) { return <div className="voice-listening-layer"><div className="voice-listening-bubble"><div className="voice-orb"><Mic size={18} /></div><div className="voice-copy"><strong>Jazz is listening...</strong><span>{transcript || "Speak naturally..."}</span></div><div className="voice-bars">{Array.from({ length: 13 }, (_, i) => <i key={i} style={{ animationDelay: `${i * 55}ms` }} />)}</div></div></div>; }
-function Wave() { return <div className="wave-logo">{Array.from({ length: 7 }, (_, i) => <i key={i} style={{ height: `${8 + Math.abs(3 - i) * 4 + (i === 3 ? 10 : 0)}px` }} />)}</div>; }
-function MiniWave() { return <div className="mini-wave">{Array.from({ length: 7 }, (_, i) => <i key={i} style={{ height: `${7 + (i === 3 ? 11 : i % 3 * 3)}px` }} />}</div>; }
+
+function VoiceListeningBubble({ transcript }: { transcript: string }) {
+  return (
+    <div className="voice-listening-layer">
+      <div className="voice-listening-bubble">
+        <div className="voice-orb"><Mic size={18} /></div>
+        <div className="voice-copy"><strong>Jazz is listening...</strong><span>{transcript || "Speak naturally..."}</span></div>
+        <div className="voice-bars">
+          {Array.from({ length: 13 }, (_, i) => (
+            <i key={i} style={{ animationDelay: `${i * 55}ms` }} />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Wave() {
+  return (
+    <div className="wave-logo">
+      {Array.from({ length: 7 }, (_, i) => (
+        <i key={i} style={{ height: `${8 + Math.abs(3 - i) * 4 + (i === 3 ? 10 : 0)}px` }} />
+      ))}
+    </div>
+  );
+}
+
+function MiniWave() {
+  return (
+    <div className="mini-wave">
+      {Array.from({ length: 7 }, (_, i) => (
+        <i key={i} style={{ height: `${7 + (i === 3 ? 11 : (i % 3) * 3)}px` }} />
+      ))}
+    </div>
+  );
+}
+
 function Stat({ label, value }: { label: string; value: string }) { return <div className="stat"><span>{label}</span><strong>{value}</strong></div>; }
 function Suggestion({ label, icon, onClick }: { label: string; icon: React.ReactNode; onClick: () => void }) { return <button onClick={onClick}>{React.cloneElement(icon as React.ReactElement, { size: 13 })}{label}</button>; }
 function QuickAction({ label, icon, run }: QuickCommand) { return <button className="quick-action" onClick={() => void run()}>{icon}<span>{label}</span></button>; }
