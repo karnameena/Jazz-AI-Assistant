@@ -135,6 +135,16 @@ function locationPayload(data) {
   };
 }
 
+function photoMarker(photo) {
+  return {
+    deviceId: photo?.deviceId || null,
+    deviceName: photo?.deviceName || "Mama Android",
+    camera: photo?.camera || "front",
+    timestamp: photo?.timestamp || null,
+    available: Boolean(photo?.ok)
+  };
+}
+
 async function executeIntent(intent) {
   if (intent.type === "status") {
     const data = await relay("/android/device/status");
@@ -182,18 +192,18 @@ async function executeIntent(intent) {
     if (data.completed && data.result?.ok) {
       const photo = await relay("/android/device/recovery-photo");
       return {
-        assistant: `Recovery photo captured from your registered phone. [[JAZZ_RECOVERY_PHOTO]]${JSON.stringify(photo)}`,
-        recovery: { type: "photo", data: photo }
+        assistant: `Recovery photo captured from your registered phone. [[JAZZ_RECOVERY_PHOTO]]${JSON.stringify(photoMarker(photo))}`,
+        recovery: { type: "photo", data: photoMarker(photo) }
       };
     }
     return { assistant: data.message || "Recovery camera command queued for your registered phone.", recovery: { type: "camera", data } };
   }
   if (intent.type === "photo") {
     const photo = await relay("/android/device/recovery-photo");
-    if (!photo.ok) return { assistant: "There is no recovery photo available yet.", recovery: { type: "photo", data: photo } };
+    if (!photo.ok) return { assistant: "There is no recovery photo available yet.", recovery: { type: "photo", data: photoMarker(photo) } };
     return {
-      assistant: `Here is the latest recovery photo. [[JAZZ_RECOVERY_PHOTO]]${JSON.stringify(photo)}`,
-      recovery: { type: "photo", data: photo }
+      assistant: `Here is the latest recovery photo. [[JAZZ_RECOVERY_PHOTO]]${JSON.stringify(photoMarker(photo))}`,
+      recovery: { type: "photo", data: photoMarker(photo) }
     };
   }
   return null;
@@ -243,7 +253,7 @@ const server = http.createServer(async (req, res) => {
       const data = await relay("/android/device/camera", "POST", { camera: input.camera === "rear" ? "rear" : "front" });
       let photo = null;
       if (data.completed && data.result?.ok) photo = await relay("/android/device/recovery-photo");
-      return sendJson(req, res, 200, { ok: true, data, photo });
+      return sendJson(req, res, 200, { ok: true, data, photo: photo ? photoMarker(photo) : null });
     }
     if (req.method === "GET" && path === "/api/recovery/photo") {
       const data = await relay("/android/device/recovery-photo");
