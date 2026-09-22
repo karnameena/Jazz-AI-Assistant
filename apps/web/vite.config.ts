@@ -42,8 +42,10 @@ export default defineConfig(({ mode }) => ({
     port: 5173,
     strictPort: true,
     proxy: {
-      // This is the normal Jazz path. Telegram is NOT proxied here.
-      "/api": `http://127.0.0.1:${apiPort}`,
+      // Proxy only real API routes such as /api/chat and /api/tts.
+      // Using plain "/api" also matched /api-runtime.js and sent that public
+      // browser bootstrap file to the API server, which returned 404.
+      "^/api/": `http://127.0.0.1:${apiPort}`,
 
       // Local Whisper STT stays bound to loopback. The browser reaches it only
       // through Vite, so voice input also works when Jazz is opened through a tunnel.
