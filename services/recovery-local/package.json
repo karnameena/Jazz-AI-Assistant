@@ -1,0 +1,9 @@
+{
+  "name": "@jazz/recovery-local",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "scripts": {
+    "start": "node server.mjs"
+  }
+}
