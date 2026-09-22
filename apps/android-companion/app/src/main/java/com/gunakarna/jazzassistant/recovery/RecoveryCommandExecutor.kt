@@ -23,6 +23,7 @@ class RecoveryCommandExecutor(private val context: Context) {
                 .put("deviceName", securityManager.deviceName())
                 .put("mode", lostDeviceManager.mode())
                 .put("status", statusManager.snapshot())
+                .put("locationHistory", locationManager.encryptedHistory())
                 .also { locationManager.cachedLocation()?.let { cached -> it.put("lastKnownLocation", cached) } }
             "device_location" -> locationManager.currentLocation()
                 .put("deviceId", securityManager.deviceId())
