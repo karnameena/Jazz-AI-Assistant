@@ -44,6 +44,7 @@ function youtubePlayQuery(text) {
 function looksLikeAndroidCommand(text) {
   return [
     /^(?:open|launch|start)\s+.+/i,
+    /^close\s+.+/i,
     /^(?:go\s+)?back$/i,
     /^(?:go\s+)?home(?:\s+screen)?$/i,
     /^(?:open\s+)?recent\s+apps$/i,
