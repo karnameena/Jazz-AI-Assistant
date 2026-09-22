@@ -21,6 +21,7 @@ $runtimeFiles = @(
   "tools/piper/setup-windows.ps1",
   "apps/web/package.json",
   "apps/web/vite.config.ts",
+  "apps/web/telegram-bridge.ts",
   "apps/web/index.html",
   "apps/web/public/api-runtime.js",
   "apps/web/public/favicon.svg",
@@ -86,8 +87,18 @@ if ($vite -notmatch 'require\.resolve\("react/package\.json"') {
 if ($vite -notmatch 'host: "0\.0\.0\.0"') {
   throw "Repair failed: Jazz web is not exposed to the local network."
 }
-if ($vite -notmatch 'jazz-telegram-bridge' -or $vite -notmatch '/telegram-api/status') {
-  throw "Repair failed: Jazz Telegram bridge is missing from Vite."
+if ($vite -notmatch 'telegramBridgePlugin' -or $vite -notmatch 'telegram-bridge') {
+  throw "Repair failed: isolated Telegram plugin is not wired into Vite."
+}
+if (-not (Test-Path ".\apps\web\telegram-bridge.ts")) {
+  throw "Repair failed: isolated Telegram popup bridge file is missing."
+}
+$telegramBridge = Get-Content ".\apps\web\telegram-bridge.ts" -Raw
+if ($telegramBridge -notmatch 'jazz-telegram-popup-bridge' -or $telegramBridge -notmatch '/telegram-api/status') {
+  throw "Repair failed: Telegram popup endpoints are missing."
+}
+if ($telegramBridge -notmatch 'Normal Jazz chat continues to use /api/chat') {
+  throw "Repair failed: Telegram/Jazz router isolation guard is missing."
 }
 if (-not (Test-Path ".\apps\web\src\TelegramPanel.tsx") -or -not (Test-Path ".\apps\web\src\telegram.css")) {
   throw "Repair failed: Jazz Telegram UI files are missing."
@@ -161,7 +172,8 @@ Write-Host "React runtime verified: one pinned React 18.3.1 + ReactDOM 18.3.1 in
 Write-Host "Jazz web production build verified: TSX/JSX + Vite transform passed." -ForegroundColor Green
 Write-Host "Jazz rich-code renderer verified." -ForegroundColor Green
 Write-Host "Jazz Telegram quick action verified: Translate removed; Telegram loaded." -ForegroundColor Green
-Write-Host "Jazz Telegram bridge + Telegram dashboard UI verified." -ForegroundColor Green
+Write-Host "Jazz Telegram popup isolation verified: /telegram-api/* is separate from /api/chat." -ForegroundColor Green
+Write-Host "Jazz Telegram callback/reply keyboard bridge verified by build." -ForegroundColor Green
 Write-Host "Jazz web LAN access verified: Vite listens on 0.0.0.0 and /api stays same-origin." -ForegroundColor Green
 Write-Host "pnpm build approval verified: esbuild only." -ForegroundColor Green
 Write-Host "Private .env files were not changed." -ForegroundColor DarkGray
