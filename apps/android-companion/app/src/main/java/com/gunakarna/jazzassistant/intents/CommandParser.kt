@@ -23,9 +23,15 @@ object CommandParser {
             text.matches(Regex("(?i)^(go\\s+)?home(\\s+screen)?$")) -> return sequence(ActionStep("home"))
             text.matches(Regex("(?i)^(open\\s+)?recent\\s+apps$")) -> return sequence(ActionStep("recents"))
             text.matches(Regex("(?i)^open\\s+notifications$")) -> return sequence(ActionStep("notifications"))
-            text.matches(Regex("(?i)^(?:scroll|swipe)\\s+(up|down)$")) -> {
-                val direction = Regex("(?i)^(?:scroll|swipe)\\s+(up|down)$").find(text)!!.groupValues[1].lowercase()
-                return sequence(ActionStep(if (direction == "down") "scroll_forward" else "scroll_backward"))
+            text.matches(Regex("(?i)^close\\s+.+$")) -> {
+                val app = text.replaceFirst(Regex("(?i)^close\\s+"), "").trim()
+                return sequence(ActionStep("close_app", mapOf("app" to app)))
+            }
+            text.matches(Regex("(?i)^(?:scroll|swipe)\\s+(up|down)(?:\\s+(one|two|three|four|five|\\d+)\\s+times?)?$")) -> {
+                val match = Regex("(?i)^(?:scroll|swipe)\\s+(up|down)(?:\\s+(one|two|three|four|five|\\d+)\\s+times?)?$").find(text)!!
+                val direction = match.groupValues[1].lowercase()
+                val count = wordNumber(match.groupValues.getOrElse(2) { "" }).coerceIn(1, 10)
+                return ParsedCommand("android_sequence", plan = ActionPlan(steps = List(count) { ActionStep(if (direction == "down") "scroll_forward" else "scroll_backward") }))
             }
             text.matches(Regex("(?i)^(tap|click)\\s+.+$")) -> {
                 val label = text.substringAfter(" ").trim()
@@ -38,6 +44,10 @@ object CommandParser {
             text.matches(Regex("(?i)^type\\s+.+$")) -> {
                 val value = text.replaceFirst(Regex("(?i)^type\\s+"), "").trim().trim('"', '\'')
                 return sequence(ActionStep("set_text", mapOf("text" to value)))
+            }
+            text.matches(Regex("(?i)^search(?:\\s+for)?\\s+.+$")) -> {
+                val value = text.replaceFirst(Regex("(?i)^search(?:\\s+for)?\\s+"), "").trim()
+                return sequence(ActionStep("search_ui", mapOf("text" to value)))
             }
             text.matches(Regex("(?i)^clear\\s+text$")) -> return sequence(ActionStep("clear_text"))
         }
@@ -113,6 +123,13 @@ object CommandParser {
             val direction = scroll.groupValues[1].lowercase()
             val count = wordNumber(scroll.groupValues.getOrElse(2) { "" }).coerceIn(1, 10)
             repeat(count) { steps += ActionStep(if (direction == "down") "scroll_forward" else "scroll_backward") }
+            return ParsedCommand("android_sequence", plan = ActionPlan(steps = steps))
+        }
+
+        val reels = Regex("(?i)^scroll\\s+(one|two|three|four|five|\\d+)\\s+reels?$" ).find(tail)
+        if (reels != null) {
+            val count = wordNumber(reels.groupValues[1]).coerceIn(1, 10)
+            repeat(count) { steps += ActionStep("scroll_forward") }
             return ParsedCommand("android_sequence", plan = ActionPlan(steps = steps))
         }
 
