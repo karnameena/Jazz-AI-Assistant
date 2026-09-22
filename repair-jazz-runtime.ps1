@@ -22,6 +22,7 @@ $runtimeFiles = @(
   "apps/web/package.json",
   "apps/web/vite.config.ts",
   "apps/web/telegram-bridge.ts",
+  "apps/web/scripts/telegram-login.mjs",
   "apps/web/index.html",
   "apps/web/public/api-runtime.js",
   "apps/web/public/favicon.svg",
@@ -36,6 +37,7 @@ $runtimeFiles = @(
   "apps/web/src/voice.ts",
   "apps/web/src/voice-orb.css",
   "apps/web/src/voice-orb-stage.ts",
+  "docs/telegram-bot.md",
   "start-jazz.ps1"
 )
 
@@ -93,15 +95,29 @@ if ($vite -notmatch 'telegramBridgePlugin' -or $vite -notmatch 'telegram-bridge'
 if (-not (Test-Path ".\apps\web\telegram-bridge.ts")) {
   throw "Repair failed: isolated Telegram popup bridge file is missing."
 }
+
 $telegramBridge = Get-Content ".\apps\web\telegram-bridge.ts" -Raw
 if ($telegramBridge -notmatch 'jazz-telegram-popup-bridge' -or $telegramBridge -notmatch '/telegram-api/status') {
   throw "Repair failed: Telegram popup endpoints are missing."
 }
-if ($telegramBridge -notmatch 'Normal Jazz chat continues to use /api/chat') {
+if ($telegramBridge -notmatch '/telegram-api/events' -or $telegramBridge -notmatch '/telegram-api/media/') {
+  throw "Repair failed: Telegram realtime/media endpoints are missing."
+}
+if ($telegramBridge -notmatch 'pathname\.startsWith\("/telegram-api/"\)') {
   throw "Repair failed: Telegram/Jazz router isolation guard is missing."
+}
+if ($telegramBridge -match 'replyMarkup\.map \?') {
+  throw "Repair failed: stale Telegram keyboard parser detected."
 }
 if (-not (Test-Path ".\apps\web\src\TelegramPanel.tsx") -or -not (Test-Path ".\apps\web\src\telegram.css")) {
   throw "Repair failed: Jazz Telegram UI files are missing."
+}
+if (-not (Test-Path ".\apps\web\scripts\telegram-login.mjs")) {
+  throw "Repair failed: Telegram user-session login helper is missing."
+}
+$telegramPanel = Get-Content ".\apps\web\src\TelegramPanel.tsx" -Raw
+if ($telegramPanel -notmatch 'new EventSource\("/telegram-api/events"\)' -or $telegramPanel -notmatch 'telegram-start-button') {
+  throw "Repair failed: Telegram START/realtime UI is incomplete."
 }
 
 # pnpm 11/12 requires explicit approval before running dependency build scripts.
@@ -173,6 +189,8 @@ Write-Host "Jazz web production build verified: TSX/JSX + Vite transform passed.
 Write-Host "Jazz rich-code renderer verified." -ForegroundColor Green
 Write-Host "Jazz Telegram quick action verified: Translate removed; Telegram loaded." -ForegroundColor Green
 Write-Host "Jazz Telegram popup isolation verified: /telegram-api/* is separate from /api/chat." -ForegroundColor Green
+Write-Host "Jazz Telegram rich media verified: photos, videos, files, maps and link previews are wired." -ForegroundColor Green
+Write-Host "Jazz Telegram realtime verified: SSE event stream is wired." -ForegroundColor Green
 Write-Host "Jazz Telegram callback/reply keyboard bridge verified by build." -ForegroundColor Green
 Write-Host "Jazz web LAN access verified: Vite listens on 0.0.0.0 and /api stays same-origin." -ForegroundColor Green
 Write-Host "pnpm build approval verified: esbuild only." -ForegroundColor Green
