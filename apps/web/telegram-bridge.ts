@@ -61,7 +61,7 @@ function parseKeyboard(replyMarkup: any, messageId: number): TelegramKeyboard | 
   if (!replyMarkup || !Array.isArray(replyMarkup.rows)) return undefined;
   const markupName = className(replyMarkup);
   const kind: "reply" | "inline" = /inline/i.test(markupName) ? "inline" : "reply";
-  const rows = replyMarkup.map ? replyMarkup.rows.map((row: any) => {
+  const rows = replyMarkup.rows.map((row: any) => {
     const buttons = Array.isArray(row?.buttons) ? row.buttons : [];
     return buttons.map((button: any): TelegramKeyboardButton => {
       const buttonName = className(button);
@@ -83,7 +83,7 @@ function parseKeyboard(replyMarkup: any, messageId: number): TelegramKeyboard | 
       if (kind === "reply" || /KeyboardButton/i.test(buttonName)) return { text, type: "reply", messageId };
       return { text, type: "unsupported", messageId };
     });
-  }).filter((row: TelegramKeyboardButton[]) => row.length > 0) : [];
+  }).filter((row: TelegramKeyboardButton[]) => row.length > 0);
   return rows.length ? { kind, rows } : undefined;
 }
 function parseForward(message: any): TelegramForward | undefined {
