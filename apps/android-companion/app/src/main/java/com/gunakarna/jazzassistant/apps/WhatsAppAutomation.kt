@@ -18,7 +18,6 @@ class WhatsAppAutomation(
     private val packageName = "com.whatsapp"
 
     fun searchContact(contact: String): AutomationResult = run(contact, null, false)
-
     fun sendMessage(contact: String, message: String): AutomationResult = run(contact, message, true)
 
     private fun run(contact: String, message: String?, send: Boolean): AutomationResult {
@@ -36,8 +35,11 @@ class WhatsAppAutomation(
             return AutomationResult.failure("TIMEOUT", "WhatsApp did not become visible in time.")
         }
 
-        val root = service.rootInActiveWindow ?: return AutomationResult.failure("WRONG_SCREEN", "WhatsApp has no active accessibility window.")
-        val searchNode = AccessibilityNodeFinder.findNodeByContentDescription(root, "Search", false)
+        val root = service.rootInActiveWindow
+            ?: return AutomationResult.failure("WRONG_SCREEN", "WhatsApp has no active accessibility window.")
+        val searchNode = AccessibilityNodeFinder.findByViewId(root, "com.whatsapp:id/menuitem_search")
+            ?: AccessibilityNodeFinder.findByViewId(root, "com.whatsapp:id/search")
+            ?: AccessibilityNodeFinder.findNodeByContentDescription(root, "Search", false)
             ?: AccessibilityNodeFinder.findNodeByText(root, "Search", false)
         if (!actions.clickNode(searchNode)) {
             return AutomationResult.failure("NODE_NOT_FOUND", "WhatsApp Search button was not found.")
@@ -50,9 +52,10 @@ class WhatsAppAutomation(
             return AutomationResult.failure("TEXT_NOT_ENTERED", "Could not enter the WhatsApp contact name.")
         }
         AccessibilityLogger.info("Searching: $contact")
-        SystemClock.sleep(650)
+        SystemClock.sleep(700)
 
-        val searchRoot = service.rootInActiveWindow ?: return AutomationResult.failure("WRONG_SCREEN", "WhatsApp search results are not visible.")
+        val searchRoot = service.rootInActiveWindow
+            ?: return AutomationResult.failure("WRONG_SCREEN", "WhatsApp search results are not visible.")
         val exactMatches = AccessibilityNodeFinder.findNodesByText(searchRoot, contact, true)
             .filter { normalize(it.text?.toString().orEmpty()) == normalize(contact) }
             .distinctBy {
@@ -60,6 +63,13 @@ class WhatsAppAutomation(
                 "${rect.left}:${rect.top}:${rect.right}:${rect.bottom}"
             }
 
+        if (exactMatches.isEmpty()) {
+            AccessibilityLogger.warn("Contact not found exactly: $contact")
+            return AutomationResult.failure(
+                "CONTACT_NOT_FOUND",
+                "No visible WhatsApp result exactly matched '$contact'. I stopped instead of choosing a similar contact."
+            )
+        }
         if (exactMatches.size > 1) {
             AccessibilityLogger.warn("Contact ambiguous: $contact")
             return AutomationResult.failure(
@@ -69,15 +79,12 @@ class WhatsAppAutomation(
             )
         }
 
-        val contactNode = exactMatches.firstOrNull()
-            ?: AccessibilityNodeFinder.findNodeByText(searchRoot, contact, false)
-            ?: return AutomationResult.failure("CONTACT_FOUND", "WhatsApp contact '$contact' was not found.")
-
+        val contactNode = exactMatches.single()
         if (!actions.clickNode(contactNode)) {
             return AutomationResult.failure("NODE_NOT_FOUND", "The WhatsApp contact result could not be opened.")
         }
         AccessibilityLogger.info("Contact matched: $contact")
-        SystemClock.sleep(700)
+        SystemClock.sleep(750)
 
         if (!send) {
             AccessibilityLogger.info("Chat opened")
@@ -90,10 +97,12 @@ class WhatsAppAutomation(
             return AutomationResult.failure("TEXT_NOT_ENTERED", "Could not enter the WhatsApp message.")
         }
         AccessibilityLogger.info("Message entered")
-        SystemClock.sleep(250)
+        SystemClock.sleep(300)
 
-        val chatRoot = service.rootInActiveWindow ?: return AutomationResult.failure("WRONG_SCREEN", "WhatsApp chat is not active.")
-        val sendNode = AccessibilityNodeFinder.findNodeByContentDescription(chatRoot, "Send", true)
+        val chatRoot = service.rootInActiveWindow
+            ?: return AutomationResult.failure("WRONG_SCREEN", "WhatsApp chat is not active.")
+        val sendNode = AccessibilityNodeFinder.findByViewId(chatRoot, "com.whatsapp:id/send")
+            ?: AccessibilityNodeFinder.findNodeByContentDescription(chatRoot, "Send", true)
             ?: AccessibilityNodeFinder.findNodeByContentDescription(chatRoot, "Send", false)
             ?: AccessibilityNodeFinder.findNodeByText(chatRoot, "Send", true)
         if (!actions.clickNode(sendNode)) {
