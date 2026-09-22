@@ -7,6 +7,7 @@ import "./telegram.css";
 
 type TelegramStatus = {
   ok: boolean;
+  scope?: string;
   configured: boolean;
   tokenConfigured: boolean;
   chatConfigured: boolean;
@@ -48,6 +49,8 @@ type TelegramPanelProps = {
   onClose: () => void;
 };
 
+// Deliberately separate from /api/chat. Everything in this component talks only
+// to the Telegram popup bridge, so Telegram commands can never become Jazz commands.
 async function telegramJson(path: string, options?: RequestInit) {
   const response = await fetch(`/telegram-api${path}`, options);
   const data = await response.json();
@@ -83,7 +86,9 @@ export function TelegramPanel({ open, onClose }: TelegramPanelProps) {
   const [error, setError] = useState("");
   const messagesRef = useRef<HTMLDivElement | null>(null);
 
-  const configured = Boolean(status?.configured && status?.tokenConfigured && status?.chatConfigured);
+  // A bot token is useful for getMe, but MTProto conversation itself needs the
+  // authorized user session + target username. Do not block the popup on token alone.
+  const configured = Boolean(status?.configured && status?.chatConfigured && status?.clientConfigured);
   const botTitle = status?.bot?.firstName || status?.bot?.username || "Telegram Bot";
   const botListName = status?.bot?.username || status?.bot?.firstName || "Telegram Bot";
   const botUsername = status?.bot?.username ? `@${status.bot.username}` : "Bot not connected";
@@ -144,13 +149,17 @@ export function TelegramPanel({ open, onClose }: TelegramPanelProps) {
     window.setTimeout(() => void loadMessages(true), 1600);
   };
 
+  // Opening Quick Actions -> Telegram Bot always begins at the bot list, matching
+  // Telegram's bot picker flow. This state is local to the popup only.
   useEffect(() => {
     if (!open) return;
+    setSelectedBot(false);
+    setError("");
     void loadStatus();
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  }, [open]);
 
   useEffect(() => {
     if (!open || !configured || !selectedBot) return;
@@ -169,13 +178,13 @@ export function TelegramPanel({ open, onClose }: TelegramPanelProps) {
     messagesRef.current?.scrollTo({ top: messagesRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, open, selectedBot]);
 
-  const selectBot = async () => {
+  const selectBot = () => {
     if (!status?.bot) return;
     setSelectedBot(true);
     const stored = localStorage.getItem(startedStorageKey(status.bot.username)) === "1";
     setBotStarted(stored);
     setError("");
-    window.setTimeout(() => void loadMessages(), 0);
+    // The selectedBot effect loads the Telegram conversation. Nothing is sent to Jazz.
   };
 
   const startBot = async () => {
@@ -248,7 +257,7 @@ export function TelegramPanel({ open, onClose }: TelegramPanelProps) {
         applyItems(data);
       } else {
         const messageId = Number(button.messageId || fallbackMessageId || 0);
-        if (!messageId || !button.data) throw new Error("Telegram callback data is missing.");
+        if (!messageId || !button.data) throw new Error("Telegram callback_data is missing.");
         const data = await telegramJson("/callback", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -280,7 +289,7 @@ export function TelegramPanel({ open, onClose }: TelegramPanelProps) {
                   className={`telegram-keyboard-button ${button.type === "url" ? "is-url" : ""}`}
                   onClick={() => void pressKeyboardButton(button, message.messageId)}
                   disabled={Boolean(buttonBusy) || sending || button.type === "unsupported"}
-                  title={button.type === "callback" ? "Telegram callback" : button.type === "reply" ? "Send as Telegram message" : undefined}
+                  title={button.type === "callback" ? "Telegram callback_data" : button.type === "reply" ? "Send as Telegram message" : undefined}
                 >
                   <span>{buttonBusy === busyId ? "…" : button.text}</span>
                   {button.type === "url" ? <ExternalLink size={13} /> : null}
@@ -301,7 +310,7 @@ export function TelegramPanel({ open, onClose }: TelegramPanelProps) {
         <header className="telegram-header">
           <div className="telegram-heading">
             <span className="telegram-logo"><Send size={18} /></span>
-            <div><strong>Telegram Bot</strong><small>Use your Telegram bot inside Jazz</small></div>
+            <div><strong>Telegram Bot</strong><small>Telegram-only bot session inside Jazz</small></div>
           </div>
           <div className="telegram-header-actions">
             <button type="button" onClick={() => { void loadStatus(); if (selectedBot) void loadMessages(); }} title="Refresh Telegram"><RefreshCw size={17} className={loading ? "telegram-spin" : ""} /></button>
@@ -313,7 +322,7 @@ export function TelegramPanel({ open, onClose }: TelegramPanelProps) {
           <aside className={`telegram-bot-list ${selectedBot ? "has-selection" : ""}`}>
             <div className="telegram-list-title"><span>Bots</span><small>{status?.bot ? "1" : "0"}</small></div>
             {status?.bot ? (
-              <button type="button" className={`telegram-bot-item ${selectedBot ? "active" : ""}`} onClick={() => void selectBot()}>
+              <button type="button" className={`telegram-bot-item ${selectedBot ? "active" : ""}`} onClick={selectBot}>
                 <span className="telegram-bot-avatar"><Bot size={19} /></span>
                 <span className="telegram-bot-copy"><strong>🤖 {botListName}</strong><small>{botUsername}</small></span>
                 {configured ? <span className="telegram-online-dot" /> : null}
@@ -332,7 +341,7 @@ export function TelegramPanel({ open, onClose }: TelegramPanelProps) {
               <div className="telegram-select-bot">
                 <span className="telegram-select-icon"><Bot size={30} /></span>
                 <strong>Select a Telegram bot</strong>
-                <span>Choose a bot from the list to open its conversation.</span>
+                <span>Choose Karnacam_bot to open its Telegram conversation.</span>
               </div>
             ) : (
               <>
@@ -345,17 +354,17 @@ export function TelegramPanel({ open, onClose }: TelegramPanelProps) {
                 {!configured ? (
                   <div className="telegram-setup">
                     <span className="telegram-setup-icon"><Send size={26} /></span>
-                    <h3>Connect your Telegram bot</h3>
+                    <h3>Connect Karnacam_bot</h3>
                     <p>{status?.message || "Configure a Telegram user session for Jazz, then restart the web app."}</p>
                     <div className="telegram-config-box">
                       <code>services/api/.env</code>
+                      <span>JAZZ_TELEGRAM_BOT_USERNAME=Karnacam_bot</span>
                       <span>JAZZ_TELEGRAM_BOT_TOKEN=...</span>
-                      <span>JAZZ_TELEGRAM_BOT_USERNAME=...</span>
                       <span>JAZZ_TELEGRAM_API_ID=...</span>
                       <span>JAZZ_TELEGRAM_API_HASH=...</span>
                       <span>JAZZ_TELEGRAM_SESSION=...</span>
                     </div>
-                    <small>Jazz uses your Telegram session so the bot behaves like it does in Telegram, including reply and inline keyboards.</small>
+                    <small>This connection is used only by the Telegram popup. Jazz chat, scripts and Ollama stay on their existing route.</small>
                   </div>
                 ) : (
                   <>
@@ -366,7 +375,7 @@ export function TelegramPanel({ open, onClose }: TelegramPanelProps) {
                         <div className="telegram-prestart">
                           <span className="telegram-select-icon"><Bot size={28} /></span>
                           <strong>{botTitle}</strong>
-                          <span>Start this bot to load its Telegram menu.</span>
+                          <span>Press START to send /start and load the bot menu.</span>
                         </div>
                       ) : null}
 
@@ -390,7 +399,7 @@ export function TelegramPanel({ open, onClose }: TelegramPanelProps) {
 
                     {!botStarted ? (
                       <div className="telegram-start-bar">
-                        <button type="button" className="telegram-start-button" onClick={() => void startBot()} disabled={sending}>
+                        <button type="button" className="telegram-start-button" onClick={() => void startBot()} disabled={sending || loading}>
                           {sending ? "STARTING…" : "START"}
                         </button>
                       </div>
