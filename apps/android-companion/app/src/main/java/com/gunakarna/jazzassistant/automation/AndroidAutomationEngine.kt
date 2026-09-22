@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.SystemClock
 import com.gunakarna.jazzassistant.accessibility.AccessibilityActions
 import com.gunakarna.jazzassistant.accessibility.AccessibilityLogger
+import com.gunakarna.jazzassistant.accessibility.AccessibilityNodeFinder
 import com.gunakarna.jazzassistant.accessibility.UiTreeReader
 import com.gunakarna.jazzassistant.accessibility.UiWaiter
 import com.gunakarna.jazzassistant.apps.AppLauncher
@@ -26,6 +27,7 @@ class AndroidAutomationEngine(private val service: AccessibilityService) {
     fun execute(action: String, args: Map<String, Any?> = emptyMap()): Map<String, Any?> = when (action) {
         "open_app", "launch_app_name" -> launcher.launchByName(args["app"]?.toString() ?: args["name"]?.toString().orEmpty())
         "launch_app" -> launcher.launchPackage(args["packageName"]?.toString().orEmpty())
+        "close_app" -> backgroundApp(args["app"]?.toString().orEmpty())
         "back" -> simple(actions.pressBack(), "BACK_SUCCESS", "Went back.")
         "home" -> simple(actions.pressHome(), "HOME_SUCCESS", "Opened Home.")
         "recents" -> simple(actions.openRecents(), "RECENTS_SUCCESS", "Opened recent apps.")
@@ -80,9 +82,22 @@ class AndroidAutomationEngine(private val service: AccessibilityService) {
                     mapOf("steps" to results)
                 ).toMap()
             }
-            SystemClock.sleep(250)
+            SystemClock.sleep(if (step.action == "open_app" || step.action == "launch_app_name") 900 else 250)
         }
         return AutomationResult.success("PLAN_COMPLETED", "Android automation completed.", mapOf("steps" to results)).toMap()
+    }
+
+    private fun backgroundApp(appName: String): Map<String, Any?> {
+        val current = service.rootInActiveWindow?.packageName?.toString()
+        val requested = if (appName.isBlank()) null else resolver.resolve(appName)?.packageName
+        if (requested != null && current != null && requested != current) {
+            return AutomationResult.failure("WRONG_SCREEN", "$appName is not the current foreground app.").toMap()
+        }
+        return if (actions.pressHome()) {
+            AutomationResult.success("APP_BACKGROUNDED", "Moved ${appName.ifBlank { "the current app" }} to the background. Accessibility cannot force-stop third-party apps.").toMap()
+        } else {
+            AutomationResult.failure("ACTION_FAILED", "Could not leave the current app.").toMap()
+        }
     }
 
     private fun clickText(text: String): Map<String, Any?> {
@@ -93,10 +108,13 @@ class AndroidAutomationEngine(private val service: AccessibilityService) {
     private fun searchUi(text: String): Map<String, Any?> {
         if (text.isBlank()) return AutomationResult.failure("TEXT_NOT_ENTERED", "Search text is required.").toMap()
         val root = service.rootInActiveWindow ?: return AutomationResult.failure("WRONG_SCREEN", "No active app window.").toMap()
-        val searchNode = com.gunakarna.jazzassistant.accessibility.AccessibilityNodeFinder.findNodeByContentDescription(root, "Search", false)
-            ?: com.gunakarna.jazzassistant.accessibility.AccessibilityNodeFinder.findNodeByText(root, "Search", false)
-        if (searchNode != null) actions.clickNode(searchNode)
-        val field = waiter.waitForEditable(2500)
+        val searchNode = AccessibilityNodeFinder.findNodeByContentDescription(root, "Search", false)
+            ?: AccessibilityNodeFinder.findNodeByText(root, "Search", false)
+        if (searchNode != null) {
+            actions.clickNode(searchNode)
+            SystemClock.sleep(180)
+        }
+        val field = waiter.waitForEditable(3000)
             ?: return AutomationResult.failure("NODE_NOT_FOUND", "No editable search field was found.").toMap()
         if (!actions.setText(field, text)) return AutomationResult.failure("TEXT_NOT_ENTERED", "Could not enter search text.").toMap()
         return AutomationResult.success("TEXT_ENTERED", "Searched for $text.").toMap()
