@@ -26,6 +26,8 @@ $runtimeFiles = @(
   "apps/web/public/favicon.svg",
   "apps/web/public/rich-code.js",
   "apps/web/public/rich-code.css",
+  "apps/web/public/telegram-ui.js",
+  "apps/web/public/telegram-ui.css",
   "apps/web/src/api-runtime.ts",
   "apps/web/src/main.tsx",
   "apps/web/src/TelegramPanel.tsx",
@@ -61,6 +63,17 @@ if ($indexHtml -notmatch 'rich-code\.js' -or $indexHtml -notmatch 'rich-code\.cs
 }
 if (-not (Test-Path ".\apps\web\public\rich-code.js") -or -not (Test-Path ".\apps\web\public\rich-code.css")) {
   throw "Repair failed: Jazz rich code renderer assets are missing."
+}
+if ($indexHtml -notmatch 'telegram-ui\.js' -or $indexHtml -notmatch 'telegram-ui\.css') {
+  throw "Repair failed: Jazz Telegram quick-action assets are not loaded by index.html."
+}
+if (-not (Test-Path ".\apps\web\public\telegram-ui.js") -or -not (Test-Path ".\apps\web\public\telegram-ui.css")) {
+  throw "Repair failed: Jazz Telegram quick-action assets are missing."
+}
+
+$mainTsx = Get-Content ".\apps\web\src\main.tsx" -Raw
+if ($mainTsx -notmatch 'label:\s*"Telegram"' -or $mainTsx -match 'label:\s*"Translate"') {
+  throw "Repair failed: Quick Actions is not using Telegram instead of Translate."
 }
 
 $vite = Get-Content ".\apps\web\vite.config.ts" -Raw
@@ -136,6 +149,7 @@ Remove-Item (Join-Path $root "node_modules\.vite-jazz") -Recurse -Force -ErrorAc
 Write-Host "Runtime source repaired successfully." -ForegroundColor Green
 Write-Host "React runtime verified: one pinned React 18.3.1 + ReactDOM 18.3.1 installation." -ForegroundColor Green
 Write-Host "Jazz rich-code renderer verified." -ForegroundColor Green
+Write-Host "Jazz Telegram quick action verified: Translate removed; Telegram loaded." -ForegroundColor Green
 Write-Host "Jazz Telegram bridge + Telegram dashboard UI verified." -ForegroundColor Green
 Write-Host "Jazz web LAN access verified: Vite listens on 0.0.0.0 and /api stays same-origin." -ForegroundColor Green
 Write-Host "pnpm build approval verified: esbuild only." -ForegroundColor Green
