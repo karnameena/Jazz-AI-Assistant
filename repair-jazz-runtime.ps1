@@ -4,7 +4,8 @@ Set-Location $root
 
 Write-Host "Repairing Jazz runtime from origin/main..." -ForegroundColor Cyan
 
-# Keep private/local config untouched. Only source + generated dependency folders are refreshed.
+# Keep private/local config and user-owned Android automation scripts untouched.
+# Only core source + generated dependency folders are refreshed.
 $runtimeFiles = @(
   "package.json",
   "pnpm-workspace.yaml",
@@ -17,8 +18,6 @@ $runtimeFiles = @(
   "services/api/telegram.env.example",
   "services/stt/server.mjs",
   "bridges/windows-adb/adb-bridge.mjs",
-  "scripts/android/unlockmobile.ps1",
-  "scripts/android/youtube.ps1",
   "tools/piper/setup-windows.ps1",
   "tools/whisper/setup-windows.ps1",
   "apps/web/package.json",
@@ -217,6 +216,7 @@ Write-Host "Jazz Telegram callback/reply keyboard bridge verified by build." -Fo
 Write-Host "Jazz web LAN access verified: Vite listens on 0.0.0.0 and /api stays same-origin." -ForegroundColor Green
 Write-Host "pnpm build approval verified: esbuild only." -ForegroundColor Green
 Write-Host "Private .env files were not changed." -ForegroundColor DarkGray
+Write-Host "Local Android automation scripts were preserved and not checked out from Git." -ForegroundColor Green
 Write-Host "Starting Jazz..." -ForegroundColor Cyan
 
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\start-jazz.ps1"
