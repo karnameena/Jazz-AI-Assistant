@@ -75,12 +75,12 @@ class JazzLocalServer(private val context: Context) {
                 }
 
                 val body = JSONObject(request.body.ifBlank { "{}" })
-                val args = body.optJSONObject("args").toMap()
+                val args = jsonObjectToMap(body.optJSONObject("args"))
                 val result: Map<String, Any?> = when (path) {
                     "/command" -> service.execute(body.optString("action"), args)
                     "/android/action" -> {
                         val action = body.optString("action")
-                        val mergedArgs = body.toMap().filterKeys { it != "action" && it != "args" } + args
+                        val mergedArgs = jsonObjectToMap(body).filterKeys { it != "action" && it != "args" } + args
                         service.execute(action, mergedArgs)
                     }
                     "/android/open-app" -> service.execute("open_app", mapOf("app" to body.optString("app")))
@@ -90,7 +90,7 @@ class JazzLocalServer(private val context: Context) {
                             service.executeNaturalCommand(command)
                         } else {
                             val intent = body.optString("intent")
-                            val mergedArgs = body.toMap().filterKeys { it != "intent" && it != "args" } + args
+                            val mergedArgs = jsonObjectToMap(body).filterKeys { it != "intent" && it != "args" } + args
                             service.executeIntent(intent, mergedArgs)
                         }
                     }
@@ -110,7 +110,7 @@ class JazzLocalServer(private val context: Context) {
         val buffer = ByteArray(65536)
         val firstRead = input.read(buffer)
         if (firstRead <= 0) return HttpRequest("", "")
-        var request = String(buffer, 0, firstRead, StandardCharsets.UTF_8)
+        val request = String(buffer, 0, firstRead, StandardCharsets.UTF_8)
         val headerEnd = request.indexOf("\r\n\r\n")
         if (headerEnd < 0) error("Malformed HTTP request")
         val headers = request.substring(0, headerEnd)
@@ -129,25 +129,16 @@ class JazzLocalServer(private val context: Context) {
         return HttpRequest(headers, body)
     }
 
-    private fun JSONObject?.toMap(): Map<String, Any?> {
-        if (this == null) return emptyMap()
-        return keys().asSequence().associateWith { key ->
-            when (val value = get(key)) {
+    private fun jsonObjectToMap(value: JSONObject?): Map<String, Any?> {
+        if (value == null) return emptyMap()
+        return value.keys().asSequence().associateWith { key ->
+            when (val item = value.get(key)) {
                 JSONObject.NULL -> null
-                is JSONObject -> value.toMap()
-                else -> value
+                is JSONObject -> jsonObjectToMap(item)
+                else -> item
             }
         }
     }
-
-    private fun JSONObject.toMap(): Map<String, Any?> =
-        keys().asSequence().associateWith { key ->
-            when (val value = get(key)) {
-                JSONObject.NULL -> null
-                is JSONObject -> value.toMap()
-                else -> value
-            }
-        }
 
     private fun json(value: Map<String, Any?>): String = JSONObject(value).toString()
 
