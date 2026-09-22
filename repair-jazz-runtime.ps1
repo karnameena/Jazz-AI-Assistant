@@ -15,10 +15,12 @@ $runtimeFiles = @(
   "services/api/src/android-intents.mjs",
   "services/api/src/script-registry.mjs",
   "services/api/telegram.env.example",
+  "services/stt/server.mjs",
   "bridges/windows-adb/adb-bridge.mjs",
   "scripts/android/unlockmobile.ps1",
   "scripts/android/youtube.ps1",
   "tools/piper/setup-windows.ps1",
+  "tools/whisper/setup-windows.ps1",
   "apps/web/package.json",
   "apps/web/vite.config.ts",
   "apps/web/telegram-bridge.ts",
@@ -92,8 +94,27 @@ if ($vite -notmatch 'host: "0\.0\.0\.0"') {
 if ($vite -notmatch 'telegramBridgePlugin' -or $vite -notmatch 'telegram-bridge') {
   throw "Repair failed: isolated Telegram plugin is not wired into Vite."
 }
+if ($vite -notmatch 'JAZZ_STT_PORT' -or $vite -notmatch '"/stt-local"') {
+  throw "Repair failed: local Whisper STT proxy is not wired into Vite."
+}
 if (-not (Test-Path ".\apps\web\telegram-bridge.ts")) {
   throw "Repair failed: isolated Telegram popup bridge file is missing."
+}
+
+$voiceTs = Get-Content ".\apps\web\src\voice.ts" -Raw
+if ($voiceTs -notmatch '/stt-local/health' -or $voiceTs -notmatch '/stt-local/transcribe' -or $voiceTs -notmatch 'startLocalRecognition') {
+  throw "Repair failed: Jazz web is not configured to use local Whisper speech-to-text."
+}
+if (-not (Test-Path ".\services\stt\server.mjs")) {
+  throw "Repair failed: Jazz local STT service is missing."
+}
+if (-not (Test-Path ".\tools\whisper\setup-windows.ps1")) {
+  throw "Repair failed: Jazz Whisper setup script is missing."
+}
+
+$startJazz = Get-Content ".\start-jazz.ps1" -Raw
+if ($startJazz -notmatch 'Local Whisper STT READY' -or $startJazz -notmatch 'services\\stt\\server\.mjs' -or $startJazz -notmatch 'JAZZ_STT_PORT') {
+  throw "Repair failed: start-jazz.ps1 does not start the local Whisper service."
 }
 
 $telegramBridge = Get-Content ".\apps\web\telegram-bridge.ts" -Raw
@@ -127,9 +148,9 @@ if ($workspaceManifest -notmatch '(?m)^allowBuilds:\s*$' -or $workspaceManifest 
   throw "Repair failed: pnpm allowBuilds approval for esbuild is missing."
 }
 
-# Stop old Jazz/Vite Node processes BEFORE touching node_modules. Otherwise Windows
-# can keep stale optimized React chunks open and the browser continues to hit them.
-Write-Host "Stopping stale Jazz web/API processes..." -ForegroundColor Yellow
+# Stop old Jazz/Vite/STT Node processes BEFORE touching node_modules. Otherwise Windows
+# can keep stale optimized React chunks or a stale speech service open.
+Write-Host "Stopping stale Jazz web/API/STT processes..." -ForegroundColor Yellow
 $needle = [regex]::Escape($root)
 Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
   Where-Object {
@@ -186,6 +207,7 @@ Remove-Item (Join-Path $root "node_modules\.vite-jazz") -Recurse -Force -ErrorAc
 Write-Host "Runtime source repaired successfully." -ForegroundColor Green
 Write-Host "React runtime verified: one pinned React 18.3.1 + ReactDOM 18.3.1 installation." -ForegroundColor Green
 Write-Host "Jazz web production build verified: TSX/JSX + Vite transform passed." -ForegroundColor Green
+Write-Host "Jazz local voice verified: Whisper service + Vite proxy + browser microphone pipeline are wired." -ForegroundColor Green
 Write-Host "Jazz rich-code renderer verified." -ForegroundColor Green
 Write-Host "Jazz Telegram quick action verified: Translate removed; Telegram loaded." -ForegroundColor Green
 Write-Host "Jazz Telegram popup isolation verified: /telegram-api/* is separate from /api/chat." -ForegroundColor Green
