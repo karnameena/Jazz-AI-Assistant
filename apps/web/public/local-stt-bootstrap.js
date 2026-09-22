@@ -2,147 +2,106 @@
   const NativeRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!NativeRecognition) return;
 
-  const supportsLocal =
-    typeof NativeRecognition.available === "function" &&
-    typeof NativeRecognition.install === "function";
-
+  // Jazz previously forced Chromium's on-device en-US recognizer for every English
+  // speaker. On some Windows systems that hears the microphone but repeatedly emits
+  // `nomatch`, especially when the browser/Windows language is en-IN or another
+  // English locale. Use the browser's normal recognizer by default and preserve the
+  // language selected by voice.ts instead of rewriting it to en-US.
   const state = {
-    supported: supportsLocal,
-    mode: supportsLocal ? "checking" : "remote-only",
-    language: null,
-    requestedLanguage: null,
-    lastAvailability: null,
-    lastError: null
+    supported: true,
+    mode: "browser",
+    language: String(navigator.language || "en-US").replace("_", "-"),
+    lastError: null,
+    recognitionActive: false
   };
   window.__JAZZ_LOCAL_STT__ = state;
 
   const emit = detail => {
     try {
-      window.dispatchEvent(new CustomEvent("jazz-local-stt-status", { detail: { ...state, ...detail } }));
+      Object.assign(state, detail || {});
+      window.dispatchEvent(new CustomEvent("jazz-local-stt-status", { detail: { ...state } }));
     } catch {}
   };
 
-  // Current Chromium/Edge on-device speech models support en-US, but many Windows
-  // machines report navigator.language as en-IN/en-GB. Normalize any English
-  // request to en-US so Jazz does not silently fall back to remote STT.
-  function localLanguage(requested) {
-    const lang = String(requested || navigator.language || "en-US").replace("_", "-") || "en-US";
-    return /^en(?:-|$)/i.test(lang) ? "en-US" : lang;
-  }
+  // SpeechRecognition already owns the microphone while it is listening. Opening a
+  // second getUserMedia stream for the orb analyser can make Chromium report
+  // `nomatch` even though audio is visibly arriving. Block only that second capture;
+  // the initial permission probe still runs before recognition starts.
+  const mediaDevices = navigator.mediaDevices;
+  const nativeGetUserMedia = mediaDevices?.getUserMedia?.bind(mediaDevices);
+  if (mediaDevices && nativeGetUserMedia) {
+    mediaDevices.getUserMedia = async constraints => {
+      const wantsAudio = Boolean(
+        constraints && typeof constraints === "object" && "audio" in constraints && constraints.audio
+      );
 
-  if (!supportsLocal) {
-    state.lastError = "On-device SpeechRecognition API is not enabled in this browser.";
-    console.info("[Jazz] On-device speech recognition API is unavailable; browser default recognition remains available.");
-  }
-
-  async function prepareLocalRecognition(recognition) {
-    if (!supportsLocal) return false;
-
-    const requested = String(recognition.lang || navigator.language || "en-US").replace("_", "-") || "en-US";
-    const lang = localLanguage(requested);
-    state.requestedLanguage = requested;
-    state.language = lang;
-    state.mode = "checking";
-    emit({ mode: state.mode, requestedLanguage: requested, language: lang });
-
-    try {
-      const options = {
-        langs: [lang],
-        processLocally: true,
-        quality: "command"
-      };
-
-      const availability = await NativeRecognition.available(options);
-      state.lastAvailability = availability;
-
-      if (availability === "available") {
-        recognition.lang = lang;
-        recognition.processLocally = true;
-        state.mode = "local";
-        state.lastError = null;
-        console.info(`[Jazz] On-device speech recognition ready for ${lang}.`);
-        emit({ mode: state.mode, availability });
-        return true;
+      if (state.recognitionActive && wantsAudio) {
+        throw new DOMException(
+          "Jazz SpeechRecognition currently owns the microphone.",
+          "NotReadableError"
+        );
       }
 
-      if (availability === "downloadable" || availability === "downloading") {
-        state.mode = "installing";
-        console.info(`[Jazz] Installing on-device speech language pack for ${lang}...`);
-        emit({ mode: state.mode, availability });
-
-        const installed = await NativeRecognition.install(options);
-        if (installed) {
-          recognition.lang = lang;
-          recognition.processLocally = true;
-          state.mode = "local";
-          state.lastError = null;
-          state.lastAvailability = "available";
-          console.info(`[Jazz] On-device speech language pack installed for ${lang}.`);
-          emit({ mode: state.mode, availability: "available" });
-          return true;
-        }
-      }
-
-      state.mode = "local-unavailable";
-      state.lastError = `On-device speech model is unavailable for ${lang}.`;
-      console.warn(`[Jazz] ${state.lastError}`);
-      emit({ mode: state.mode, availability, error: state.lastError });
-      return false;
-    } catch (error) {
-      state.mode = "local-error";
-      state.lastError = error instanceof Error ? error.message : String(error);
-      console.warn("[Jazz] Could not initialize on-device speech recognition.", error);
-      emit({ mode: state.mode, error: state.lastError });
-      return false;
-    }
+      return nativeGetUserMedia(constraints);
+    };
   }
 
   function JazzSpeechRecognition() {
     const recognition = new NativeRecognition();
     const nativeStart = recognition.start.bind(recognition);
-    let starting = false;
-    let localPrepared = false;
+    const nativeStop = recognition.stop?.bind(recognition);
+    const nativeAbort = recognition.abort?.bind(recognition);
+
+    recognition.addEventListener?.("start", () => {
+      state.recognitionActive = true;
+      state.mode = "browser";
+      state.language = String(recognition.lang || navigator.language || "en-US").replace("_", "-");
+      state.lastError = null;
+      emit({ recognitionActive: true, mode: "browser", language: state.language, lastError: null });
+    });
+
+    recognition.addEventListener?.("end", () => {
+      state.recognitionActive = false;
+      emit({ recognitionActive: false });
+    });
+
+    recognition.addEventListener?.("error", event => {
+      state.lastError = String(event?.error || "unknown");
+      emit({ lastError: state.lastError });
+    });
 
     return new Proxy(recognition, {
       get(target, property) {
         if (property === "start") {
           return () => {
-            if (starting) return;
-            if (localPrepared || target.processLocally === true) {
-              nativeStart();
-              return;
-            }
-
-            if (!supportsLocal) {
-              nativeStart();
-              return;
-            }
-
-            starting = true;
-            void prepareLocalRecognition(target)
-              .then(localReady => {
-                if (localReady) {
-                  localPrepared = true;
-                  nativeStart();
-                  return;
-                }
-
-                // Do not silently switch a local-first Jazz installation back to
-                // Chromium's cloud recognizer. Leave the native recognizer stopped
-                // so the UI can show the local-STT diagnostic instead of a misleading
-                // generic network failure.
-                try {
-                  target.onerror?.({ error: "local-stt-unavailable" });
-                } catch {}
-              })
-              .catch(error => {
-                try {
-                  target.onerror?.({ error: "local-stt-unavailable", message: String(error) });
-                } catch {}
-              })
-              .finally(() => {
-                starting = false;
+            state.recognitionActive = true;
+            emit({ recognitionActive: true });
+            try {
+              return nativeStart();
+            } catch (error) {
+              state.recognitionActive = false;
+              emit({
+                recognitionActive: false,
+                lastError: error instanceof Error ? error.message : String(error)
               });
+              throw error;
+            }
+          };
+        }
+
+        if (property === "stop" && nativeStop) {
+          return () => {
+            state.recognitionActive = false;
+            emit({ recognitionActive: false });
+            return nativeStop();
+          };
+        }
+
+        if (property === "abort" && nativeAbort) {
+          return () => {
+            state.recognitionActive = false;
+            emit({ recognitionActive: false });
+            return nativeAbort();
           };
         }
 
@@ -158,13 +117,17 @@
   JazzSpeechRecognition.prototype = NativeRecognition.prototype;
   Object.setPrototypeOf(JazzSpeechRecognition, NativeRecognition);
 
-  if (supportsLocal) {
+  // Preserve static capabilities exposed by newer Chromium builds without forcing
+  // Jazz into local-only recognition.
+  if (typeof NativeRecognition.available === "function") {
     JazzSpeechRecognition.available = NativeRecognition.available.bind(NativeRecognition);
+  }
+  if (typeof NativeRecognition.install === "function") {
     JazzSpeechRecognition.install = NativeRecognition.install.bind(NativeRecognition);
   }
 
   window.SpeechRecognition = JazzSpeechRecognition;
   if (window.webkitSpeechRecognition) window.webkitSpeechRecognition = JazzSpeechRecognition;
 
-  console.info("[Jazz] Local-first speech recognition bootstrap active.");
+  console.info(`[Jazz] Speech recognition reliability guard active (${state.language}).`);
 })();
