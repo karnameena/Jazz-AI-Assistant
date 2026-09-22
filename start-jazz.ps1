@@ -4,6 +4,7 @@ Set-Location $root
 
 $expectedVersion = "0.10.0-local"
 $apiPort = 8797
+$sttPort = 8798
 $webPort = 5173
 $bridgePort = 9899
 $logDir = Join-Path $root ".jazz\logs"
@@ -12,6 +13,7 @@ New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 Write-Host "Jazz startup" -ForegroundColor Cyan
 Write-Host "Root: $root"
 Write-Host "API port: $apiPort"
+Write-Host "Local STT port: $sttPort"
 
 function Test-Http($url) {
   try {
@@ -39,7 +41,7 @@ function Stop-StaleJazzNodeProcesses {
       Where-Object {
         $_.Name -match '^node(\.exe)?$' -and
         $_.CommandLine -match $needle -and
-        ($_.CommandLine -match 'server\.mjs' -or $_.CommandLine -match 'adb-bridge\.mjs' -or $_.CommandLine -match 'vite')
+        ($_.CommandLine -match 'server\.mjs' -or $_.CommandLine -match 'adb-bridge\.mjs' -or $_.CommandLine -match 'services\\stt' -or $_.CommandLine -match 'vite')
       } |
       ForEach-Object {
         Write-Host "Stopping stale Jazz Node process PID $($_.ProcessId)..." -ForegroundColor DarkYellow
@@ -73,6 +75,7 @@ function Test-JazzPiperApi {
 Stop-StaleJazzNodeProcesses
 Stop-PortListener 8787
 Stop-PortListener $apiPort
+Stop-PortListener $sttPort
 Stop-PortListener $bridgePort
 Stop-PortListener $webPort
 Start-Sleep -Milliseconds 600
@@ -166,7 +169,55 @@ try {
   Write-Warning "Ollama startup check failed: $($_.Exception.Message)"
 }
 
-# 3) Windows ADB bridge.
+# 3) Local Whisper speech-to-text. This is Jazz's primary microphone engine and
+# does not depend on Chrome/Edge cloud speech services.
+$sttOut = Join-Path $logDir "stt.out.log"
+$sttErr = Join-Path $logDir "stt.err.log"
+try {
+  $sttSetup = Join-Path $root "tools\whisper\setup-windows.ps1"
+  $sttCli = Join-Path $root "tools\whisper\runtime\whisper-cli.exe"
+  $sttModel = Join-Path $root "tools\whisper\models\ggml-base.en-q5_1.bin"
+  $sttServer = Join-Path $root "services\stt\server.mjs"
+
+  if (-not (Test-Path $sttCli) -or -not (Test-Path $sttModel)) {
+    if (-not (Test-Path $sttSetup)) { throw "Whisper setup script is missing: $sttSetup" }
+    Write-Host "Installing Jazz local speech-to-text..." -ForegroundColor Yellow
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $sttSetup
+    if ($LASTEXITCODE -ne 0) { throw "Whisper setup exited with code $LASTEXITCODE." }
+  }
+
+  if (-not (Test-Path $sttServer)) { throw "Jazz STT server is missing: $sttServer" }
+  Remove-Item $sttOut,$sttErr -Force -ErrorAction SilentlyContinue
+  $oldSttPort = $env:JAZZ_STT_PORT
+  try {
+    $env:JAZZ_STT_PORT = "$sttPort"
+    $sttProcess = Start-Process -FilePath $node.Source -ArgumentList @($sttServer) -WorkingDirectory $root -WindowStyle Hidden -RedirectStandardOutput $sttOut -RedirectStandardError $sttErr -PassThru
+  } finally {
+    if ($null -eq $oldSttPort) { Remove-Item Env:JAZZ_STT_PORT -ErrorAction SilentlyContinue } else { $env:JAZZ_STT_PORT = $oldSttPort }
+  }
+
+  $sttHealthUrl = "http://127.0.0.1:$sttPort/health"
+  for ($attempt = 1; $attempt -le 20; $attempt++) {
+    Start-Sleep -Milliseconds 300
+    if (Test-Http $sttHealthUrl) { break }
+    if ($sttProcess.HasExited) { break }
+  }
+
+  if (-not (Test-Http $sttHealthUrl)) {
+    Show-LogTail $sttErr "Local STT errors"
+    throw "Local STT service did not become ready."
+  }
+
+  $sttHealth = Invoke-RestMethod $sttHealthUrl -TimeoutSec 5
+  if (-not $sttHealth.ok) {
+    throw "Local STT service started but Whisper is incomplete."
+  }
+  Write-Host "Local Whisper STT READY on port $sttPort, PID=$($sttProcess.Id)" -ForegroundColor Green
+} catch {
+  Write-Warning "Local Whisper STT is not ready; browser recognition will remain as fallback: $($_.Exception.Message)"
+}
+
+# 4) Windows ADB bridge.
 try {
   $bridgeEnv = Join-Path $root "bridges\windows-adb\.env"
   $bridgeFile = Join-Path $root "bridges\windows-adb\adb-bridge.mjs"
@@ -193,7 +244,7 @@ try {
   Write-Warning "ADB bridge startup failed: $($_.Exception.Message)"
 }
 
-# 4) Piper. Require the complete runtime path and a real synthesis test. If either
+# 5) Piper. Require the complete runtime path and a real synthesis test. If either
 # check fails, repair once and retry automatically.
 try {
   $piperSetup = Join-Path $root "tools\piper\setup-windows.ps1"
@@ -232,10 +283,10 @@ try {
   Write-Warning "Piper TTS is not ready; browser TTS fallback remains available: $($_.Exception.Message)"
 }
 
-# 5) Web UI. Clear both old and new Vite caches; vite.config.ts deduplicates
+# 6) Web UI. Clear both old and new Vite caches; vite.config.ts deduplicates
 # react/react-dom so lucide-react and the app share the same hook dispatcher.
 try {
-  $webCommand = "Set-Location '$root\apps\web'; `$env:JAZZ_API_PORT='$apiPort'; Remove-Item -Recurse -Force '.\node_modules\.vite' -ErrorAction SilentlyContinue; Remove-Item -Recurse -Force '.\node_modules\.vite-jazz' -ErrorAction SilentlyContinue; pnpm exec vite --force --port $webPort --strictPort"
+  $webCommand = "Set-Location '$root\apps\web'; `$env:JAZZ_API_PORT='$apiPort'; `$env:JAZZ_STT_PORT='$sttPort'; Remove-Item -Recurse -Force '.\node_modules\.vite' -ErrorAction SilentlyContinue; Remove-Item -Recurse -Force '.\node_modules\.vite-jazz' -ErrorAction SilentlyContinue; pnpm exec vite --force --port $webPort --strictPort"
   Start-Process powershell.exe -ArgumentList "-NoExit", "-Command", $webCommand
   Start-Sleep -Seconds 2
 } catch {
@@ -247,6 +298,8 @@ Write-Host "Jazz health:" -ForegroundColor Cyan
 (Invoke-RestMethod $healthUrl -TimeoutSec 5) | ConvertTo-Json -Depth 6
 Write-Host ""
 Write-Host "Jazz startup completed." -ForegroundColor Green
-Write-Host "Web: http://localhost:$webPort/?v=20260918-8" -ForegroundColor Green
+Write-Host "Web: http://localhost:$webPort/?v=20260922-stt1" -ForegroundColor Green
 Write-Host "API: http://127.0.0.1:$apiPort/health" -ForegroundColor Green
+Write-Host "STT: http://127.0.0.1:$sttPort/health" -ForegroundColor Green
 Write-Host "API logs: $apiOut ; $apiErr" -ForegroundColor DarkGray
+Write-Host "STT logs: $sttOut ; $sttErr" -ForegroundColor DarkGray
