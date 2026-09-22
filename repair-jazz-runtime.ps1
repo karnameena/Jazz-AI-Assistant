@@ -140,7 +140,17 @@ if (react.version !== '18.3.1' || reactDom.version !== '18.3.1') process.exit(2)
 $versionCheck | node
 if ($LASTEXITCODE -ne 0) { throw "React runtime verification failed. Expected React/ReactDOM 18.3.1." }
 
-# Remove every known Vite optimizer cache after dependency installation.
+# Compile the complete web app before starting Vite. This catches malformed TSX/JSX,
+# missing imports, and Vite transform failures during repair instead of leaving the
+# browser stuck on a red overlay after startup.
+Write-Host "Validating Jazz web production build..." -ForegroundColor Cyan
+& $pnpm.Source --filter "@jazz/web" build
+if ($LASTEXITCODE -ne 0) {
+  throw "Jazz web build validation failed. Fix the TSX/Vite error shown above before starting Jazz."
+}
+Remove-Item (Join-Path $root "apps\web\dist") -Recurse -Force -ErrorAction SilentlyContinue
+
+# Remove every known Vite optimizer cache after dependency installation/build validation.
 Remove-Item (Join-Path $root "apps\web\node_modules\.vite") -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item (Join-Path $root "apps\web\node_modules\.vite-jazz") -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item (Join-Path $root "node_modules\.vite") -Recurse -Force -ErrorAction SilentlyContinue
@@ -148,6 +158,7 @@ Remove-Item (Join-Path $root "node_modules\.vite-jazz") -Recurse -Force -ErrorAc
 
 Write-Host "Runtime source repaired successfully." -ForegroundColor Green
 Write-Host "React runtime verified: one pinned React 18.3.1 + ReactDOM 18.3.1 installation." -ForegroundColor Green
+Write-Host "Jazz web production build verified: TSX/JSX + Vite transform passed." -ForegroundColor Green
 Write-Host "Jazz rich-code renderer verified." -ForegroundColor Green
 Write-Host "Jazz Telegram quick action verified: Translate removed; Telegram loaded." -ForegroundColor Green
 Write-Host "Jazz Telegram bridge + Telegram dashboard UI verified." -ForegroundColor Green
