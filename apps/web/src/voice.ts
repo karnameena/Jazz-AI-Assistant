@@ -7,7 +7,7 @@ export type VoiceCallbacks = {
 
 type VoiceState = "idle" | "listening" | "speaking" | "unsupported";
 
-/** Jazz voice engine: browser SpeechRecognition input + low-latency local Piper PCM streaming output. */
+/** Jazz voice engine: local Whisper input first, browser SpeechRecognition fallback, local Piper output. */
 export class JazzVoice {
   private recognition: any = null;
   private callbacks: VoiceCallbacks;
@@ -19,6 +19,17 @@ export class JazzVoice {
   private restartAttempts = 0;
   private recognitionLanguage = "en-US";
   private triedLanguageFallback = false;
+  private switchingToLocal = false;
+
+  private localSttMode = false;
+  private localSttProcessor: ScriptProcessorNode | null = null;
+  private localSttChunks: Float32Array[] = [];
+  private localSttSampleRate = 48000;
+  private localSttSpeechDetected = false;
+  private localSttSilenceMs = 0;
+  private localSttElapsedMs = 0;
+  private localSttSubmitting = false;
+  private localSttHealth: { ready: boolean; checkedAt: number } | null = null;
 
   private audioContext: AudioContext | null = null;
   private micStream: MediaStream | null = null;
@@ -41,130 +52,113 @@ export class JazzVoice {
     this.callbacks = callbacks;
     this.setVisualState("idle");
 
-    const Recognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!Recognition) {
-      this.setVisualState("unsupported");
-      this.callbacks.onState?.("unsupported");
-      return;
-    }
-
     const browserLanguage = String(navigator.language || "").trim();
     this.recognitionLanguage = /^en[-_]/i.test(browserLanguage) ? browserLanguage.replace("_", "-") : "en-US";
 
-    this.recognition = new Recognition();
-    this.recognition.lang = this.recognitionLanguage;
-    this.recognition.interimResults = true;
-    this.recognition.continuous = false;
-    this.recognition.maxAlternatives = 1;
+    const Recognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (Recognition) {
+      this.recognition = new Recognition();
+      this.recognition.lang = this.recognitionLanguage;
+      this.recognition.interimResults = true;
+      this.recognition.continuous = false;
+      this.recognition.maxAlternatives = 1;
 
-    this.recognition.onstart = () => {
-      this.recognitionStarting = false;
-      this.recognitionStarted = true;
-      this.restartAttempts = 0;
-      this.setVisualState("listening");
-      this.callbacks.onState?.("listening");
+      this.recognition.onstart = () => {
+        this.switchingToLocal = false;
+        this.localSttMode = false;
+        this.recognitionStarting = false;
+        this.recognitionStarted = true;
+        this.restartAttempts = 0;
+        this.setVisualState("listening");
+        this.callbacks.onState?.("listening");
+        void this.startMicMonitor().catch(() => undefined);
+      };
 
-      // Important: start the visual microphone analyser only AFTER Chromium's
-      // SpeechRecognition service has acquired the microphone. Opening our own
-      // MediaStream first can leave some Windows/Chromium setups listening but
-      // never returning transcripts.
-      void this.startMicMonitor().catch(() => undefined);
-    };
+      this.recognition.onend = () => {
+        this.recognitionStarting = false;
+        this.recognitionStarted = false;
+        if (this.switchingToLocal || this.localSttMode || this.localSttSubmitting) return;
+        if (!this.listeningRequested) {
+          this.stopMicMonitor();
+          this.setVisualState("idle");
+          this.callbacks.onState?.("idle");
+          return;
+        }
+        this.scheduleRestart(250);
+      };
 
-    this.recognition.onend = () => {
-      this.recognitionStarting = false;
-      this.recognitionStarted = false;
-      if (!this.listeningRequested) {
-        this.stopMicMonitor();
-        this.setVisualState("idle");
-        this.callbacks.onState?.("idle");
-        return;
-      }
-      this.scheduleRestart(250);
-    };
+      this.recognition.onnomatch = () => {
+        if (this.listeningRequested) {
+          this.callbacks.onError?.("I can hear the microphone, but I couldn't recognize those words. Please speak again.");
+        }
+      };
 
-    this.recognition.onnomatch = () => {
-      if (this.listeningRequested) {
-        this.callbacks.onError?.("I can hear the microphone, but I couldn't recognize those words. Please speak again.");
-      }
-    };
+      this.recognition.onerror = (event: any) => {
+        const code = String(event?.error || "");
+        this.recognitionStarting = false;
+        this.recognitionStarted = false;
 
-    this.recognition.onerror = (event: any) => {
-      const code = String(event?.error || "");
-      this.recognitionStarting = false;
-      this.recognitionStarted = false;
+        if (code === "aborted") return;
 
-      if (code === "aborted") return;
+        if (code === "no-speech") {
+          if (this.listeningRequested) this.scheduleRestart(300);
+          return;
+        }
 
-      if (code === "no-speech") {
-        if (this.listeningRequested) this.scheduleRestart(300);
-        return;
-      }
+        if (code === "language-not-supported" && !this.triedLanguageFallback) {
+          this.triedLanguageFallback = true;
+          this.recognitionLanguage = "en-US";
+          this.recognition.lang = "en-US";
+          if (this.listeningRequested) this.scheduleRestart(250);
+          return;
+        }
 
-      if (code === "language-not-supported" && !this.triedLanguageFallback) {
-        this.triedLanguageFallback = true;
-        this.recognitionLanguage = "en-US";
-        this.recognition.lang = "en-US";
-        if (this.listeningRequested) this.scheduleRestart(250);
-        return;
-      }
+        if (code === "network") {
+          void this.activateLocalFallback();
+          return;
+        }
 
-      if (code === "network") {
-        this.listeningRequested = false;
-        this.stopMicMonitor();
-        this.setVisualState("idle");
-        this.callbacks.onState?.("idle");
-        this.callbacks.onError?.("The microphone is available, but Chrome/Edge speech-to-text could not connect. Try the current Microsoft Edge or Chrome build and make sure browser speech services are not blocked by VPN/firewall.");
-        return;
-      }
+        if (code === "audio-capture") {
+          this.failListening("Jazz cannot capture microphone audio. Check the selected Windows input device and browser microphone permission.");
+          return;
+        }
 
-      if (code === "audio-capture") {
-        this.listeningRequested = false;
-        this.stopMicMonitor();
-        this.setVisualState("idle");
-        this.callbacks.onState?.("idle");
-        this.callbacks.onError?.("Jazz cannot capture microphone audio. Check the selected Windows input device and browser microphone permission.");
-        return;
-      }
+        if (code === "not-allowed" || code === "service-not-allowed") {
+          this.failListening("Microphone permission is blocked. Allow microphone access for localhost:5173, then tap the mic again.");
+          return;
+        }
 
-      if (code === "not-allowed" || code === "service-not-allowed") {
-        this.listeningRequested = false;
-        this.stopMicMonitor();
-        this.setVisualState("idle");
-        this.callbacks.onState?.("idle");
-        this.callbacks.onError?.("Microphone permission is blocked. Allow microphone access for localhost:5173, then tap the mic again.");
-        return;
-      }
+        if (code === "language-not-supported") {
+          void this.activateLocalFallback();
+          return;
+        }
 
-      if (code === "language-not-supported") {
-        this.listeningRequested = false;
-        this.stopMicMonitor();
-        this.setVisualState("idle");
-        this.callbacks.onState?.("idle");
-        this.callbacks.onError?.("Browser speech recognition does not have a usable English speech model.");
-        return;
-      }
+        this.callbacks.onError?.(`Browser speech recognition error: ${code || "unknown"}.`);
+        if (this.listeningRequested) this.scheduleRestart(650);
+      };
 
-      this.callbacks.onError?.(`Browser speech recognition error: ${code || "unknown"}.`);
-      if (this.listeningRequested) this.scheduleRestart(650);
-    };
+      this.recognition.onresult = (event: any) => {
+        let interim = "";
+        let finalText = "";
 
-    this.recognition.onresult = (event: any) => {
-      let interim = "";
-      let finalText = "";
+        for (let i = event.resultIndex; i < event.results.length; i += 1) {
+          const text = event.results[i][0]?.transcript || "";
+          if (event.results[i].isFinal) finalText += text;
+          else interim += text;
+        }
 
-      for (let i = event.resultIndex; i < event.results.length; i += 1) {
-        const text = event.results[i][0]?.transcript || "";
-        if (event.results[i].isFinal) finalText += text;
-        else interim += text;
-      }
+        const interimText = interim.trim();
+        const completedText = finalText.trim();
 
-      const interimText = interim.trim();
-      const completedText = finalText.trim();
+        if (interimText) this.callbacks.onInterim?.(this.stripWakePhrase(interimText));
+        if (completedText) this.callbacks.onFinal?.(this.stripWakePhrase(completedText));
+      };
+    }
 
-      if (interimText) this.callbacks.onInterim?.(this.stripWakePhrase(interimText));
-      if (completedText) this.callbacks.onFinal?.(this.stripWakePhrase(completedText));
-    };
+    if (!this.recognition && !navigator.mediaDevices?.getUserMedia) {
+      this.setVisualState("unsupported");
+      this.callbacks.onState?.("unsupported");
+    }
   }
 
   private setVisualState(state: VoiceState) {
@@ -196,6 +190,15 @@ export class JazzVoice {
     root.setProperty("--jazz-voice-scale", scale.toFixed(3));
   }
 
+  private failListening(message: string) {
+    this.listeningRequested = false;
+    this.switchingToLocal = false;
+    this.stopMicMonitor();
+    this.setVisualState("idle");
+    this.callbacks.onState?.("idle");
+    this.callbacks.onError?.(message);
+  }
+
   private async ensureAudioContext() {
     const AudioContextCtor = (window as any).AudioContext || (window as any).webkitAudioContext;
     if (!AudioContextCtor) return null;
@@ -212,9 +215,231 @@ export class JazzVoice {
     if (!track) throw new Error("No active microphone track is available.");
   }
 
+  private async localSttReady(force = false) {
+    const now = Date.now();
+    if (!force && this.localSttHealth && now - this.localSttHealth.checkedAt < 5000) {
+      return this.localSttHealth.ready;
+    }
+
+    try {
+      const response = await fetch("/stt-local/health", { cache: "no-store" });
+      const data = await response.json().catch(() => null);
+      const ready = Boolean(response.ok && data?.ok);
+      this.localSttHealth = { ready, checkedAt: now };
+      return ready;
+    } catch {
+      this.localSttHealth = { ready: false, checkedAt: now };
+      return false;
+    }
+  }
+
+  private async activateLocalFallback() {
+    if (!this.listeningRequested || this.switchingToLocal || this.localSttMode) return;
+    this.switchingToLocal = true;
+    try { this.recognition?.abort(); } catch {}
+    this.stopMicMonitor();
+
+    if (await this.localSttReady(true)) {
+      try {
+        await this.startLocalRecognition();
+        return;
+      } catch (error) {
+        this.failListening(`Jazz local speech recognition could not start: ${error instanceof Error ? error.message : String(error)}`);
+        return;
+      }
+    }
+
+    this.failListening("Browser speech-to-text could not connect and the local Jazz speech engine is not ready. Run tools\\whisper\\setup-windows.ps1 once, restart Jazz, then tap the microphone again.");
+  }
+
+  private async startLocalRecognition() {
+    if (!navigator.mediaDevices?.getUserMedia) throw new Error("Browser microphone capture is unavailable.");
+    if (!this.listeningRequested || this.localSttSubmitting) return;
+
+    this.stopMicMonitor();
+    this.switchingToLocal = false;
+    this.localSttMode = true;
+    this.localSttChunks = [];
+    this.localSttSpeechDetected = false;
+    this.localSttSilenceMs = 0;
+    this.localSttElapsedMs = 0;
+
+    this.micStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        channelCount: 1
+      }
+    });
+
+    if (!this.listeningRequested) {
+      this.micStream.getTracks().forEach(track => track.stop());
+      this.micStream = null;
+      return;
+    }
+
+    const activeTrack = this.micStream.getAudioTracks().find(track => track.readyState === "live" && track.enabled);
+    if (!activeTrack) throw new Error("No active microphone track is available.");
+
+    const context = await this.ensureAudioContext();
+    if (!context || !this.micStream) throw new Error("Web Audio is unavailable.");
+    this.localSttSampleRate = context.sampleRate;
+
+    this.micSource = context.createMediaStreamSource(this.micStream);
+    this.micAnalyser = context.createAnalyser();
+    this.micAnalyser.fftSize = 256;
+    this.micAnalyser.smoothingTimeConstant = 0.4;
+    this.micSource.connect(this.micAnalyser);
+
+    this.localSttProcessor = context.createScriptProcessor(4096, 1, 1);
+    this.micSource.connect(this.localSttProcessor);
+    this.localSttProcessor.connect(context.destination);
+    this.localSttProcessor.onaudioprocess = event => {
+      if (!this.listeningRequested || !this.localSttMode || this.localSttSubmitting) return;
+
+      const input = event.inputBuffer.getChannelData(0);
+      const copy = new Float32Array(input.length);
+      copy.set(input);
+      this.localSttChunks.push(copy);
+
+      let sum = 0;
+      let peak = 0;
+      for (let i = 0; i < input.length; i += 1) {
+        const sample = input[i];
+        sum += sample * sample;
+        peak = Math.max(peak, Math.abs(sample));
+      }
+      const rms = Math.sqrt(sum / Math.max(1, input.length));
+      const durationMs = input.length / this.localSttSampleRate * 1000;
+      this.localSttElapsedMs += durationMs;
+
+      const voiced = rms >= 0.015 || peak >= 0.065;
+      if (voiced) {
+        this.localSttSpeechDetected = true;
+        this.localSttSilenceMs = 0;
+      } else if (this.localSttSpeechDetected) {
+        this.localSttSilenceMs += durationMs;
+      }
+
+      const visual = Math.min(1, Math.max(0.02, (rms - 0.006) * 10 + peak * 0.28));
+      this.setLevel(visual, visual * 0.82, visual, visual * 0.72);
+
+      if (this.localSttSpeechDetected && this.localSttSilenceMs >= 850 && this.localSttElapsedMs >= 650) {
+        void this.finalizeLocalStt();
+      } else if (this.localSttElapsedMs >= 15000) {
+        if (this.localSttSpeechDetected) void this.finalizeLocalStt();
+        else this.failListening("Jazz is listening, but I didn't hear speech. Tap the microphone and try again.");
+      }
+    };
+
+    this.setVisualState("listening");
+    this.callbacks.onState?.("listening");
+    this.setLevel(0.05);
+  }
+
+  private concatFloat32(chunks: Float32Array[]) {
+    const length = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+    const output = new Float32Array(length);
+    let offset = 0;
+    for (const chunk of chunks) {
+      output.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return output;
+  }
+
+  private resampleMono(input: Float32Array, inputRate: number, outputRate = 16000) {
+    if (inputRate === outputRate) return input;
+    if (inputRate < outputRate) return input;
+
+    const ratio = inputRate / outputRate;
+    const outputLength = Math.max(1, Math.round(input.length / ratio));
+    const output = new Float32Array(outputLength);
+    let inputIndex = 0;
+
+    for (let outputIndex = 0; outputIndex < outputLength; outputIndex += 1) {
+      const nextInputIndex = Math.min(input.length, Math.round((outputIndex + 1) * ratio));
+      let sum = 0;
+      let count = 0;
+      for (; inputIndex < nextInputIndex; inputIndex += 1) {
+        sum += input[inputIndex];
+        count += 1;
+      }
+      output[outputIndex] = count ? sum / count : 0;
+    }
+    return output;
+  }
+
+  private encodeWav(samples: Float32Array, sampleRate = 16000) {
+    const buffer = new ArrayBuffer(44 + samples.length * 2);
+    const view = new DataView(buffer);
+    const writeText = (offset: number, value: string) => {
+      for (let i = 0; i < value.length; i += 1) view.setUint8(offset + i, value.charCodeAt(i));
+    };
+
+    writeText(0, "RIFF");
+    view.setUint32(4, 36 + samples.length * 2, true);
+    writeText(8, "WAVE");
+    writeText(12, "fmt ");
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeText(36, "data");
+    view.setUint32(40, samples.length * 2, true);
+
+    let offset = 44;
+    for (let i = 0; i < samples.length; i += 1) {
+      const clamped = Math.max(-1, Math.min(1, samples[i]));
+      view.setInt16(offset, clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff, true);
+      offset += 2;
+    }
+    return new Blob([buffer], { type: "audio/wav" });
+  }
+
+  private async finalizeLocalStt() {
+    if (this.localSttSubmitting || !this.localSttSpeechDetected) return;
+    this.localSttSubmitting = true;
+
+    const chunks = this.localSttChunks.slice();
+    const inputRate = this.localSttSampleRate;
+    this.stopMicMonitor();
+    this.setVisualState("listening");
+    this.callbacks.onState?.("listening");
+    this.setLevel(0.05);
+
+    try {
+      const raw = this.concatFloat32(chunks);
+      const pcm16k = this.resampleMono(raw, inputRate, 16000);
+      const wav = this.encodeWav(pcm16k, 16000);
+      const response = await fetch("/stt-local/transcribe", {
+        method: "POST",
+        headers: { "Content-Type": "audio/wav" },
+        body: wav
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok || !data?.ok) throw new Error(data?.error || "Local transcription failed.");
+
+      const text = this.stripWakePhrase(String(data.text || "").trim());
+      if (!text) throw new Error("Jazz did not detect clear speech in that recording.");
+      this.callbacks.onFinal?.(text);
+    } catch (error) {
+      this.listeningRequested = false;
+      this.setVisualState("idle");
+      this.callbacks.onState?.("idle");
+      this.callbacks.onError?.(`Jazz local speech recognition failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      this.localSttSubmitting = false;
+    }
+  }
+
   private async startMicMonitor() {
     if (!navigator.mediaDevices?.getUserMedia) return;
-    if (this.micAnalyser || !this.listeningRequested) return;
+    if (this.micAnalyser || !this.listeningRequested || this.localSttMode) return;
 
     this.micStream = await navigator.mediaDevices.getUserMedia({
       audio: {
@@ -245,7 +470,7 @@ export class JazzVoice {
   }
 
   private readMicLevel = () => {
-    if (!this.micAnalyser || !this.levelData || !this.listeningRequested) return;
+    if (!this.micAnalyser || !this.levelData || !this.listeningRequested || this.localSttMode) return;
     this.micAnalyser.getByteTimeDomainData(this.levelData);
     let sum = 0;
     let peak = 0;
@@ -264,12 +489,24 @@ export class JazzVoice {
     if (this.levelFrame !== null) window.cancelAnimationFrame(this.levelFrame);
     this.levelFrame = null;
     this.levelData = null;
-    this.micSource?.disconnect();
+
+    if (this.localSttProcessor) {
+      this.localSttProcessor.onaudioprocess = null;
+      try { this.localSttProcessor.disconnect(); } catch {}
+    }
+    this.localSttProcessor = null;
+
+    try { this.micSource?.disconnect(); } catch {}
     this.micSource = null;
-    this.micAnalyser?.disconnect();
+    try { this.micAnalyser?.disconnect(); } catch {}
     this.micAnalyser = null;
     this.micStream?.getTracks().forEach(track => track.stop());
     this.micStream = null;
+    this.localSttMode = false;
+    this.localSttChunks = [];
+    this.localSttSpeechDetected = false;
+    this.localSttSilenceMs = 0;
+    this.localSttElapsedMs = 0;
   }
 
   /** Prepare a Web Audio analyser for streamed PCM output. */
@@ -341,6 +578,8 @@ export class JazzVoice {
 
   private startRecognitionNow() {
     if (!this.recognition || !this.listeningRequested || this.recognitionStarting || this.recognitionStarted) return;
+    this.switchingToLocal = false;
+    this.localSttMode = false;
     this.recognitionStarting = true;
     this.recognition.lang = this.recognitionLanguage;
 
@@ -350,22 +589,15 @@ export class JazzVoice {
       this.recognitionStarting = false;
       const message = error instanceof Error ? error.message : String(error);
       if (!/already started|recognition has already started/i.test(message)) {
-        this.listeningRequested = false;
-        this.setVisualState("idle");
-        this.callbacks.onState?.("idle");
-        this.callbacks.onError?.(`Jazz could not start browser speech recognition: ${message}`);
+        this.failListening(`Jazz could not start browser speech recognition: ${message}`);
       }
     }
   }
 
   private scheduleRestart(delay: number) {
-    if (!this.listeningRequested || this.restartTimer !== null) return;
+    if (!this.listeningRequested || this.restartTimer !== null || this.localSttMode || this.switchingToLocal) return;
     if (this.restartAttempts >= 8) {
-      this.listeningRequested = false;
-      this.stopMicMonitor();
-      this.setVisualState("idle");
-      this.callbacks.onState?.("idle");
-      this.callbacks.onError?.("Speech recognition stopped repeatedly. Tap the microphone and try again.");
+      this.failListening("Speech recognition stopped repeatedly. Tap the microphone and try again.");
       return;
     }
 
@@ -376,20 +608,24 @@ export class JazzVoice {
     }, delay);
   }
 
-  isSupported() { return Boolean(this.recognition); }
+  isSupported() {
+    return Boolean(navigator.mediaDevices?.getUserMedia || this.recognition);
+  }
+
   setWakePhraseEnabled(enabled: boolean) { this.wakeEnabled = enabled; }
 
   async start() {
-    if (!this.recognition) {
-      this.callbacks.onError?.("Speech recognition is not supported by this browser. Use current Chrome or Edge.");
+    if (!this.isSupported()) {
+      this.callbacks.onError?.("Microphone capture is not supported by this browser.");
       return;
     }
 
-    if (this.listeningRequested && (this.recognitionStarted || this.recognitionStarting)) return;
+    if (this.listeningRequested && (this.recognitionStarted || this.recognitionStarting || this.localSttMode || this.localSttSubmitting)) return;
 
     this.listeningRequested = true;
     this.restartAttempts = 0;
     this.triedLanguageFallback = false;
+    this.switchingToLocal = false;
     this.setLevel(0.08);
 
     if (this.restartTimer !== null) {
@@ -398,12 +634,23 @@ export class JazzVoice {
     }
 
     try {
-      // Probe permission, release that temporary stream, THEN start the Web Speech
-      // recognizer. This prevents a separate analyser stream from owning the mic
-      // before SpeechRecognition starts.
       await this.probeMicrophonePermission();
       if (!this.listeningRequested) return;
-      this.startRecognitionNow();
+
+      // Prefer Jazz's local Whisper engine. This avoids Chromium's cloud speech
+      // service entirely and keeps voice input working even when Web Speech emits
+      // a "network" error because Google/Microsoft speech endpoints are blocked.
+      if (await this.localSttReady()) {
+        await this.startLocalRecognition();
+        return;
+      }
+
+      if (this.recognition) {
+        this.startRecognitionNow();
+        return;
+      }
+
+      this.failListening("Jazz local speech recognition is not installed yet. Run tools\\whisper\\setup-windows.ps1, restart Jazz, and try again.");
     } catch (error) {
       this.listeningRequested = false;
       this.stopMicMonitor();
@@ -425,6 +672,7 @@ export class JazzVoice {
     this.listeningRequested = false;
     this.recognitionStarting = false;
     this.recognitionStarted = false;
+    this.switchingToLocal = false;
 
     if (this.restartTimer !== null) {
       window.clearTimeout(this.restartTimer);
@@ -597,14 +845,24 @@ export class JazzVoice {
 
   private finishSpeaking() {
     if (this.listeningRequested) {
-      this.setVisualState("listening");
-      this.callbacks.onState?.("listening");
-      void this.startMicMonitor().catch(() => undefined);
+      void this.resumeListening();
     } else {
       this.setVisualState("idle");
       this.setLevel(0);
       this.callbacks.onState?.("idle");
     }
+  }
+
+  private async resumeListening() {
+    if (!this.listeningRequested) return;
+    if (await this.localSttReady()) {
+      try { await this.startLocalRecognition(); return; } catch {}
+    }
+    if (this.recognition) {
+      this.startRecognitionNow();
+      return;
+    }
+    this.failListening("Jazz could not resume speech recognition.");
   }
 
   private cleanForSpeech(text: string) {
