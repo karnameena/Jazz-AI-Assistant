@@ -17,6 +17,12 @@ $runtimeFiles = @(
   "services/api/src/script-registry.mjs",
   "services/api/telegram.env.example",
   "services/stt/server.mjs",
+  "services/recovery-local/server.mjs",
+  "services/recovery-local/package.json",
+  "services/recovery-local/.env.example",
+  "services/recovery-relay/server.mjs",
+  "services/recovery-relay/package.json",
+  "services/recovery-relay/.env.example",
   "bridges/windows-adb/adb-bridge.mjs",
   "tools/piper/setup-windows.ps1",
   "tools/whisper/setup-windows.ps1",
@@ -31,6 +37,8 @@ $runtimeFiles = @(
   "apps/web/public/rich-code.css",
   "apps/web/public/telegram-ui.js",
   "apps/web/public/telegram-ui.css",
+  "apps/web/public/recovery-ui.js",
+  "apps/web/public/recovery-ui.css",
   "apps/web/src/api-runtime.ts",
   "apps/web/src/main.tsx",
   "apps/web/src/TelegramPanel.tsx",
@@ -60,6 +68,9 @@ $apiRuntime = Get-Content ".\apps\web\public\api-runtime.js" -Raw
 if ($apiRuntime -notmatch 'window\.location\.origin') {
   throw "Repair failed: web API runtime is not LAN-safe/same-origin."
 }
+if ($apiRuntime -notmatch 'device-recovery' -or $apiRuntime -notmatch '127\.0\.0\.1:8799') {
+  throw "Repair failed: Device Recovery chat interception is missing."
+}
 
 $indexHtml = Get-Content ".\apps\web\index.html" -Raw
 if ($indexHtml -notmatch 'rich-code\.js' -or $indexHtml -notmatch 'rich-code\.css') {
@@ -73,6 +84,12 @@ if ($indexHtml -notmatch 'telegram-ui\.js' -or $indexHtml -notmatch 'telegram-ui
 }
 if (-not (Test-Path ".\apps\web\public\telegram-ui.js") -or -not (Test-Path ".\apps\web\public\telegram-ui.css")) {
   throw "Repair failed: Jazz Telegram quick-action assets are missing."
+}
+if ($indexHtml -notmatch 'recovery-ui\.js' -or $indexHtml -notmatch 'recovery-ui\.css') {
+  throw "Repair failed: Jazz Device Recovery UI assets are not loaded by index.html."
+}
+if (-not (Test-Path ".\apps\web\public\recovery-ui.js") -or -not (Test-Path ".\apps\web\public\recovery-ui.css")) {
+  throw "Repair failed: Jazz Device Recovery UI assets are missing."
 }
 
 $mainTsx = Get-Content ".\apps\web\src\main.tsx" -Raw
@@ -115,6 +132,12 @@ $startJazz = Get-Content ".\start-jazz.ps1" -Raw
 if ($startJazz -notmatch 'Local Whisper STT READY' -or $startJazz -notmatch 'services\\stt\\server\.mjs' -or $startJazz -notmatch 'JAZZ_STT_PORT') {
   throw "Repair failed: start-jazz.ps1 does not start the local Whisper service."
 }
+if ($startJazz -notmatch 'Recovery proxy READY' -or $startJazz -notmatch 'services\\recovery-local\\server\.mjs') {
+  throw "Repair failed: start-jazz.ps1 does not start the isolated recovery proxy."
+}
+if (-not (Test-Path ".\services\recovery-local\server.mjs") -or -not (Test-Path ".\services\recovery-relay\server.mjs")) {
+  throw "Repair failed: Jazz Device Recovery services are missing."
+}
 
 $telegramBridge = Get-Content ".\apps\web\telegram-bridge.ts" -Raw
 if ($telegramBridge -notmatch 'jazz-telegram-popup-bridge' -or $telegramBridge -notmatch '/telegram-api/status') {
@@ -147,9 +170,9 @@ if ($workspaceManifest -notmatch '(?m)^allowBuilds:\s*$' -or $workspaceManifest 
   throw "Repair failed: pnpm allowBuilds approval for esbuild is missing."
 }
 
-# Stop old Jazz/Vite/STT Node processes BEFORE touching node_modules. Otherwise Windows
-# can keep stale optimized React chunks or a stale speech service open.
-Write-Host "Stopping stale Jazz web/API/STT processes..." -ForegroundColor Yellow
+# Stop old Jazz/Vite/STT/recovery Node processes BEFORE touching node_modules. Otherwise Windows
+# can keep stale optimized React chunks or a stale local service open.
+Write-Host "Stopping stale Jazz web/API/STT/recovery processes..." -ForegroundColor Yellow
 $needle = [regex]::Escape($root)
 Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
   Where-Object {
@@ -213,6 +236,7 @@ Write-Host "Jazz Telegram popup isolation verified: /telegram-api/* is separate 
 Write-Host "Jazz Telegram rich media verified: photos, videos, files, maps and link previews are wired." -ForegroundColor Green
 Write-Host "Jazz Telegram realtime verified: SSE event stream is wired." -ForegroundColor Green
 Write-Host "Jazz Telegram callback/reply keyboard bridge verified by build." -ForegroundColor Green
+Write-Host "Jazz Device Recovery verified: isolated local proxy + hosted relay + chat interception + recovery UI are wired." -ForegroundColor Green
 Write-Host "Jazz web LAN access verified: Vite listens on 0.0.0.0 and /api stays same-origin." -ForegroundColor Green
 Write-Host "pnpm build approval verified: esbuild only." -ForegroundColor Green
 Write-Host "Private .env files were not changed." -ForegroundColor DarkGray
