@@ -1,0 +1,328 @@
+.telegram-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(3, 8, 19, 0.72);
+  backdrop-filter: blur(14px);
+}
+
+.telegram-shell {
+  width: min(1050px, 96vw);
+  height: min(720px, 88vh);
+  display: grid;
+  grid-template-rows: auto 1fr;
+  overflow: hidden;
+  border: 1px solid rgba(91, 195, 255, 0.24);
+  border-radius: 24px;
+  background: linear-gradient(145deg, rgba(10, 22, 42, 0.98), rgba(8, 14, 29, 0.98));
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.48), 0 0 60px rgba(52, 184, 255, 0.09);
+}
+
+.telegram-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  min-height: 76px;
+  padding: 16px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.telegram-heading,
+.telegram-chat-title,
+.telegram-bot-item,
+.telegram-connection-card {
+  display: flex;
+  align-items: center;
+}
+
+.telegram-heading { gap: 12px; }
+.telegram-heading > div,
+.telegram-chat-title > div,
+.telegram-bot-copy,
+.telegram-connection-card > div { display: grid; gap: 2px; }
+.telegram-heading strong,
+.telegram-chat-title strong,
+.telegram-bot-copy strong { color: #f8fbff; font-size: 15px; }
+.telegram-heading small,
+.telegram-chat-title small,
+.telegram-bot-copy small,
+.telegram-connection-card small { color: rgba(214, 230, 249, 0.58); font-size: 11px; }
+
+.telegram-logo {
+  width: 39px;
+  height: 39px;
+  display: grid;
+  place-items: center;
+  border-radius: 13px;
+  color: #fff;
+  background: linear-gradient(145deg, #35b8ff, #168eea);
+  box-shadow: 0 8px 24px rgba(39, 169, 238, 0.28);
+}
+
+.telegram-header-actions { display: flex; gap: 8px; }
+.telegram-header-actions button,
+.telegram-composer button {
+  border: 0;
+  color: #dceeff;
+  cursor: pointer;
+}
+.telegram-header-actions button {
+  width: 37px;
+  height: 37px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.055);
+}
+.telegram-header-actions button:hover { background: rgba(53, 184, 255, 0.12); }
+.telegram-spin { animation: telegram-spin 0.8s linear infinite; }
+@keyframes telegram-spin { to { transform: rotate(360deg); } }
+
+.telegram-body {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 280px 1fr;
+}
+
+.telegram-bot-list {
+  min-width: 0;
+  padding: 18px 14px;
+  border-right: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(255, 255, 255, 0.012);
+}
+.telegram-list-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 7px 12px;
+  color: #c8d9ed;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.telegram-list-title small {
+  min-width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: #7ed5ff;
+  background: rgba(53, 184, 255, 0.1);
+}
+
+.telegram-bot-item {
+  position: relative;
+  width: 100%;
+  gap: 11px;
+  padding: 12px;
+  border: 1px solid transparent;
+  border-radius: 15px;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  background: transparent;
+}
+.telegram-bot-item.active {
+  border-color: rgba(53, 184, 255, 0.18);
+  background: linear-gradient(135deg, rgba(53, 184, 255, 0.12), rgba(102, 89, 255, 0.07));
+}
+.telegram-bot-avatar {
+  flex: 0 0 auto;
+  width: 39px;
+  height: 39px;
+  display: grid;
+  place-items: center;
+  border-radius: 13px;
+  color: #7fd8ff;
+  background: rgba(53, 184, 255, 0.11);
+  border: 1px solid rgba(53, 184, 255, 0.18);
+}
+.telegram-bot-avatar.large { width: 42px; height: 42px; border-radius: 14px; }
+.telegram-bot-copy { min-width: 0; flex: 1; }
+.telegram-bot-copy strong,
+.telegram-bot-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.telegram-online-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #34db8d;
+  box-shadow: 0 0 12px rgba(52, 219, 141, 0.7);
+}
+.telegram-empty-bot {
+  min-height: 120px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  color: rgba(211, 226, 244, 0.48);
+  font-size: 12px;
+}
+.telegram-connection-card {
+  gap: 9px;
+  margin: 18px 4px 0;
+  padding: 11px;
+  border-radius: 13px;
+  color: #9bdfff;
+  background: rgba(255, 255, 255, 0.035);
+}
+.telegram-connection-card strong { color: #eaf6ff; font-size: 12px; }
+
+.telegram-chat {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  background:
+    radial-gradient(circle at 76% 22%, rgba(47, 180, 255, 0.08), transparent 30%),
+    radial-gradient(circle at 26% 86%, rgba(135, 73, 255, 0.07), transparent 30%);
+}
+.telegram-chat-title {
+  gap: 11px;
+  min-height: 70px;
+  padding: 13px 18px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.telegram-messages {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 22px 24px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(83, 193, 255, 0.28) transparent;
+}
+.telegram-message-row { display: flex; margin: 9px 0; }
+.telegram-message-row.incoming { justify-content: flex-start; }
+.telegram-message-row.outgoing { justify-content: flex-end; }
+.telegram-message-bubble {
+  max-width: min(72%, 560px);
+  padding: 10px 12px 8px;
+  border-radius: 16px;
+  color: #f3f8ff;
+  font-size: 13px;
+  line-height: 1.45;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+.telegram-message-row.incoming .telegram-message-bubble {
+  border-bottom-left-radius: 5px;
+  background: rgba(255, 255, 255, 0.075);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+.telegram-message-row.outgoing .telegram-message-bubble {
+  border-bottom-right-radius: 5px;
+  background: linear-gradient(135deg, #168eea, #2caef4);
+}
+.telegram-sender { display: block; margin-bottom: 3px; color: #74d2ff; font-weight: 700; }
+.telegram-message-time { display: block; margin-top: 4px; color: rgba(237, 247, 255, 0.62); text-align: right; font-size: 9px; }
+
+.telegram-composer {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 9px;
+  padding: 14px 18px 17px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(7, 15, 31, 0.74);
+}
+.telegram-composer input {
+  min-width: 0;
+  height: 44px;
+  padding: 0 15px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  outline: none;
+  color: #eef8ff;
+  background: rgba(255, 255, 255, 0.045);
+}
+.telegram-composer input:focus { border-color: rgba(53, 184, 255, 0.38); box-shadow: 0 0 0 3px rgba(53, 184, 255, 0.07); }
+.telegram-composer button {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 14px;
+  background: linear-gradient(145deg, #35b8ff, #168eea);
+}
+.telegram-composer button:disabled { cursor: default; opacity: 0.42; }
+
+.telegram-setup,
+.telegram-no-messages,
+.telegram-loading {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  text-align: center;
+}
+.telegram-setup { padding: 26px; color: #cfdded; }
+.telegram-setup-icon {
+  width: 58px;
+  height: 58px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 11px;
+  border-radius: 19px;
+  color: #fff;
+  background: linear-gradient(145deg, #35b8ff, #168eea);
+  box-shadow: 0 12px 34px rgba(39, 169, 238, 0.26);
+}
+.telegram-setup h3 { margin: 0 0 7px; color: #f5faff; font-size: 18px; }
+.telegram-setup p { max-width: 540px; margin: 0; color: rgba(214, 229, 247, 0.66); font-size: 12px; line-height: 1.6; }
+.telegram-setup > small { margin-top: 11px; color: rgba(202, 218, 237, 0.48); font-size: 10px; }
+.telegram-config-box {
+  width: min(540px, 100%);
+  display: grid;
+  gap: 7px;
+  margin-top: 16px;
+  padding: 14px 16px;
+  border: 1px solid rgba(53, 184, 255, 0.15);
+  border-radius: 14px;
+  text-align: left;
+  color: #bce9ff;
+  background: rgba(53, 184, 255, 0.055);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.telegram-config-box code { color: #72d2ff; font-weight: 700; }
+.telegram-no-messages { height: 100%; gap: 7px; color: rgba(210, 226, 245, 0.48); }
+.telegram-no-messages strong { color: #dcecff; font-size: 13px; }
+.telegram-no-messages span { font-size: 11px; }
+.telegram-loading { height: 100%; color: #8ddcff; font-size: 12px; }
+.telegram-error {
+  position: absolute;
+  left: 50%;
+  bottom: 76px;
+  transform: translateX(-50%);
+  max-width: calc(100% - 40px);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 12px;
+  border: 1px solid rgba(255, 102, 122, 0.25);
+  border-radius: 12px;
+  color: #ffd2d8;
+  background: rgba(87, 19, 30, 0.9);
+  font-size: 11px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+}
+
+@media (max-width: 760px) {
+  .telegram-overlay { padding: 0; }
+  .telegram-shell { width: 100vw; height: 100dvh; border-radius: 0; border: 0; }
+  .telegram-body { grid-template-columns: 92px 1fr; }
+  .telegram-bot-list { padding: 14px 8px; }
+  .telegram-list-title span,
+  .telegram-bot-copy,
+  .telegram-connection-card > div { display: none; }
+  .telegram-list-title { justify-content: center; }
+  .telegram-bot-item { justify-content: center; padding: 10px 5px; }
+  .telegram-online-dot { position: absolute; right: 14px; bottom: 10px; border: 2px solid #0a1629; }
+  .telegram-connection-card { justify-content: center; }
+  .telegram-message-bubble { max-width: 86%; }
+  .telegram-heading small { display: none; }
+}
