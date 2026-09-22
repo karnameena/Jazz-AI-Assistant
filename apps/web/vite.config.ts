@@ -6,6 +6,7 @@ import react from "@vitejs/plugin-react";
 import { telegramBridgePlugin } from "./telegram-bridge";
 
 const apiPort = Number(process.env.JAZZ_API_PORT || 8797);
+const sttPort = Number(process.env.JAZZ_STT_PORT || 8798);
 const require = createRequire(import.meta.url);
 const appDir = path.dirname(fileURLToPath(import.meta.url));
 const reactDir = path.dirname(require.resolve("react/package.json", { paths: [appDir] }));
@@ -42,7 +43,15 @@ export default defineConfig(({ mode }) => ({
     strictPort: true,
     proxy: {
       // This is the normal Jazz path. Telegram is NOT proxied here.
-      "/api": `http://127.0.0.1:${apiPort}`
+      "/api": `http://127.0.0.1:${apiPort}`,
+
+      // Local Whisper STT stays bound to loopback. The browser reaches it only
+      // through Vite, so voice input also works when Jazz is opened through a tunnel.
+      "/stt-local": {
+        target: `http://127.0.0.1:${sttPort}`,
+        changeOrigin: true,
+        rewrite: requestPath => requestPath.replace(/^\/stt-local/, "")
+      }
     }
   }
 }));
