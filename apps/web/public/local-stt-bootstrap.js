@@ -10,15 +10,11 @@
     supported: supportsLocal,
     mode: supportsLocal ? "checking" : "remote-only",
     language: null,
+    requestedLanguage: null,
     lastAvailability: null,
     lastError: null
   };
   window.__JAZZ_LOCAL_STT__ = state;
-
-  if (!supportsLocal) {
-    console.info("[Jazz] Browser on-device speech recognition API is unavailable; using browser default recognition.");
-    return;
-  }
 
   const emit = detail => {
     try {
@@ -26,20 +22,41 @@
     } catch {}
   };
 
+  // Current Chromium/Edge on-device speech models support en-US, but many Windows
+  // machines report navigator.language as en-IN/en-GB. Normalize any English
+  // request to en-US so Jazz does not silently fall back to remote STT.
+  function localLanguage(requested) {
+    const lang = String(requested || navigator.language || "en-US").replace("_", "-") || "en-US";
+    return /^en(?:-|$)/i.test(lang) ? "en-US" : lang;
+  }
+
+  if (!supportsLocal) {
+    state.lastError = "On-device SpeechRecognition API is not enabled in this browser.";
+    console.info("[Jazz] On-device speech recognition API is unavailable; browser default recognition remains available.");
+  }
+
   async function prepareLocalRecognition(recognition) {
-    const lang = String(recognition.lang || navigator.language || "en-US").replace("_", "-") || "en-US";
+    if (!supportsLocal) return false;
+
+    const requested = String(recognition.lang || navigator.language || "en-US").replace("_", "-") || "en-US";
+    const lang = localLanguage(requested);
+    state.requestedLanguage = requested;
     state.language = lang;
     state.mode = "checking";
-    emit({ mode: state.mode, language: lang });
+    emit({ mode: state.mode, requestedLanguage: requested, language: lang });
 
     try {
-      const availability = await NativeRecognition.available({
+      const options = {
         langs: [lang],
-        processLocally: true
-      });
+        processLocally: true,
+        quality: "command"
+      };
+
+      const availability = await NativeRecognition.available(options);
       state.lastAvailability = availability;
 
       if (availability === "available") {
+        recognition.lang = lang;
         recognition.processLocally = true;
         state.mode = "local";
         state.lastError = null;
@@ -53,31 +70,28 @@
         console.info(`[Jazz] Installing on-device speech language pack for ${lang}...`);
         emit({ mode: state.mode, availability });
 
-        const installed = await NativeRecognition.install({
-          langs: [lang],
-          processLocally: true
-        });
-
+        const installed = await NativeRecognition.install(options);
         if (installed) {
+          recognition.lang = lang;
           recognition.processLocally = true;
           state.mode = "local";
           state.lastError = null;
+          state.lastAvailability = "available";
           console.info(`[Jazz] On-device speech language pack installed for ${lang}.`);
           emit({ mode: state.mode, availability: "available" });
           return true;
         }
       }
 
-      recognition.processLocally = false;
-      state.mode = "remote-fallback";
-      console.warn(`[Jazz] On-device speech recognition is unavailable for ${lang}; browser remote recognition will be used.`);
-      emit({ mode: state.mode, availability });
+      state.mode = "local-unavailable";
+      state.lastError = `On-device speech model is unavailable for ${lang}.`;
+      console.warn(`[Jazz] ${state.lastError}`);
+      emit({ mode: state.mode, availability, error: state.lastError });
       return false;
     } catch (error) {
-      recognition.processLocally = false;
-      state.mode = "remote-fallback";
+      state.mode = "local-error";
       state.lastError = error instanceof Error ? error.message : String(error);
-      console.warn("[Jazz] Could not initialize on-device speech recognition; using browser fallback.", error);
+      console.warn("[Jazz] Could not initialize on-device speech recognition.", error);
       emit({ mode: state.mode, error: state.lastError });
       return false;
     }
@@ -99,13 +113,33 @@
               return;
             }
 
+            if (!supportsLocal) {
+              nativeStart();
+              return;
+            }
+
             starting = true;
             void prepareLocalRecognition(target)
               .then(localReady => {
-                if (localReady) localPrepared = true;
-                nativeStart();
+                if (localReady) {
+                  localPrepared = true;
+                  nativeStart();
+                  return;
+                }
+
+                // Do not silently switch a local-first Jazz installation back to
+                // Chromium's cloud recognizer. Leave the native recognizer stopped
+                // so the UI can show the local-STT diagnostic instead of a misleading
+                // generic network failure.
+                try {
+                  target.onerror?.({ error: "local-stt-unavailable" });
+                } catch {}
               })
-              .catch(() => nativeStart())
+              .catch(error => {
+                try {
+                  target.onerror?.({ error: "local-stt-unavailable", message: String(error) });
+                } catch {}
+              })
               .finally(() => {
                 starting = false;
               });
@@ -124,9 +158,10 @@
   JazzSpeechRecognition.prototype = NativeRecognition.prototype;
   Object.setPrototypeOf(JazzSpeechRecognition, NativeRecognition);
 
-  // Preserve access to the static on-device helpers for debugging/feature checks.
-  JazzSpeechRecognition.available = NativeRecognition.available.bind(NativeRecognition);
-  JazzSpeechRecognition.install = NativeRecognition.install.bind(NativeRecognition);
+  if (supportsLocal) {
+    JazzSpeechRecognition.available = NativeRecognition.available.bind(NativeRecognition);
+    JazzSpeechRecognition.install = NativeRecognition.install.bind(NativeRecognition);
+  }
 
   window.SpeechRecognition = JazzSpeechRecognition;
   if (window.webkitSpeechRecognition) window.webkitSpeechRecognition = JazzSpeechRecognition;
