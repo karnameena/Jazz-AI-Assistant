@@ -1,0 +1,24 @@
+# Local secrets
+.env
+.env.local
+**/.env
+**/.env.local
+**/.env.*.local
+!**/.env.example
+!**/*.env.example
+
+# Dependencies and generated runtime
+node_modules/
+**/node_modules/
+.jazz/
+**/.vite/
+**/.vite-jazz/
+
+# Local device identity/runtime state
+bridges/windows-adb/.device-identities.json
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
