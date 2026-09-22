@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
+import com.google.android.gms.tasks.CancellationTokenSource
 import com.google.android.gms.tasks.Tasks
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
@@ -22,6 +23,7 @@ class DeviceLocationManager(private val context: Context) {
 
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     private val client = LocationServices.getFusedLocationProviderClient(context)
+    private val history = RecoveryLocationHistory(context)
 
     fun currentLocation(timeoutSeconds: Long = 12): JSONObject {
         if (!hasLocationPermission()) {
@@ -31,9 +33,10 @@ class DeviceLocationManager(private val context: Context) {
                 .put("error", "Location permission has not been granted to Jazz Android Companion.")
         }
 
+        val cancellation = CancellationTokenSource()
         return try {
             val location = Tasks.await(
-                client.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null),
+                client.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, cancellation.token),
                 timeoutSeconds,
                 TimeUnit.SECONDS
             )
@@ -51,6 +54,7 @@ class DeviceLocationManager(private val context: Context) {
                 lastKnownLocation("LAST_KNOWN_LOCATION")
             }
         } catch (_: Exception) {
+            cancellation.cancel()
             try {
                 val last = Tasks.await(client.lastLocation, 4, TimeUnit.SECONDS)
                 if (last != null) {
@@ -76,6 +80,8 @@ class DeviceLocationManager(private val context: Context) {
         if (!prefs.contains(LAST_LAT) || !prefs.contains(LAST_LON)) return null
         return lastKnownLocation("LAST_KNOWN_LOCATION").takeIf { it.optBoolean("ok") }
     }
+
+    fun encryptedHistory() = history.readForRecovery()
 
     private fun lastKnownLocation(kind: String): JSONObject {
         if (!prefs.contains(LAST_LAT) || !prefs.contains(LAST_LON)) {
@@ -118,6 +124,7 @@ class DeviceLocationManager(private val context: Context) {
             .putString(LAST_PROVIDER, provider)
             .putLong(LAST_TIME, timestamp)
             .apply()
+        history.append(latitude, longitude, accuracy, provider, timestamp)
     }
 
     private fun hasLocationPermission(): Boolean =
