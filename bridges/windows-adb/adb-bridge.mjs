@@ -7,23 +7,27 @@ import { fileURLToPath } from "node:url";
 const port = Number(process.env.JAZZ_ADB_BRIDGE_PORT || 9899);
 const adb = process.env.ADB_PATH || "adb";
 const reconnectIntervalMs = Number(process.env.JAZZ_ADB_RECONNECT_INTERVAL_MS || 10000);
-const phoneSerial = process.env.JAZZ_ANDROID_PHONE_SERIAL || "";
-const tabletSerial = process.env.JAZZ_ANDROID_TABLET_SERIAL || "";
-const phoneToken = process.env.JAZZ_ANDROID_PHONE_TOKEN || "";
-const tabletToken = process.env.JAZZ_ANDROID_TABLET_TOKEN || "";
-const targets = {
-  "android-phone": { serial: phoneSerial, configuredSerial: phoneSerial, localPort: 19001, token: phoneToken },
-  "android-tablet": { serial: tabletSerial, configuredSerial: tabletSerial, localPort: 19002, token: tabletToken }
-};
-
 const bridgeDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(bridgeDir, "../..");
 const scriptRoot = resolve(process.env.JAZZ_SCRIPT_ROOT || join(repoRoot, "scripts", "android"));
 const bashPath = process.env.JAZZ_BASH_PATH || "C:\\Program Files\\Git\\bin\\bash.exe";
 const powershellPath = process.env.JAZZ_POWERSHELL_PATH || "powershell.exe";
 const stateFile = join(bridgeDir, ".device-identities.json");
-let identityState = {};
-try { if (existsSync(stateFile)) identityState = JSON.parse(readFileSync(stateFile, "utf8")); } catch { identityState = {}; }
+
+const targets = {
+  "android-phone": {
+    serial: process.env.JAZZ_ANDROID_PHONE_SERIAL || "",
+    configuredSerial: process.env.JAZZ_ANDROID_PHONE_SERIAL || "",
+    localPort: 19001,
+    token: process.env.JAZZ_ANDROID_PHONE_TOKEN || ""
+  },
+  "android-tablet": {
+    serial: process.env.JAZZ_ANDROID_TABLET_SERIAL || "",
+    configuredSerial: process.env.JAZZ_ANDROID_TABLET_SERIAL || "",
+    localPort: 19002,
+    token: process.env.JAZZ_ANDROID_TABLET_TOKEN || ""
+  }
+};
 
 const registeredScriptFiles = {
   unlock: ["unlockmobile.ps1"],
@@ -34,61 +38,202 @@ const registeredScriptFiles = {
   screenshot: ["screenshot.ps1", "screenshot.sh"]
 };
 
-function saveIdentityState() { try { writeFileSync(stateFile, JSON.stringify(identityState, null, 2), "utf8"); } catch {} }
+const allowedActions = new Set([
+  "device_info", "screen_state", "open_url", "launch_app", "launch_app_name", "open_app", "dial_number",
+  "home", "back", "recents", "notifications", "tap", "swipe",
+  "scroll_down", "scroll_up", "scroll_forward", "scroll_backward",
+  "click_text", "long_click_text", "set_text", "type", "clear_text", "search_ui",
+  "open_instagram_reels", "read_screen", "dump_ui_tree", "current_app",
+  "whatsapp_search", "whatsapp_message", "execute_command"
+]);
+
+let identityState = {};
+try {
+  if (existsSync(stateFile)) identityState = JSON.parse(readFileSync(stateFile, "utf8"));
+} catch {
+  identityState = {};
+}
+
+function saveIdentityState() {
+  try { writeFileSync(stateFile, JSON.stringify(identityState, null, 2), "utf8"); } catch {}
+}
+
 function sleep(ms) { return new Promise(resolvePromise => setTimeout(resolvePromise, ms)); }
+
 function run(args, timeout = 15000) {
-  return new Promise((resolvePromise, reject) => execFile(
-    adb,
-    args,
-    { timeout, windowsHide: true },
-    (error, stdout, stderr) => error
-      ? reject(new Error(stderr.trim() || error.message))
-      : resolvePromise(stdout.trim())
-  ));
+  return new Promise((resolvePromise, reject) => {
+    execFile(adb, args, { timeout, windowsHide: true }, (error, stdout, stderr) => {
+      if (error) reject(new Error(String(stderr || error.message).trim()));
+      else resolvePromise(String(stdout || "").trim());
+    });
+  });
+}
+
+function isTcpSerial(serial) {
+  return /^\d{1,3}(?:\.\d{1,3}){3}:\d+$/.test(String(serial || ""));
+}
+
+function parseConnectedDevices(output) {
+  return String(output || "")
+    .split(/\r?\n/)
+    .slice(1)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map(line => ({ serial: line.split(/\s+/)[0], line }))
+    .filter(item => /\sdevice(?:\s|$)/.test(item.line));
+}
+
+async function connectedDevices() {
+  try { return parseConnectedDevices(await run(["devices", "-l"])); }
+  catch { return []; }
+}
+
+async function isConnected(serial) {
+  if (!serial) return false;
+  return (await connectedDevices()).some(item => item.serial === serial);
+}
+
+async function physicalSerial(transport) {
+  try { return await run(["-s", transport, "get-serialno"], 5000); }
+  catch { return ""; }
+}
+
+async function rememberIdentity(deviceId, transport) {
+  const serial = await physicalSerial(transport);
+  if (serial && serial !== "unknown" && identityState[deviceId] !== serial) {
+    identityState[deviceId] = serial;
+    saveIdentityState();
+  }
+}
+
+async function directReconnect(deviceId, target) {
+  for (const endpoint of [...new Set([target.serial, target.configuredSerial].filter(isTcpSerial))]) {
+    try {
+      await run(["connect", endpoint], 8000).catch(() => "");
+      await sleep(350);
+      if (await isConnected(endpoint)) {
+        target.serial = endpoint;
+        await rememberIdentity(deviceId, endpoint);
+        console.log(`[ADB] ${deviceId}: connected to ${endpoint}`);
+        return true;
+      }
+    } catch {}
+  }
+  return false;
+}
+
+async function adoptExistingTransport(deviceId, target) {
+  const devices = await connectedDevices();
+  if (!devices.length) return false;
+
+  const configured = devices.find(item => item.serial === target.configuredSerial);
+  if (configured) {
+    target.serial = configured.serial;
+    await rememberIdentity(deviceId, configured.serial);
+    return true;
+  }
+
+  const knownIdentity = identityState[deviceId] || "";
+  if (knownIdentity) {
+    for (const device of devices) {
+      if ((await physicalSerial(device.serial)) === knownIdentity) {
+        target.serial = device.serial;
+        return true;
+      }
+    }
+  }
+
+  if (devices.length === 1) {
+    target.serial = devices[0].serial;
+    await rememberIdentity(deviceId, target.serial);
+    console.log(`[ADB] ${deviceId}: adopted ${target.serial}`);
+    return true;
+  }
+  return false;
+}
+
+function parseMdnsEndpoint(line) {
+  if (!line.includes("_adb-tls-connect._tcp")) return null;
+  const endpoint = line.match(/(\d{1,3}(?:\.\d{1,3}){3}:\d+)/)?.[1];
+  if (!endpoint) return null;
+  return { serviceName: line.trim().split(/\s+/)[0] || "", endpoint };
+}
+
+async function discoverAndReconnect(deviceId, target) {
+  let output;
+  try { output = await run(["mdns", "services"], 5000); }
+  catch { return false; }
+
+  const entries = output.split(/\r?\n/).map(parseMdnsEndpoint).filter(Boolean);
+  const known = identityState[deviceId] || "";
+  const candidates = known
+    ? [...entries.filter(entry => entry.serviceName.includes(known)), ...entries]
+    : entries;
+
+  for (const entry of candidates) {
+    try {
+      await run(["connect", entry.endpoint], 8000).catch(() => "");
+      await sleep(350);
+      if (await isConnected(entry.endpoint)) {
+        const serial = await physicalSerial(entry.endpoint);
+        if (!known || !serial || serial === known || entries.length === 1) {
+          target.serial = entry.endpoint;
+          await rememberIdentity(deviceId, target.serial);
+          console.log(`[ADB] ${deviceId}: recovered through mDNS at ${target.serial}`);
+          return true;
+        }
+      }
+    } catch {}
+  }
+  return false;
+}
+
+async function ensureConnected(deviceId, target) {
+  if (target.serial && await isConnected(target.serial)) {
+    await rememberIdentity(deviceId, target.serial);
+    return target.serial;
+  }
+  if (target.configuredSerial && await isConnected(target.configuredSerial)) {
+    target.serial = target.configuredSerial;
+    await rememberIdentity(deviceId, target.serial);
+    return target.serial;
+  }
+  if (await directReconnect(deviceId, target)) return target.serial;
+  if (await adoptExistingTransport(deviceId, target)) return target.serial;
+  if (await discoverAndReconnect(deviceId, target)) return target.serial;
+  throw new Error(`${deviceId} is offline. Automatic ADB reconnect failed.`);
+}
+
+async function ensureForward(deviceId, target) {
+  const serial = await ensureConnected(deviceId, target);
+  await run(["-s", serial, "forward", `tcp:${target.localPort}`, "tcp:9898"]);
+  return serial;
+}
+
+async function wakeDevice(deviceId, target) {
+  const serial = await ensureConnected(deviceId, target);
+  await run(["-s", serial, "shell", "input", "keyevent", "KEYCODE_WAKEUP"]);
+  return {
+    ok: true,
+    status: "authentication_required",
+    message: `${deviceId === "android-tablet" ? "Tablet" : "Mobile"} is awake. Authenticate on the device, then Jazz can continue.`,
+    deviceId
+  };
 }
 
 function resolveRegisteredScriptFile(scriptName) {
   const candidates = registeredScriptFiles[scriptName];
   if (!candidates) return null;
   const rootPrefix = `${scriptRoot}${process.platform === "win32" ? "\\" : "/"}`;
-
   for (const candidate of candidates) {
     const file = resolve(scriptRoot, basename(candidate));
-    if (!file.startsWith(rootPrefix)) continue;
-    if (existsSync(file)) return file;
+    if (file.startsWith(rootPrefix) && existsSync(file)) return file;
   }
   return null;
 }
 
-function normalizeScriptResult(file, stdout) {
-  const output = String(stdout || "").trim();
-  const lastLine = output.split(/\r?\n/).filter(Boolean).pop() || "";
-  try {
-    const parsed = JSON.parse(lastLine);
-    if (parsed && typeof parsed === "object") {
-      return {
-        ...parsed,
-        ok: parsed.ok !== false,
-        stdout: output,
-        script: parsed.script || basename(file),
-        executedScript: true
-      };
-    }
-  } catch {}
-
-  return {
-    ok: true,
-    stdout: output,
-    message: output || `${basename(file)} completed.`,
-    script: basename(file),
-    executedScript: true
-  };
-}
-
 function amountFromArgs(args = {}) {
-  if (args?.amount !== null && args?.amount !== undefined && Number.isFinite(Number(args.amount))) {
-    return Number(args.amount);
-  }
+  if (args?.amount !== null && args?.amount !== undefined && Number.isFinite(Number(args.amount))) return Number(args.amount);
   const request = String(args?.request || "");
   const match = request.match(/(?:₹|rs\.?|inr\s*)\s*(\d+(?:\.\d+)?)/i)
     || request.match(/\b(\d+(?:\.\d+)?)\s*(?:rupee|rupees|rs)\b/i);
@@ -106,41 +251,41 @@ function buildScriptLaunch(file, target, args = {}) {
     ADB_PATH: adb,
     JAZZ_DEVICE_ID: target.deviceId,
     JAZZ_ANDROID_SERIAL: target.serial,
-    JAZZ_ANDROID_PHONE_SERIAL: target.deviceId === "android-phone" ? target.serial : (process.env.JAZZ_ANDROID_PHONE_SERIAL || ""),
-    JAZZ_ANDROID_TABLET_SERIAL: target.deviceId === "android-tablet" ? target.serial : (process.env.JAZZ_ANDROID_TABLET_SERIAL || ""),
     JAZZ_SCRIPT_ARGS: JSON.stringify({ ...args, amount })
   };
   if (amount !== null) env.JAZZ_PAYMENT_AMOUNT = String(amount);
 
   const extension = extname(file).toLowerCase();
-  const command = extension === ".ps1" ? powershellPath : bashPath;
-  const commandArgs = extension === ".ps1"
-    ? ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", file]
-    : [file];
+  return {
+    command: extension === ".ps1" ? powershellPath : bashPath,
+    commandArgs: extension === ".ps1"
+      ? ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", file]
+      : [file],
+    env,
+    amount
+  };
+}
 
-  return { command, commandArgs, env, amount };
+function normalizeScriptResult(file, stdout) {
+  const output = String(stdout || "").trim();
+  const lastLine = output.split(/\r?\n/).filter(Boolean).pop() || "";
+  try {
+    const parsed = JSON.parse(lastLine);
+    if (parsed && typeof parsed === "object") {
+      return { ...parsed, ok: parsed.ok !== false, stdout: output, script: parsed.script || basename(file), executedScript: true };
+    }
+  } catch {}
+  return { ok: true, message: output || `${basename(file)} completed.`, stdout: output, script: basename(file), executedScript: true };
 }
 
 function runScript(file, target, args = {}) {
   return new Promise((resolvePromise, reject) => {
     if (!file || !existsSync(file)) return reject(new Error("Script is not installed"));
-
     const { command, commandArgs, env } = buildScriptLaunch(file, target, args);
-    execFile(
-      command,
-      commandArgs,
-      { cwd: scriptRoot, env, timeout: 120000, windowsHide: true },
-      (error, stdout, stderr) => {
-        if (error) {
-          const details = [String(stderr || "").trim(), String(stdout || "").trim(), String(error.message || "").trim()]
-            .filter(Boolean)
-            .join(" | ");
-          reject(new Error(`${basename(file)} failed${error.code !== undefined ? ` (exit ${error.code})` : ""}: ${details || "unknown script error"}`));
-          return;
-        }
-        resolvePromise(normalizeScriptResult(file, stdout));
-      }
-    );
+    execFile(command, commandArgs, { cwd: scriptRoot, env, timeout: 120000, windowsHide: true }, (error, stdout, stderr) => {
+      if (error) return reject(new Error(String(stderr || stdout || error.message).trim()));
+      resolvePromise(normalizeScriptResult(file, stdout));
+    });
   });
 }
 
@@ -148,136 +293,16 @@ function startScriptDetached(file, target, args = {}) {
   return new Promise((resolvePromise, reject) => {
     if (!file || !existsSync(file)) return reject(new Error("Script is not installed"));
     const { command, commandArgs, env, amount } = buildScriptLaunch(file, target, args);
-    const child = spawn(command, commandArgs, {
-      cwd: scriptRoot,
-      env,
-      windowsHide: true,
-      detached: true,
-      stdio: "ignore"
-    });
+    const child = spawn(command, commandArgs, { cwd: scriptRoot, env, windowsHide: true, detached: true, stdio: "ignore" });
     let settled = false;
-    child.once("error", error => {
-      if (settled) return;
-      settled = true;
-      reject(error);
-    });
+    child.once("error", error => { if (!settled) { settled = true; reject(error); } });
     child.once("spawn", () => {
       if (settled) return;
       settled = true;
       child.unref();
-      resolvePromise({
-        ok: true,
-        status: "started",
-        message: `${basename(file)} started${amount !== null ? ` for ₹${amount}` : ""}.`,
-        script: basename(file),
-        executedScript: true,
-        amount
-      });
+      resolvePromise({ ok: true, status: "started", message: `${basename(file)} started${amount !== null ? ` for ₹${amount}` : ""}.`, script: basename(file), executedScript: true, amount });
     });
   });
-}
-
-function isTcpSerial(serial) { return /^\d{1,3}(?:\.\d{1,3}){3}:\d+$/.test(String(serial || "")); }
-function parseConnectedDevices(output) {
-  return output.split(/\r?\n/).slice(1).map(line => line.trim()).filter(Boolean).map(line => ({ serial: line.split(/\s+/)[0], line })).filter(item => /\sdevice(?:\s|$)/.test(item.line));
-}
-async function connectedDevices() { try { return parseConnectedDevices(await run(["devices", "-l"])); } catch { return []; } }
-async function isConnected(serial) { return (await connectedDevices()).some(item => item.serial === serial); }
-async function rememberIdentity(deviceId, serial) {
-  if (!serial || serial === "unknown" || isTcpSerial(serial)) return;
-  if (identityState[deviceId] !== serial) { identityState[deviceId] = serial; saveIdentityState(); }
-}
-async function rememberIdentityFromConnection(deviceId, target) {
-  if (!target.serial) return;
-  try { await rememberIdentity(deviceId, await run(["-s", target.serial, "get-serialno"])); } catch {}
-}
-
-async function adoptExistingTransport(deviceId, target) {
-  const devices = await connectedDevices();
-  if (!devices.length) return false;
-  const known = identityState[deviceId] || "";
-  let candidate = known ? devices.find(item => item.serial.includes(known)) : null;
-  if (!candidate && devices.length === 1) candidate = devices[0];
-  if (!candidate) return false;
-  target.serial = candidate.serial;
-  await rememberIdentityFromConnection(deviceId, target);
-  console.log(`[ADB] ${deviceId}: adopted active transport ${target.serial}`);
-  return true;
-}
-
-async function directReconnect(deviceId, target) {
-  const candidates = [...new Set([target.serial, target.configuredSerial].filter(isTcpSerial))];
-  for (const endpoint of candidates) {
-    try {
-      console.log(`[ADB] ${deviceId}: trying direct reconnect to ${endpoint}`);
-      await run(["connect", endpoint], 8000).catch(() => "");
-      await sleep(500);
-      if (await isConnected(endpoint)) {
-        target.serial = endpoint;
-        await rememberIdentityFromConnection(deviceId, target);
-        console.log(`[ADB] ${deviceId}: connected to ${endpoint}`);
-        return true;
-      }
-    } catch {}
-  }
-  return false;
-}
-
-function parseMdnsEndpoint(line) {
-  if (!line.includes("_adb-tls-connect._tcp")) return null;
-  const endpoint = line.match(/(\d{1,3}(?:\.\d{1,3}){3}:\d+)/)?.[1];
-  if (!endpoint) return null;
-  return { serviceName: line.trim().split(/\s+/)[0] || "", endpoint };
-}
-
-async function discoverAndReconnect(deviceId, target) {
-  let services;
-  try { services = await run(["mdns", "services"], 5000); } catch { return false; }
-  const entries = services.split(/\r?\n/).map(parseMdnsEndpoint).filter(Boolean);
-  if (!entries.length) return false;
-  const knownIdentity = identityState[deviceId] || "";
-  const preferred = knownIdentity ? entries.filter(entry => entry.serviceName.includes(knownIdentity)) : [];
-  const candidates = preferred.length ? preferred : (entries.length === 1 ? entries : []);
-  for (const entry of candidates) {
-    try {
-      await run(["connect", entry.endpoint], 8000).catch(() => "");
-      await sleep(500);
-      if (await isConnected(entry.endpoint)) {
-        target.serial = entry.endpoint;
-        await rememberIdentityFromConnection(deviceId, target);
-        console.log(`[ADB] ${deviceId}: recovered through mDNS at ${entry.endpoint}`);
-        return true;
-      }
-    } catch {}
-  }
-  return false;
-}
-
-async function ensureConnected(deviceId, target) {
-  if (target.serial && await isConnected(target.serial)) {
-    await rememberIdentityFromConnection(deviceId, target);
-    return target.serial;
-  }
-  if (await adoptExistingTransport(deviceId, target)) return target.serial;
-  if (await directReconnect(deviceId, target)) return target.serial;
-  if (await discoverAndReconnect(deviceId, target)) return target.serial;
-  throw new Error(`${deviceId} is offline. Automatic ADB reconnect failed. Check that Wireless debugging is enabled and the devices are on the same reachable network.`);
-}
-
-async function ensureForward(deviceId, target) {
-  const serial = await ensureConnected(deviceId, target);
-  await run(["-s", serial, "forward", `tcp:${target.localPort}`, "tcp:9898"]);
-}
-
-async function wakeDevice(deviceId, target) {
-  const serial = await ensureConnected(deviceId, target);
-  await run(["-s", serial, "shell", "input", "keyevent", "KEYCODE_WAKEUP"]);
-  return {
-    ok: true,
-    status: "authentication_required",
-    message: `${deviceId === "android-tablet" ? "Tablet" : "Mobile"} is awake. Authenticate on the device, then Jazz can continue.`,
-    deviceId
-  };
 }
 
 async function screenSize(serial) {
@@ -302,21 +327,15 @@ async function sendViaDirectAdb(deviceId, target, payload) {
     await run(["-s", serial, "shell", "monkey", "-p", pkg, "-c", "android.intent.category.LAUNCHER", "1"], 15000);
     return ok("App launched through direct ADB", { packageName: pkg });
   }
-  if (action === "home") {
-    await run(["-s", serial, "shell", "input", "keyevent", "KEYCODE_HOME"]);
-    return ok("Home opened through direct ADB");
-  }
-  if (action === "back") {
-    await run(["-s", serial, "shell", "input", "keyevent", "KEYCODE_BACK"]);
-    return ok("Back sent through direct ADB");
-  }
-  if (action === "recents") {
-    await run(["-s", serial, "shell", "input", "keyevent", "KEYCODE_APP_SWITCH"]);
-    return ok("Recents opened through direct ADB");
-  }
-  if (action === "notifications") {
-    await run(["-s", serial, "shell", "input", "keyevent", "KEYCODE_NOTIFICATION"]);
-    return ok("Notifications opened through direct ADB");
+  if (action === "home" || action === "back" || action === "recents" || action === "notifications") {
+    const key = {
+      home: "KEYCODE_HOME",
+      back: "KEYCODE_BACK",
+      recents: "KEYCODE_APP_SWITCH",
+      notifications: "KEYCODE_NOTIFICATION"
+    }[action];
+    await run(["-s", serial, "shell", "input", "keyevent", key]);
+    return ok(`${action} sent through direct ADB`);
   }
   if (action === "tap") {
     const x = Number(args.x); const y = Number(args.y);
@@ -325,21 +344,19 @@ async function sendViaDirectAdb(deviceId, target, payload) {
     return ok("Tap sent through direct ADB");
   }
   if (action === "swipe") {
-    const x1 = Number(args.x1); const y1 = Number(args.y1); const x2 = Number(args.x2); const y2 = Number(args.y2);
-    const duration = Number(args.durationMs || 500);
-    if (![x1, y1, x2, y2, duration].every(Number.isFinite)) throw new Error("Invalid swipe coordinates");
-    await run(["-s", serial, "shell", "input", "swipe", String(Math.round(x1)), String(Math.round(y1)), String(Math.round(x2)), String(Math.round(y2)), String(Math.round(duration))]);
+    const values = [args.x1, args.y1, args.x2, args.y2].map(Number);
+    if (!values.every(Number.isFinite)) throw new Error("Invalid swipe coordinates");
+    await run(["-s", serial, "shell", "input", "swipe", ...values.map(value => String(Math.round(value))), String(Math.round(Number(args.durationMs || 500)))]);
     return ok("Swipe sent through direct ADB");
   }
-  if (action === "scroll_down" || action === "scroll_up") {
+  if (["scroll_down", "scroll_up", "scroll_forward", "scroll_backward"].includes(action)) {
     const { width, height } = await screenSize(serial);
+    const forward = action === "scroll_down" || action === "scroll_forward";
     const x = Math.round(width * 0.5);
-    const yTop = Math.round(height * 0.28);
-    const yBottom = Math.round(height * 0.78);
-    const fromY = action === "scroll_down" ? yBottom : yTop;
-    const toY = action === "scroll_down" ? yTop : yBottom;
+    const fromY = Math.round(height * (forward ? 0.78 : 0.28));
+    const toY = Math.round(height * (forward ? 0.28 : 0.78));
     await run(["-s", serial, "shell", "input", "swipe", String(x), String(fromY), String(x), String(toY), "420"]);
-    return ok(action === "scroll_down" ? "Swiped up through direct ADB" : "Swiped down through direct ADB");
+    return ok("Scroll sent through direct ADB");
   }
   if (action === "open_url") {
     const url = String(args.url || "");
@@ -353,14 +370,6 @@ async function sendViaDirectAdb(deviceId, target, payload) {
     await run(["-s", serial, "shell", "am", "start", "-a", "android.intent.action.DIAL", "-d", `tel:${number}`], 15000);
     return ok("Dialer opened through direct ADB", { number });
   }
-  if (action === "open_instagram_reels") {
-    try {
-      await run(["-s", serial, "shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", "instagram://reels"], 15000);
-    } catch {
-      await run(["-s", serial, "shell", "monkey", "-p", "com.instagram.android", "-c", "android.intent.category.LAUNCHER", "1"], 15000);
-    }
-    return ok("Instagram Reels opened through direct ADB");
-  }
   if (action === "device_info") {
     const [model, manufacturer, version] = await Promise.all([
       run(["-s", serial, "shell", "getprop", "ro.product.model"], 5000),
@@ -369,8 +378,7 @@ async function sendViaDirectAdb(deviceId, target, payload) {
     ]);
     return ok("Device info read through direct ADB", { model, manufacturer, androidVersion: version });
   }
-
-  throw new Error(`Android companion is unavailable and ${action} requires the companion Accessibility service.`);
+  throw new Error(`Android companion is unavailable and ${action} requires Jazz Accessibility Service.`);
 }
 
 async function sendToAndroid(deviceId, target, payload) {
@@ -381,7 +389,7 @@ async function sendToAndroid(deviceId, target, payload) {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${target.token}` },
       body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(5000)
+      signal: AbortSignal.timeout(10000)
     });
     const text = await response.text();
     let data;
@@ -393,25 +401,17 @@ async function sendToAndroid(deviceId, target, payload) {
   }
 
   try {
-    const fallback = await sendViaDirectAdb(deviceId, target, payload);
-    console.warn(`[ADB] Companion unavailable for ${payload?.action || "command"}; direct ADB fallback succeeded: ${companionError?.message || "unknown companion error"}`);
-    return fallback;
+    return await sendViaDirectAdb(deviceId, target, payload);
   } catch (fallbackError) {
-    const companionMessage = companionError?.message || "Android companion request failed";
     const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
-    throw new Error(`${companionMessage}. Direct ADB fallback also failed: ${fallbackMessage}`);
+    throw new Error(`${companionError?.message || "Android companion request failed"}. Direct ADB fallback also failed: ${fallbackMessage}`);
   }
 }
 
 async function reconnectLoop() {
   for (const [deviceId, target] of Object.entries(targets)) {
-    if (target.serial && await isConnected(target.serial)) {
-      await rememberIdentityFromConnection(deviceId, target);
-      continue;
-    }
-    if (await adoptExistingTransport(deviceId, target)) continue;
-    if (await directReconnect(deviceId, target)) continue;
-    await discoverAndReconnect(deviceId, target).catch(() => false);
+    try { await ensureConnected(deviceId, target); }
+    catch {}
   }
 }
 
@@ -424,13 +424,16 @@ function json(res, status, data) {
   res.end(JSON.stringify(data));
 }
 
-function body(req) {
+function readBody(req) {
   return new Promise((resolvePromise, reject) => {
     let raw = "";
-    req.on("data", chunk => { raw += chunk; if (raw.length > 64 * 1024) req.destroy(); });
+    req.on("data", chunk => {
+      raw += chunk;
+      if (raw.length > 64 * 1024) req.destroy();
+    });
     req.on("end", () => {
       try { resolvePromise(JSON.parse(raw || "{}")); }
-      catch (e) { reject(e); }
+      catch (error) { reject(error); }
     });
   });
 }
@@ -442,12 +445,12 @@ const server = http.createServer(async (req, res) => {
       ok: true,
       service: "jazz-adb-bridge",
       autoReconnect: true,
-      activeTransportDiscovery: true,
       directReconnect: true,
       mdnsReconnect: true,
       scripts: true,
       powershellScripts: true,
-      directAdbFallback: true
+      directAdbFallback: true,
+      genericAccessibilityAutomation: true
     });
   }
   if (req.method === "GET" && req.url === "/devices") {
@@ -460,8 +463,8 @@ const server = http.createServer(async (req, res) => {
         connected: target.serial ? await isConnected(target.serial) : false
       }]));
       return json(res, 200, { ok: true, adb: await run(["devices", "-l"]), targets: Object.fromEntries(targetEntries) });
-    } catch (e) {
-      return json(res, 500, { ok: false, error: e.message });
+    } catch (error) {
+      return json(res, 500, { ok: false, error: error.message });
     }
   }
 
@@ -470,39 +473,30 @@ const server = http.createServer(async (req, res) => {
   }
 
   try {
-    const input = await body(req);
+    const input = await readBody(req);
     const target = targets[input.deviceId];
     if (!target) return json(res, 404, { ok: false, error: "Unknown device" });
     const serial = await ensureConnected(input.deviceId, target);
+    target.deviceId = input.deviceId;
+    target.serial = serial;
 
     if (req.url === "/script") {
       const scriptName = String(input.scriptName || "");
       if (!/^[a-z0-9_-]+$/.test(scriptName)) return json(res, 400, { ok: false, error: "Invalid script name" });
       if (!Object.hasOwn(registeredScriptFiles, scriptName)) return json(res, 403, { ok: false, error: "Script is not registered" });
-
       const scriptFile = resolveRegisteredScriptFile(scriptName);
       if (!scriptFile) {
-        return json(res, 404, {
-          ok: false,
-          error: `Registered script is not installed for ${scriptName}. Checked: ${registeredScriptFiles[scriptName].join(", ")}`
-        });
+        return json(res, 404, { ok: false, error: `Registered script is not installed for ${scriptName}. Checked: ${registeredScriptFiles[scriptName].join(", ")}` });
       }
-
-      target.deviceId = input.deviceId;
-      target.serial = serial;
-      const result = await runScript(scriptFile, target, input.args || {});
+      const result = scriptName === "paymom"
+        ? await startScriptDetached(scriptFile, target, input.args || {})
+        : await runScript(scriptFile, target, input.args || {});
       return json(res, result.ok === false ? 400 : 200, result);
     }
 
     const action = String(input.action || "");
     if (action === "wake_screen") return json(res, 200, await wakeDevice(input.deviceId, target));
-
-    const allowed = new Set([
-      "device_info", "screen_state", "open_url", "launch_app", "dial_number",
-      "home", "back", "recents", "notifications", "tap", "swipe",
-      "scroll_down", "scroll_up", "click_text", "open_instagram_reels", "read_screen"
-    ]);
-    if (!allowed.has(action)) return json(res, 400, { ok: false, error: "Action not allowed" });
+    if (!allowedActions.has(action)) return json(res, 400, { ok: false, error: "Action not allowed" });
 
     const data = await sendToAndroid(input.deviceId, target, {
       deviceId: input.deviceId,
@@ -510,18 +504,17 @@ const server = http.createServer(async (req, res) => {
       args: input.args || {}
     });
     return json(res, data.ok === false ? 400 : 200, data);
-  } catch (e) {
-    return json(res, 503, { ok: false, error: e.message });
+  } catch (error) {
+    return json(res, 503, { ok: false, error: error instanceof Error ? error.message : String(error) });
   }
 });
 
-server.on("error", error => {
-  console.error(`[ADB] Bridge server error: ${error.message}`);
-});
+server.on("error", error => console.error(`[ADB] Bridge server error: ${error.message}`));
 
 server.listen(port, "127.0.0.1", () => {
   console.log(`Jazz Windows ADB bridge listening on 127.0.0.1:${port}`);
   console.log(`ADB Wi-Fi auto-reconnect enabled; scan interval ${reconnectIntervalMs}ms`);
+  console.log(`Generic Jazz Accessibility automation enabled through Android Companion`);
   console.log(`Approved Android scripts enabled from ${scriptRoot}`);
   reconnectLoop().catch(error => console.error("[ADB] Initial reconnect failed:", error.message));
   setInterval(() => reconnectLoop().catch(error => console.error("[ADB] Reconnect failed:", error.message)), reconnectIntervalMs);
