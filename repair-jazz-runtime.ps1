@@ -14,6 +14,7 @@ $runtimeFiles = @(
   "services/api/src/device-bridge.mjs",
   "services/api/src/android-intents.mjs",
   "services/api/src/script-registry.mjs",
+  "services/api/telegram.env.example",
   "bridges/windows-adb/adb-bridge.mjs",
   "scripts/android/unlockmobile.ps1",
   "scripts/android/youtube.ps1",
@@ -27,6 +28,8 @@ $runtimeFiles = @(
   "apps/web/public/rich-code.css",
   "apps/web/src/api-runtime.ts",
   "apps/web/src/main.tsx",
+  "apps/web/src/TelegramPanel.tsx",
+  "apps/web/src/telegram.css",
   "apps/web/src/voice.ts",
   "apps/web/src/voice-orb.css",
   "apps/web/src/voice-orb-stage.ts",
@@ -69,6 +72,12 @@ if ($vite -notmatch 'require\.resolve\("react/package\.json"') {
 }
 if ($vite -notmatch 'host: "0\.0\.0\.0"') {
   throw "Repair failed: Jazz web is not exposed to the local network."
+}
+if ($vite -notmatch 'jazz-telegram-bridge' -or $vite -notmatch '/telegram-api/status') {
+  throw "Repair failed: Jazz Telegram bridge is missing from Vite."
+}
+if (-not (Test-Path ".\apps\web\src\TelegramPanel.tsx") -or -not (Test-Path ".\apps\web\src\telegram.css")) {
+  throw "Repair failed: Jazz Telegram UI files are missing."
 }
 
 # pnpm 11/12 requires explicit approval before running dependency build scripts.
@@ -127,6 +136,7 @@ Remove-Item (Join-Path $root "node_modules\.vite-jazz") -Recurse -Force -ErrorAc
 Write-Host "Runtime source repaired successfully." -ForegroundColor Green
 Write-Host "React runtime verified: one pinned React 18.3.1 + ReactDOM 18.3.1 installation." -ForegroundColor Green
 Write-Host "Jazz rich-code renderer verified." -ForegroundColor Green
+Write-Host "Jazz Telegram bridge + Telegram dashboard UI verified." -ForegroundColor Green
 Write-Host "Jazz web LAN access verified: Vite listens on 0.0.0.0 and /api stays same-origin." -ForegroundColor Green
 Write-Host "pnpm build approval verified: esbuild only." -ForegroundColor Green
 Write-Host "Private .env files were not changed." -ForegroundColor DarkGray
