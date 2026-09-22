@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { createRoot } from "react-dom/client";
 import { JazzVoice } from "./voice";
+import { TelegramPanel } from "./TelegramPanel";
 import "./styles.css";
 import "./chat-overrides.css";
 
@@ -82,6 +83,7 @@ function App() {
   const [profileImage, setProfileImage] = useState<string>(() => localStorage.getItem("jazz-profile-image") || "");
   const [dayMode, setDayMode] = useState<DayMode>(() => getDayMode());
   const [searchOpen, setSearchOpen] = useState(false);
+  const [telegramOpen, setTelegramOpen] = useState(false);
   const [showAllDevices, setShowAllDevices] = useState(false);
   const [showFeatures, setShowFeatures] = useState(false);
   const [toast, setToast] = useState("");
@@ -206,7 +208,7 @@ function App() {
     { label: "Set Reminder", icon: <Bell size={17} />, run: setReminder },
     { label: "Open Calculator", icon: <Timer size={17} />, run: () => preferredAndroid && void runAndroidCommand(preferredAndroid, "launch_app", { packageName: "com.android.calculator2" }) },
     { label: "Search Web", icon: <Search size={17} />, run: searchWeb },
-    { label: "Translate", icon: <Globe size={17} />, run: () => window.open("https://translate.google.com/", "_blank", "noopener,noreferrer") },
+    { label: "Telegram", icon: <Send size={17} />, run: () => setTelegramOpen(true) },
     { label: "Generate Image", icon: <ImagePlus size={17} />, run: () => { setActiveMode("Creative"); setInput("Create an image of "); } }
   ];
   const onProfileSelected = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -251,13 +253,14 @@ function App() {
           <DashboardCard icon={<Sparkles />} title="Quick Actions" action="Edit"><div className="quick-actions-grid">{quickActionList.map(action => <QuickAction key={action.label} {...action} />)}</div></DashboardCard>
           <DashboardCard icon={<Smartphone />} title="Devices" action={showAllDevices ? "Collapse" : "See all"} actionClick={() => setShowAllDevices(v => !v)}><div className="device-list">{(visibleDevices.length ? visibleDevices : [{ id: "android-phone", name: "Android Phone", kind: "android", status: "not configured", bridge: false }]).map(device => <DeviceRow key={device.id} device={device} onClick={() => setShowAllDevices(true)} />)}</div></DashboardCard>
           <DashboardCard icon={<Bell />} title="Upcoming Reminders" action="See all"><div className="reminder-list">{reminders.length ? reminders.slice(0, 3).map(item => <ReminderRow key={item.id} item={item} />) : <div className="empty-row">No reminders yet. Use Set Reminder.</div>}</div></DashboardCard>
-          <div className="status-card"><div className="status-top"><div><div className="status-heading"><span className="status-icon"><Zap size={16} /></span><strong>Jazz Status</strong></div><p>Voice assistant ready • {voiceState === "listening" ? "listening..." : voiceState === "speaking" ? "speaking..." : "online"}</p></div><span className="online-badge">Online</span></div><div className="status-wave">{Array.from({ length: 22 }, (_, i) => <i key={i} style={{ height: `${6 + ((i * 11) % 27)}px` }} />)}</div></div>
+          <div className="status-card"><div className="status-top"><div><div className="status-heading"><span className="status-icon"><Zap size={16} /></span><strong>Jazz Status</strong></div><p>Voice assistant ready • {voiceState === "listening" ? "listening..." : voiceState === "speaking" ? "speaking..." : "online"}</p></div><span className="online-badge">Online</span></div><div className="status-wave">{Array.from({ length: 22 }, (_, i) => <i key={i} style={{ height: `${6 + ((i * 11) % 27)}px` }} />}</div></div>
         </aside>
       </div>
       <section className="analytics-row"><div className="activity-card"><div className="analytics-heading"><div><span className="heading-icon blue"><Activity size={16} /></span><strong>Activity Overview</strong></div><button>This Week <ChevronDown size={14} /></button></div><div className="activity-content"><div className="productivity-ring"><span>68%</span><small>Productivity Score</small></div><div className="activity-legend"><Legend dot="purple" label="Chats" value="42%" /><Legend dot="cyan" label="Tasks" value="28%" /><Legend dot="green" label="Automations" value="18%" /><Legend dot="blue" label="Learning" value="12%" /></div></div></div></section></div>
       <div className="command-bar"><div className="command-title"><span className="command-orb"><Mic size={16} /></span><strong>Quick Voice Command</strong></div>{quickCommands.map(command => <button key={command.label} onClick={() => void command.run()}>{command.icon}<span>{command.label}</span></button>)}<button className="all-commands" onClick={() => addJazzMessage("Available commands: device info, open URL, launch app, home, back, recents, notifications, tap, swipe, click text, read screen.")}>Show all commands <ChevronLeft size={16} className="rotate-180" /></button></div>
     </main>
     {searchOpen && <div className="search-overlay" onClick={() => setSearchOpen(false)}><div className="search-dialog" onClick={e => e.stopPropagation()}><div className="search-line"><Search size={20} /><input autoFocus placeholder="Search Jazz..." onKeyDown={e => { if (e.key === "Escape") setSearchOpen(false); if (e.key === "Enter") { setInput((e.target as HTMLInputElement).value); setSearchOpen(false); } }} /><button onClick={() => setSearchOpen(false)}><X size={18} /></button></div><p>Press Enter to place the query in the chat composer.</p></div></div>}
+    <TelegramPanel open={telegramOpen} onClose={() => setTelegramOpen(false)} />
     {toast && <div className="toast"><Check size={15} />{toast}</div>}
   </div>;
 }
@@ -266,7 +269,7 @@ function NavItem({ icon, text, active, badge, dropdown, onClick }: { icon: React
 function ChatMessage({ message }: { message: Message }) { return message.sender === "user" ? <div className="message-row user-row"><div className="user-bubble"><div>{message.text}</div><small>{message.time}<Check size={12} /><Check size={12} className="check-overlap" /></small></div></div> : <div className="message-row jazz-row"><div className="jazz-avatar"><Wave /></div><div className="jazz-bubble"><div>{message.text || <span className="streaming-cursor">▌</span>}</div><small>{message.time}</small></div></div>; }
 function VoiceListeningBubble({ transcript }: { transcript: string }) { return <div className="voice-listening-layer"><div className="voice-listening-bubble"><div className="voice-orb"><Mic size={18} /></div><div className="voice-copy"><strong>Jazz is listening...</strong><span>{transcript || "Speak naturally..."}</span></div><div className="voice-bars">{Array.from({ length: 13 }, (_, i) => <i key={i} style={{ animationDelay: `${i * 55}ms` }} />)}</div></div></div>; }
 function Wave() { return <div className="wave-logo">{Array.from({ length: 7 }, (_, i) => <i key={i} style={{ height: `${8 + Math.abs(3 - i) * 4 + (i === 3 ? 10 : 0)}px` }} />)}</div>; }
-function MiniWave() { return <div className="mini-wave">{Array.from({ length: 7 }, (_, i) => <i key={i} style={{ height: `${7 + (i === 3 ? 11 : i % 3 * 3)}px` }} />)}</div>; }
+function MiniWave() { return <div className="mini-wave">{Array.from({ length: 7 }, (_, i) => <i key={i} style={{ height: `${7 + (i === 3 ? 11 : i % 3 * 3)}px` }} />}</div>; }
 function Stat({ label, value }: { label: string; value: string }) { return <div className="stat"><span>{label}</span><strong>{value}</strong></div>; }
 function Suggestion({ label, icon, onClick }: { label: string; icon: React.ReactNode; onClick: () => void }) { return <button onClick={onClick}>{React.cloneElement(icon as React.ReactElement, { size: 13 })}{label}</button>; }
 function QuickAction({ label, icon, run }: QuickCommand) { return <button className="quick-action" onClick={() => void run()}>{icon}<span>{label}</span></button>; }
