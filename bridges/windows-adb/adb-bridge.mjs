@@ -1,5 +1,5 @@
 import http from "node:http";
-import { execFile, spawn } from "node:child_process";
+import { execFile } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -282,25 +282,14 @@ function runScript(file, target, args = {}) {
   return new Promise((resolvePromise, reject) => {
     if (!file || !existsSync(file)) return reject(new Error("Script is not installed"));
     const { command, commandArgs, env } = buildScriptLaunch(file, target, args);
+    console.log(`[ADB] Running ${basename(file)} on ${target.deviceId} via ${target.serial}`);
     execFile(command, commandArgs, { cwd: scriptRoot, env, timeout: 120000, windowsHide: true }, (error, stdout, stderr) => {
-      if (error) return reject(new Error(String(stderr || stdout || error.message).trim()));
+      if (error) {
+        console.error(`[ADB] ${basename(file)} failed: ${String(stderr || stdout || error.message).trim()}`);
+        return reject(new Error(String(stderr || stdout || error.message).trim()));
+      }
+      console.log(`[ADB] ${basename(file)} completed`);
       resolvePromise(normalizeScriptResult(file, stdout));
-    });
-  });
-}
-
-function startScriptDetached(file, target, args = {}) {
-  return new Promise((resolvePromise, reject) => {
-    if (!file || !existsSync(file)) return reject(new Error("Script is not installed"));
-    const { command, commandArgs, env, amount } = buildScriptLaunch(file, target, args);
-    const child = spawn(command, commandArgs, { cwd: scriptRoot, env, windowsHide: true, detached: true, stdio: "ignore" });
-    let settled = false;
-    child.once("error", error => { if (!settled) { settled = true; reject(error); } });
-    child.once("spawn", () => {
-      if (settled) return;
-      settled = true;
-      child.unref();
-      resolvePromise({ ok: true, status: "started", message: `${basename(file)} started${amount !== null ? ` for ₹${amount}` : ""}.`, script: basename(file), executedScript: true, amount });
     });
   });
 }
@@ -488,9 +477,7 @@ const server = http.createServer(async (req, res) => {
       if (!scriptFile) {
         return json(res, 404, { ok: false, error: `Registered script is not installed for ${scriptName}. Checked: ${registeredScriptFiles[scriptName].join(", ")}` });
       }
-      const result = scriptName === "paymom"
-        ? await startScriptDetached(scriptFile, target, input.args || {})
-        : await runScript(scriptFile, target, input.args || {});
+      const result = await runScript(scriptFile, target, input.args || {});
       return json(res, result.ok === false ? 400 : 200, result);
     }
 
