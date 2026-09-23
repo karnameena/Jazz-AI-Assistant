@@ -1,9 +1,12 @@
 const STAGE_ID = "jazz-voice-stage";
-const VISUALIZER_VERSION = "crystal-v7-1s-speaking-bounce";
+const VISUALIZER_VERSION = "crystal-v8-responsive";
 
+let stage: HTMLElement | null = null;
+let shell: HTMLElement | null = null;
 let animationFrame: number | null = null;
 let speakingStartedAt = 0;
 let lastState = "";
+let mountObserver: MutationObserver | null = null;
 
 function stageMarkup() {
   return `
@@ -58,92 +61,116 @@ function stageMarkup() {
 }
 
 function voiceLevel() {
-  const raw = getComputedStyle(document.documentElement).getPropertyValue("--jazz-voice-level").trim();
+  const raw = document.documentElement.style.getPropertyValue("--jazz-voice-level").trim();
   const value = Number.parseFloat(raw);
   return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0;
 }
 
 function ensureStage() {
+  if (stage?.isConnected) return stage;
+  stage = document.getElementById(STAGE_ID) as HTMLElement | null;
+  if (stage) {
+    shell = stage.querySelector<HTMLElement>(".jazz-orb-shell");
+    return stage;
+  }
+
   const panel = document.querySelector<HTMLElement>(".chat-panel");
   if (!panel) return null;
-  let stage = document.getElementById(STAGE_ID) as HTMLElement | null;
-  if (!stage) {
-    panel.insertAdjacentHTML("beforeend", stageMarkup());
-    stage = document.getElementById(STAGE_ID) as HTMLElement | null;
-  }
+  panel.insertAdjacentHTML("beforeend", stageMarkup());
+  stage = document.getElementById(STAGE_ID) as HTMLElement | null;
+  shell = stage?.querySelector<HTMLElement>(".jazz-orb-shell") || null;
   return stage;
 }
 
-function syncStageState(stage: HTMLElement, state: string) {
-  if (lastState === state && stage.dataset.state === state) return;
-  lastState = state;
-  stage.dataset.state = state;
-  stage.classList.toggle("is-active", state === "listening" || state === "speaking");
-  stage.classList.toggle("is-speaking", state === "speaking");
-  stage.classList.toggle("is-listening", state === "listening");
-
-  if (state !== "speaking") {
-    speakingStartedAt = 0;
+function stopSpeakingLoop(reset = true) {
+  if (animationFrame !== null) cancelAnimationFrame(animationFrame);
+  animationFrame = null;
+  speakingStartedAt = 0;
+  if (reset && stage && shell) {
     stage.style.setProperty("--jazz-bounce-energy", "0");
-    const shell = stage.querySelector<HTMLElement>(".jazz-orb-shell");
-    if (shell) {
-      shell.style.top = "50%";
-      shell.style.transform = "translate(-50%,-50%) scale(1)";
-    }
+    shell.style.top = "50%";
+    shell.style.transform = "translate(-50%,-50%) scale(1)";
   }
 }
 
-/**
- * One permanent RAF loop owns the speaking bounce. While Jazz is speaking, the
- * full orb completes one clearly visible bounce every second. Piper amplitude
- * still adds extra height/energy so louder speech feels more alive.
- */
-function animateStage(now: number) {
-  const stage = ensureStage();
-  if (stage) {
-    const state = document.documentElement.dataset.jazzVoiceState || "idle";
-    syncStageState(stage, state);
-
-    if (state === "speaking") {
-      const shell = stage.querySelector<HTMLElement>(".jazz-orb-shell");
-      if (shell) {
-        if (!speakingStartedAt) speakingStartedAt = now;
-        const elapsed = now - speakingStartedAt;
-        const liveLevel = voiceLevel();
-
-        // One complete bounce every 1000 ms. The baseline is a little larger than
-        // before, while live speech can push it higher without making it wild.
-        const cycleMs = 1000;
-        const phase = (elapsed % cycleMs) / cycleMs;
-        const primary = Math.sin(phase * Math.PI * 2);
-        const accent = Math.sin(phase * Math.PI) ** 2;
-        const amplitude = 22 + liveLevel * 20;
-        const y = primary * amplitude;
-        const energy = Math.min(1, 0.34 + accent * 0.46 + liveLevel * 0.38);
-        const scale = 1 + energy * 0.072;
-
-        shell.style.top = "50%";
-        shell.style.transform = `translate(-50%, calc(-50% + ${y.toFixed(2)}px)) scale(${scale.toFixed(3)})`;
-        stage.style.setProperty("--jazz-bounce-energy", energy.toFixed(3));
-      }
-    }
+function animateSpeaking(now: number) {
+  if (document.hidden || document.documentElement.dataset.jazzVoiceState !== "speaking") {
+    stopSpeakingLoop(false);
+    return;
   }
 
-  animationFrame = requestAnimationFrame(animateStage);
+  const currentStage = ensureStage();
+  if (!currentStage || !shell) {
+    animationFrame = requestAnimationFrame(animateSpeaking);
+    return;
+  }
+
+  if (!speakingStartedAt) speakingStartedAt = now;
+  const elapsed = now - speakingStartedAt;
+  const liveLevel = voiceLevel();
+  const phase = (elapsed % 1000) / 1000;
+  const primary = Math.sin(phase * Math.PI * 2);
+  const accent = Math.sin(phase * Math.PI) ** 2;
+  const amplitude = 22 + liveLevel * 20;
+  const y = primary * amplitude;
+  const energy = Math.min(1, 0.34 + accent * 0.46 + liveLevel * 0.38);
+  const scale = 1 + energy * 0.072;
+
+  shell.style.transform = `translate(-50%, calc(-50% + ${y.toFixed(2)}px)) scale(${scale.toFixed(3)})`;
+  currentStage.style.setProperty("--jazz-bounce-energy", energy.toFixed(3));
+  animationFrame = requestAnimationFrame(animateSpeaking);
 }
 
-function startStageLoop() {
+function startSpeakingLoop() {
+  if (animationFrame !== null || document.hidden) return;
+  speakingStartedAt = 0;
+  animationFrame = requestAnimationFrame(animateSpeaking);
+}
+
+function syncStageState() {
+  const currentStage = ensureStage();
+  if (!currentStage) return;
+
+  const state = document.documentElement.dataset.jazzVoiceState || "idle";
+  if (state === lastState && currentStage.dataset.state === state) return;
+  lastState = state;
+  currentStage.dataset.state = state;
+  currentStage.classList.toggle("is-active", state === "listening" || state === "speaking");
+  currentStage.classList.toggle("is-speaking", state === "speaking");
+  currentStage.classList.toggle("is-listening", state === "listening");
+
+  if (state === "speaking") startSpeakingLoop();
+  else stopSpeakingLoop(true);
+}
+
+function mountWhenReady() {
   document.documentElement.dataset.jazzVisualizer = VISUALIZER_VERSION;
-  if (animationFrame === null) animationFrame = requestAnimationFrame(animateStage);
+  if (ensureStage()) {
+    syncStageState();
+    mountObserver?.disconnect();
+    mountObserver = null;
+    return;
+  }
+
+  if (mountObserver) return;
+  const root = document.getElementById("root") || document.body;
+  mountObserver = new MutationObserver(() => {
+    if (ensureStage()) {
+      syncStageState();
+      mountObserver?.disconnect();
+      mountObserver = null;
+    }
+  });
+  mountObserver.observe(root, { childList: true, subtree: true });
 }
 
-const appObserver = new MutationObserver(() => {
-  // React can replace portions of the page; the permanent RAF will recreate the
-  // stage on the next frame without interrupting an active spoken response.
-  ensureStage();
-});
-appObserver.observe(document.documentElement, { childList: true, subtree: true });
+const stateObserver = new MutationObserver(syncStageState);
+stateObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-jazz-voice-state"] });
 
-document.addEventListener("DOMContentLoaded", startStageLoop, { once: true });
-queueMicrotask(startStageLoop);
-window.setTimeout(startStageLoop, 100);
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) stopSpeakingLoop(false);
+  else syncStageState();
+});
+
+document.addEventListener("DOMContentLoaded", mountWhenReady, { once: true });
+queueMicrotask(mountWhenReady);
