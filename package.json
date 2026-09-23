@@ -4,6 +4,11 @@
   "version": "0.1.0",
   "description": "Modular personal AI assistant platform",
   "packageManager": "pnpm@12.3.4",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  },
   "scripts": {
     "dev": "pnpm --recursive --if-present dev",
     "build": "pnpm --recursive --if-present build",
