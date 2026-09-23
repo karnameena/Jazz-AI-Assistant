@@ -18,6 +18,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import com.gunakarna.jazzassistant.recovery.LostDeviceManager
 import com.gunakarna.jazzassistant.recovery.RecoveryHeartbeatWorker
+import com.gunakarna.jazzassistant.recovery.RecoveryNetworkClient
 import com.gunakarna.jazzassistant.recovery.RecoverySecurityManager
 import java.util.UUID
 
@@ -107,11 +108,18 @@ class MainActivity : Activity() {
                 try {
                     recoverySecurity.setServerUrl(serverUrlInput.text.toString())
                     RecoveryHeartbeatWorker.schedule(this@MainActivity)
+                    RecoveryHeartbeatWorker.syncNow(this@MainActivity)
                     refreshStatus()
+                    recoveryStatusView.append("\nImmediate recovery sync queued.")
                 } catch (e: Exception) {
                     recoveryStatusView.text = "Recovery setup error: ${e.message}"
                 }
             }
+        })
+
+        content.addView(Button(this).apply {
+            text = "Test Recovery Connection Now"
+            setOnClickListener { testRecoveryConnectionNow() }
         })
 
         content.addView(Button(this).apply {
@@ -133,6 +141,7 @@ class MainActivity : Activity() {
             text = "Enable Lost Device Mode"
             setOnClickListener {
                 lostDeviceManager.setEnabled(true)
+                RecoveryHeartbeatWorker.syncNow(this@MainActivity)
                 refreshStatus()
             }
         })
@@ -141,6 +150,7 @@ class MainActivity : Activity() {
             text = "Disable Lost Device Mode"
             setOnClickListener {
                 lostDeviceManager.setEnabled(false)
+                RecoveryHeartbeatWorker.syncNow(this@MainActivity)
                 refreshStatus()
             }
         })
@@ -179,9 +189,41 @@ class MainActivity : Activity() {
                 appendLine("Device ID: ${recoverySecurity.deviceId()}")
                 appendLine("Recovery mode: ${lostDeviceManager.mode()}")
                 appendLine("Recovery server: ${recoverySecurity.serverUrl().ifBlank { "Not configured" }}")
-                append("Security: Android Keystore encrypted pairing token + signed requests")
+                appendLine("Security: Android Keystore encrypted pairing token + signed requests")
+                append("Use 'Test Recovery Connection Now' after saving the HTTPS relay URL.")
             }
         }
+    }
+
+    private fun testRecoveryConnectionNow() {
+        if (recoverySecurity.serverUrl().isBlank()) {
+            recoveryStatusView.text = "Recovery test failed: save the HTTPS recovery server URL first."
+            return
+        }
+
+        recoveryStatusView.text = "Testing recovery connection now…"
+        Thread {
+            try {
+                val result = RecoveryNetworkClient(applicationContext).syncOnce()
+                runOnUiThread {
+                    recoveryStatusView.text = buildString {
+                        appendLine("Recovery connection: OK")
+                        appendLine("Server: ${recoverySecurity.serverUrl()}")
+                        appendLine("Device ID: ${recoverySecurity.deviceId()}")
+                        append("Result: ${result.toString()}")
+                    }
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    recoveryStatusView.text = buildString {
+                        appendLine("Recovery connection: FAILED")
+                        appendLine("Server: ${recoverySecurity.serverUrl()}")
+                        appendLine("Device ID: ${recoverySecurity.deviceId()}")
+                        append("Error: ${e.message ?: e.javaClass.simpleName}")
+                    }
+                }
+            }
+        }.start()
     }
 
     private fun requestRecoveryPermissions() {
