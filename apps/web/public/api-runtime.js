@@ -2,6 +2,8 @@
   const JAZZ_API_BASE = window.location.origin;
   const RECOVERY_BASE = "http://127.0.0.1:8799";
   const nativeFetch = window.fetch.bind(window);
+  const CHAT_FLUSH_MS = 85;
+  const encoder = new TextEncoder();
 
   const resolveTarget = input => {
     if (typeof input === "string" && input.startsWith("/api/")) return input;
@@ -97,6 +99,110 @@
     }
   };
 
+  // Ollama can emit a token every few milliseconds. The React dashboard used to
+  // re-render the entire page for every token, while multiple DOM observers and
+  // smooth-scroll animations ran at the same time. Coalesce adjacent SSE text
+  // events into one update roughly every 85 ms. This keeps streaming responsive
+  // without changing the text or backend behavior.
+  function coalesceChatStream(response) {
+    if (!response?.ok || !response.body) return response;
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let inputBuffer = "";
+    let pendingText = "";
+    let flushTimer = 0;
+    let closed = false;
+
+    const stream = new ReadableStream({
+      start(controller) {
+        const enqueueRaw = raw => {
+          if (!closed && raw) controller.enqueue(encoder.encode(raw.endsWith("\n\n") ? raw : `${raw}\n\n`));
+        };
+
+        const flushText = () => {
+          flushTimer = 0;
+          if (!pendingText || closed) return;
+          const text = pendingText;
+          pendingText = "";
+          enqueueRaw(`event: text\ndata: ${JSON.stringify({ text })}\n\n`);
+        };
+
+        const scheduleFlush = () => {
+          if (flushTimer || closed) return;
+          flushTimer = window.setTimeout(flushText, CHAT_FLUSH_MS);
+        };
+
+        const processEvent = rawEvent => {
+          if (!rawEvent.trim()) return;
+          let eventName = "";
+          let dataRaw = "";
+          for (const line of rawEvent.split(/\r?\n/)) {
+            if (line.startsWith("event:")) eventName = line.slice(6).trim();
+            else if (line.startsWith("data:")) dataRaw += line.slice(5).trim();
+          }
+
+          if (eventName === "text") {
+            try {
+              const data = JSON.parse(dataRaw || "{}");
+              if (typeof data?.text === "string") {
+                pendingText += data.text;
+                if (pendingText.length >= 320) flushText();
+                else scheduleFlush();
+                return;
+              }
+            } catch {}
+          }
+
+          if (eventName === "done" || eventName === "error") flushText();
+          enqueueRaw(`${rawEvent}\n\n`);
+        };
+
+        const pump = async () => {
+          try {
+            while (true) {
+              const { value, done } = await reader.read();
+              if (done) break;
+              inputBuffer += decoder.decode(value, { stream: true });
+              const events = inputBuffer.split(/\r?\n\r?\n/);
+              inputBuffer = events.pop() || "";
+              for (const event of events) processEvent(event);
+            }
+
+            inputBuffer += decoder.decode();
+            if (inputBuffer.trim()) processEvent(inputBuffer);
+            if (flushTimer) {
+              window.clearTimeout(flushTimer);
+              flushTimer = 0;
+            }
+            flushText();
+            closed = true;
+            controller.close();
+          } catch (error) {
+            if (flushTimer) window.clearTimeout(flushTimer);
+            closed = true;
+            try { controller.error(error); } catch {}
+          }
+        };
+
+        void pump();
+      },
+      cancel(reason) {
+        closed = true;
+        if (flushTimer) window.clearTimeout(flushTimer);
+        return reader.cancel(reason).catch(() => undefined);
+      }
+    });
+
+    const headers = new Headers(response.headers);
+    headers.set("X-Jazz-Stream-Coalesced", "1");
+    return new Response(stream, {
+      status: response.status,
+      statusText: response.statusText,
+      headers
+    });
+  }
+
   window.fetch = async (input, init) => {
     const target = resolveTarget(input);
     const url = typeof target === "string" ? target : target instanceof Request ? target.url : target.toString();
@@ -115,7 +221,8 @@
     }
 
     try {
-      return await nativeFetch(target, init);
+      const response = await nativeFetch(target, init);
+      return isChatStream ? coalesceChatStream(response) : response;
     } catch (error) {
       const chatUrl = new URL("/api/chat", window.location.origin).toString();
       if (resolvedUrl.toString() === chatUrl) {
@@ -131,5 +238,6 @@
 
   window.__JAZZ_API_BASE__ = JAZZ_API_BASE;
   window.__JAZZ_RECOVERY_BASE__ = RECOVERY_BASE;
-  console.info(`[Jazz] LAN-safe API router active through ${JAZZ_API_BASE}; recovery commands use ${RECOVERY_BASE}`);
+  window.__JAZZ_UI_PERF__ = { streamCoalescing: true, flushMs: CHAT_FLUSH_MS };
+  console.info(`[Jazz] LAN-safe API router active through ${JAZZ_API_BASE}; chat stream batching=${CHAT_FLUSH_MS}ms; recovery commands use ${RECOVERY_BASE}`);
 })();
