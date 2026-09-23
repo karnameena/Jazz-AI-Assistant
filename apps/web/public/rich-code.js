@@ -47,9 +47,7 @@
         .replace(/(&lt;\/?)([A-Za-z][\w:-]*)/g, '$1<span class="jz-syn-tag">$2</span>')
         .replace(/\s([A-Za-z_:][-\w:.]*)(=)/g, ' <span class="jz-syn-attr">$1</span>$2');
     }
-    return escaped
-      .replace(/(&quot;.*?&quot;|&#39;.*?&#39;|`.*?`)/g, '<span class="jz-syn-string">$1</span>')
-      .replace(/\b(\d+(?:\.\d+)?)\b/g, '<span class="jz-syn-number">$1</span>');
+    return escaped;
   }
 
   function parseFences(source) {
@@ -150,7 +148,7 @@
   function renderStableTarget(target, source) {
     const parts = source.includes('```') ? parseFences(source) : null;
     const bare = !parts ? detectBareCode(source) : null;
-    if (!parts && !bare) return;
+    if (!parts && !bare) return false;
 
     const wrapper = document.createElement('div');
     wrapper.className = 'jazz-rich-message';
@@ -165,6 +163,7 @@
 
     target.dataset.jazzRichSource = source.slice(0, 2000);
     target.replaceChildren(wrapper);
+    return true;
   }
 
   function scan() {
@@ -180,10 +179,11 @@
 
       const previous = seen.get(target);
       if (!previous || previous.text !== source) {
-        seen.set(target, { text: source, since: now });
+        seen.set(target, { text: source, since: now, checked: false });
         continue;
       }
-      if (now - previous.since < STABLE_MS) continue;
+      if (previous.checked || now - previous.since < STABLE_MS) continue;
+      previous.checked = true;
       renderStableTarget(target, source);
     }
   }
