@@ -1,14 +1,15 @@
 (() => {
   const RECOVERY_BASE = window.__JAZZ_RECOVERY_BASE__ || "http://127.0.0.1:8799";
+  const POLL_MS = 900;
   let overlay = null;
+  let pollTimer = 0;
+  const nativeInputValueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
 
   const safeDate = value => {
     if (!value) return "Unknown";
     const date = typeof value === "number" ? new Date(value) : new Date(String(value));
     return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString([], { hour: "numeric", minute: "2-digit", month: "short", day: "numeric" });
   };
-
-  const nativeInputValueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
 
   function sendThroughJazz(text) {
     const input = document.querySelector(".composer input");
@@ -107,9 +108,10 @@
   }
 
   function installQuickAction() {
-    for (const label of document.querySelectorAll("button.quick-action span")) {
+    const labels = document.querySelectorAll(".quick-actions-grid button.quick-action span");
+    for (const label of labels) {
       const button = label.closest("button.quick-action");
-      if (!button) continue;
+      if (!(button instanceof HTMLButtonElement)) continue;
       const text = String(label.textContent || "").trim();
       if (text !== "Open Calculator" && text !== "📱 DEVICE RECOVERY") continue;
       label.textContent = "📱 DEVICE RECOVERY";
@@ -173,8 +175,10 @@
   }
 
   function enrichChat() {
-    for (const bubble of document.querySelectorAll(".jazz-bubble > div:first-child")) {
+    const bubbles = document.querySelectorAll(".jazz-bubble > div:first-child");
+    for (const bubble of bubbles) {
       if (!(bubble instanceof HTMLElement)) continue;
+      if (bubble.dataset.jazzRecoveryRendered) continue;
       const text = bubble.textContent || "";
       const locationMarker = "[[JAZZ_RECOVERY_LOCATION]]";
       const photoMarker = "[[JAZZ_RECOVERY_PHOTO]]";
@@ -193,22 +197,28 @@
           bubble.textContent = lead.trim();
           const placeholder = document.createElement("div");
           bubble.appendChild(placeholder);
-          photoCard(meta).then(card => placeholder.replaceWith(card)).catch(() => undefined);
           bubble.dataset.jazzRecoveryRendered = "photo";
+          photoCard(meta).then(card => placeholder.replaceWith(card)).catch(() => undefined);
         } catch {}
       }
     }
   }
 
-  const observer = new MutationObserver(() => {
+  function lightweightRefresh() {
+    if (document.hidden) return;
     installQuickAction();
     enrichChat();
-  });
-  observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
-  window.addEventListener("DOMContentLoaded", () => {
-    installQuickAction();
-    enrichChat();
-  });
+  }
+
+  // Avoid observing every React character mutation. Ollama streams many tokens per
+  // second, and the old document-wide MutationObserver repeatedly scanned the whole
+  // dashboard. A lightweight sub-second refresh keeps Recovery responsive without
+  // blocking the main thread.
+  pollTimer = window.setInterval(lightweightRefresh, POLL_MS);
+  window.addEventListener("visibilitychange", () => { if (!document.hidden) lightweightRefresh(); });
+  window.addEventListener("beforeunload", () => window.clearInterval(pollTimer), { once: true });
+  window.addEventListener("DOMContentLoaded", lightweightRefresh, { once: true });
+  queueMicrotask(lightweightRefresh);
 
   window.JazzRecovery = { open: openPanel, close: closePanel, send: sendThroughJazz };
 })();
