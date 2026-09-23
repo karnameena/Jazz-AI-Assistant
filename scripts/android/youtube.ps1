@@ -1,216 +1,133 @@
-param(
-    [string]$Serial = $env:JAZZ_ANDROID_SERIAL
-)
-
 $ErrorActionPreference = "Stop"
 
-if ([string]::IsNullOrWhiteSpace($Serial)) {
-    throw "JAZZ_ANDROID_SERIAL is not available to youtube.ps1."
+function Get-JazzRequest {
+    if ([string]::IsNullOrWhiteSpace($env:JAZZ_SCRIPT_ARGS)) { return "" }
+    try {
+        $payload = $env:JAZZ_SCRIPT_ARGS | ConvertFrom-Json
+        if (-not [string]::IsNullOrWhiteSpace([string]$payload.query)) {
+            return "play $([string]$payload.query)"
+        }
+        return [string]$payload.request
+    } catch {
+        return ""
+    }
 }
 
-$adb = if ($env:ADB_PATH) { $env:ADB_PATH } else { "adb" }
-$youtubePackage = "com.google.android.youtube"
+function Get-YouTubeQuery([string]$request) {
+    $text = ([string]$request).Trim()
+    if ([string]::IsNullOrWhiteSpace($text)) { return "" }
 
-function Invoke-Adb {
-    param(
-        [string[]]$Arguments,
-        [switch]$IgnoreFailure
+    $text = $text -replace '^(?i)\s*(?:hey\s+)?jazz\s*[,!:;-]*\s*', ''
+
+    $patterns = @(
+        '(?i)\b(?:open\s+)?youtube\b.*?\bplay\b\s+(.+?)\s*$',
+        '(?i)\bplay\b\s+(.+?)\s+(?:on|in)\s+youtube\b.*$',
+        '(?i)^\s*play\s+(.+?)\s*$'
     )
 
-    $oldPreference = $ErrorActionPreference
-    try {
-        # Native tools such as adb/uiautomator can write harmless status text to
-        # stderr. Keep that from becoming a terminating PowerShell error.
-        $ErrorActionPreference = "Continue"
-        $output = (& $adb @Arguments 2>&1 | Out-String).Trim()
-        $exitCode = $LASTEXITCODE
-    } finally {
-        $ErrorActionPreference = $oldPreference
-    }
-
-    if (-not $IgnoreFailure -and $exitCode -ne 0) {
-        throw "adb.exe failed (exit $exitCode): $output"
-    }
-
-    [pscustomobject]@{
-        ExitCode = $exitCode
-        Output   = $output
-    }
-}
-
-function Test-YouTubeForeground {
-    $window = (Invoke-Adb -Arguments @(
-        '-s', $Serial,
-        'shell', 'dumpsys', 'window', 'windows'
-    ) -IgnoreFailure).Output
-
-    $activity = (Invoke-Adb -Arguments @(
-        '-s', $Serial,
-        'shell', 'dumpsys', 'activity', 'activities'
-    ) -IgnoreFailure).Output
-
-    return "$window`n$activity" -match 'com\.google\.android\.youtube'
-}
-
-function Wait-YouTubeForeground {
-    param([int]$Attempts = 14, [int]$DelayMs = 450)
-
-    for ($i = 0; $i -lt $Attempts; $i++) {
-        if (Test-YouTubeForeground) { return $true }
-        Start-Sleep -Milliseconds $DelayMs
-    }
-    return $false
-}
-
-function Get-ScreenSize {
-    $sizeText = (Invoke-Adb -Arguments @('-s', $Serial, 'shell', 'wm', 'size') -IgnoreFailure).Output
-    $matches = [regex]::Matches($sizeText, '(\d+)x(\d+)')
-    if ($matches.Count -gt 0) {
-        $last = $matches[$matches.Count - 1]
-        return [pscustomobject]@{
-            Width  = [int]$last.Groups[1].Value
-            Height = [int]$last.Groups[2].Value
+    foreach ($pattern in $patterns) {
+        $match = [regex]::Match($text, $pattern)
+        if ($match.Success) {
+            $query = $match.Groups[1].Value.Trim()
+            $query = $query -replace '(?i)\s+(?:please|for me|jazz)\s*$', ''
+            $query = $query.Trim(' ', '"', "'", '.', ',', '!', '?')
+            if (-not [string]::IsNullOrWhiteSpace($query)) { return $query }
         }
     }
-    return [pscustomobject]@{ Width = 1080; Height = 2400 }
+
+    return ""
 }
 
-function Start-YouTubeSearch {
-    param([string]$SearchQuery)
+function Find-Brave {
+    $candidates = @(
+        "$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\Application\brave.exe",
+        "$env:ProgramFiles\BraveSoftware\Brave-Browser\Application\brave.exe",
+        "${env:ProgramFiles(x86)}\BraveSoftware\Brave-Browser\Application\brave.exe"
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
 
-    # Use YouTube's native Android SEARCH intent. This avoids UiAutomator entirely,
-    # which can return "null root node" on some Android 15/YouTube combinations.
-    $search = Invoke-Adb -Arguments @(
-        '-s', $Serial,
-        'shell', 'am', 'start', '-W',
-        '-a', 'android.intent.action.SEARCH',
-        '-p', $youtubePackage,
-        '--es', 'query', $SearchQuery
-    ) -IgnoreFailure
-
-    if ($search.ExitCode -eq 0 -and (Wait-YouTubeForeground -Attempts 12)) {
-        return 'android-search-intent'
+    foreach ($candidate in $candidates) {
+        if (Test-Path $candidate) { return $candidate }
     }
 
-    # Fallback: launch YouTube home first, then send the same SEARCH intent again.
-    Invoke-Adb -Arguments @('-s', $Serial, 'shell', 'am', 'force-stop', $youtubePackage) -IgnoreFailure | Out-Null
-    Start-Sleep -Milliseconds 350
+    $command = Get-Command brave.exe -ErrorAction SilentlyContinue
+    if ($command) { return $command.Source }
 
-    $launch = Invoke-Adb -Arguments @(
-        '-s', $Serial,
-        'shell', 'monkey',
-        '-p', $youtubePackage,
-        '-c', 'android.intent.category.LAUNCHER',
-        '1'
-    ) -IgnoreFailure
-
-    if ($launch.ExitCode -ne 0 -or -not (Wait-YouTubeForeground -Attempts 12)) {
-        throw "Could not launch the native YouTube app. $($launch.Output)"
-    }
-
-    $search = Invoke-Adb -Arguments @(
-        '-s', $Serial,
-        'shell', 'am', 'start', '-W',
-        '-a', 'android.intent.action.SEARCH',
-        '-p', $youtubePackage,
-        '--es', 'query', $SearchQuery
-    ) -IgnoreFailure
-
-    if ($search.ExitCode -ne 0 -or -not (Wait-YouTubeForeground -Attempts 12)) {
-        throw "YouTube opened, but the native search for '$SearchQuery' failed. $($search.Output)"
-    }
-
-    return 'youtube-launch-then-search-intent'
+    throw "Brave browser is not installed or could not be found."
 }
 
-$request = $null
-$query = $null
-try {
-    if ($env:JAZZ_SCRIPT_ARGS) {
-        $scriptArgs = $env:JAZZ_SCRIPT_ARGS | ConvertFrom-Json
-        $query = [string]$scriptArgs.query
-        $request = [string]$scriptArgs.request
-    }
-} catch {}
+function Resolve-FirstYouTubeVideo([string]$query) {
+    $encoded = [uri]::EscapeDataString($query)
+    $searchUrl = "https://www.youtube.com/results?search_query=$encoded"
 
-if ([string]::IsNullOrWhiteSpace($query) -and -not [string]::IsNullOrWhiteSpace($request)) {
-    $cleanRequest = $request -replace '(?i)^\s*(?:hey\s+)?jazz[,\s:-]*', ''
-    if ($cleanRequest -match '(?i)\bplay\s+(.+)$') {
-        $query = $Matches[1]
-    } elseif ($cleanRequest -match '(?i)\b(?:youtube\s+search(?:\s+for)?|search\s+youtube\s+for)\s+(.+)$') {
-        $query = $Matches[1]
+    try {
+        $headers = @{
+            "User-Agent"      = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0 Safari/537.36"
+            "Accept-Language" = "en-US,en;q=0.9"
+        }
+        $response = Invoke-WebRequest -UseBasicParsing -Uri $searchUrl -Headers $headers -TimeoutSec 15
+        $html = [string]$response.Content
+
+        # YouTube embeds search result video IDs in the initial page JSON.
+        $matches = [regex]::Matches($html, '"videoId":"([A-Za-z0-9_-]{11})"')
+        foreach ($match in $matches) {
+            $videoId = $match.Groups[1].Value
+            if (-not [string]::IsNullOrWhiteSpace($videoId)) {
+                return [pscustomobject]@{
+                    Resolved = $true
+                    Url      = "https://www.youtube.com/watch?v=$videoId&autoplay=1"
+                }
+            }
+        }
+    } catch {
+        # Continue to yt-dlp / search fallback below.
+    }
+
+    # If yt-dlp is already installed, use it as a second resolver. No installation
+    # is attempted here; Jazz stays local and uses only what is already available.
+    try {
+        $ytDlp = Get-Command yt-dlp.exe -ErrorAction SilentlyContinue
+        if (-not $ytDlp) { $ytDlp = Get-Command yt-dlp -ErrorAction SilentlyContinue }
+        if ($ytDlp) {
+            $videoId = (& $ytDlp.Source "ytsearch1:$query" --get-id --skip-download --no-playlist 2>$null | Select-Object -First 1)
+            $videoId = ([string]$videoId).Trim()
+            if ($videoId -match '^[A-Za-z0-9_-]{11}$') {
+                return [pscustomobject]@{
+                    Resolved = $true
+                    Url      = "https://www.youtube.com/watch?v=$videoId&autoplay=1"
+                }
+            }
+        }
+    } catch {}
+
+    return [pscustomobject]@{
+        Resolved = $false
+        Url      = $searchUrl
     }
 }
 
+$request = Get-JazzRequest
+$query = Get-YouTubeQuery $request
 if ([string]::IsNullOrWhiteSpace($query)) {
-    throw "youtube.ps1 did not receive a song/search query."
+    throw "I couldn't determine which song or video to play."
 }
 
-$query = $query `
-    -replace '(?i)^\s*(?:the\s+)?(?:song|video|music|track)\s+', '' `
-    -replace '^[\s''"‘’“”`]+', '' `
-    -replace '[\s''"‘’“”`.,!?;:]+$', '' `
-    -replace '(?i)\s+(?:on|in)\s+youtube(?:\s+music)?\s*$', '' `
-    -replace '(?i)\s+(?:on|in)\s+(?:my\s+)?(?:mobile|phone|tablet)\s*$', '' `
-    -replace '(?i)\s+(?:please|jazz)\s*$', ''
-$query = $query.Trim()
+$brave = Find-Brave
+$target = Resolve-FirstYouTubeVideo $query
 
-if ([string]::IsNullOrWhiteSpace($query)) {
-    throw "youtube.ps1 received an empty YouTube query."
-}
-
-$packagePath = (Invoke-Adb -Arguments @('-s', $Serial, 'shell', 'pm', 'path', $youtubePackage) -IgnoreFailure).Output
-if ($packagePath -notmatch 'package:') {
-    throw "The YouTube Android app ($youtubePackage) is not installed or is disabled on this device."
-}
-
-Invoke-Adb -Arguments @('-s', $Serial, 'shell', 'input', 'keyevent', 'KEYCODE_WAKEUP') | Out-Null
+Start-Process -FilePath $brave -ArgumentList @("--new-tab", $target.Url)
 Start-Sleep -Milliseconds 500
 
-$windowPolicy = (Invoke-Adb -Arguments @('-s', $Serial, 'shell', 'dumpsys', 'window', 'policy') -IgnoreFailure).Output
-if ($windowPolicy -match '(?i)(?:isKeyguardShowing|mShowingLockscreen|mKeyguardShowing|keyguardShowing)\s*=\s*true') {
-    throw "Mobile is locked. Unlock the phone first, then ask Jazz to play '$query' on YouTube."
+$message = if ($target.Resolved) {
+    "Playing '$query' on YouTube in Brave."
+} else {
+    "Opened YouTube in Brave and searched for '$query'."
 }
-
-$launchMethod = Start-YouTubeSearch -SearchQuery $query
-Start-Sleep -Seconds 3
-
-if (-not (Test-YouTubeForeground)) {
-    throw "YouTube search opened, but the native YouTube app is no longer in the foreground."
-}
-
-# No UiAutomator dependency. Tap the first visible native search result using the
-# same safe coordinate fallback the previous workflow already used.
-$screen = Get-ScreenSize
-$tapX = [int]($screen.Width * 0.50)
-$tapY = [int]($screen.Height * 0.34)
-
-Invoke-Adb -Arguments @('-s', $Serial, 'shell', 'input', 'tap', "$tapX", "$tapY") | Out-Null
-Start-Sleep -Seconds 4
-
-if (-not (Test-YouTubeForeground)) {
-    throw "Jazz searched for '$query', but Android moved away from the native YouTube app after selecting the result."
-}
-
-# If the selected result is paused/preloaded, request media playback.
-Invoke-Adb -Arguments @('-s', $Serial, 'shell', 'input', 'keyevent', 'KEYCODE_MEDIA_PLAY') -IgnoreFailure | Out-Null
-Start-Sleep -Milliseconds 900
-
-$mediaSession = (Invoke-Adb -Arguments @('-s', $Serial, 'shell', 'dumpsys', 'media_session') -IgnoreFailure).Output
-$youtubeMediaSession = $mediaSession -match 'com\.google\.android\.youtube'
-$playbackDetected = $youtubeMediaSession -and $mediaSession -match '(?i)(?:state\s*=\s*3|state=PlaybackState\s*\{\s*state=3)'
 
 [pscustomobject]@{
-    ok                  = $true
-    message             = "youtube.ps1 executed. Opened native YouTube, searched '$query', selected the first result, and requested playback."
-    query               = $query
-    serial              = $Serial
-    launchMethod        = $launchMethod
-    tapX                = $tapX
-    tapY                = $tapY
-    matchMethod         = "native-results-coordinate-no-uiautomator"
-    youtubeMediaSession = $youtubeMediaSession
-    playbackDetected    = $playbackDetected
-    script              = "youtube.ps1"
-    executedScript      = $true
+    ok             = $true
+    message        = $message
+    query          = $query
+    browser        = "Brave"
+    resolvedVideo  = [bool]$target.Resolved
+    executedScript = $true
 } | ConvertTo-Json -Compress
