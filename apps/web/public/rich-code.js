@@ -1,39 +1,21 @@
 (() => {
   const COPY_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3"></path></svg>';
   const CHECK_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"></path></svg>';
+  const STABLE_MS = 650;
+  const SCAN_MS = 450;
+  const MAX_SOURCE = 50000;
+  const seen = new WeakMap();
   let scanTimer = 0;
 
   const languages = {
     py: ['Python', 'python'], python: ['Python', 'python'],
-    js: ['JavaScript', 'javascript'], javascript: ['JavaScript', 'javascript'],
-    jsx: ['JSX', 'javascript'], ts: ['TypeScript', 'typescript'], typescript: ['TypeScript', 'typescript'], tsx: ['TSX', 'typescript'],
-    json: ['JSON', 'json'], html: ['HTML', 'html'], xml: ['XML', 'html'],
-    css: ['CSS', 'css'], scss: ['SCSS', 'css'],
+    js: ['JavaScript', 'javascript'], javascript: ['JavaScript', 'javascript'], jsx: ['JSX', 'javascript'],
+    ts: ['TypeScript', 'typescript'], typescript: ['TypeScript', 'typescript'], tsx: ['TSX', 'typescript'],
+    json: ['JSON', 'json'], html: ['HTML', 'html'], xml: ['XML', 'html'], css: ['CSS', 'css'], scss: ['SCSS', 'css'],
     sh: ['Shell', 'shell'], bash: ['Bash', 'shell'], shell: ['Shell', 'shell'],
     ps1: ['PowerShell', 'powershell'], powershell: ['PowerShell', 'powershell'],
-    java: ['Java', 'java'], c: ['C', 'c'], cpp: ['C++', 'cpp'], 'c++': ['C++', 'cpp'],
-    cs: ['C#', 'csharp'], 'c#': ['C#', 'csharp'], sql: ['SQL', 'sql'],
+    java: ['Java', 'java'], c: ['C', 'c'], cpp: ['C++', 'cpp'], cs: ['C#', 'csharp'], sql: ['SQL', 'sql'],
     text: ['Text', 'text'], txt: ['Text', 'text']
-  };
-
-  const keywordSets = {
-    python: new Set('and as assert async await break class continue def del elif else except False finally for from global if import in is lambda None nonlocal not or pass raise return True try while with yield match case'.split(' ')),
-    javascript: new Set('async await break case catch class const continue debugger default delete do else export extends false finally for from function get if import in instanceof let new null of return set static super switch this throw true try typeof undefined var void while with yield'.split(' ')),
-    typescript: new Set('abstract any as asserts async await boolean break case catch class const constructor continue declare default delete do else enum export extends false finally for from function get if implements import in infer instanceof interface keyof let namespace never new null number object of override private protected public readonly return set static string super switch symbol this throw true try type typeof undefined unknown var void while with yield'.split(' ')),
-    powershell: new Set('begin break catch class continue data do dynamicparam else elseif end enum exit filter finally for foreach from function if in param process return switch throw trap try until using var while'.split(' ')),
-    shell: new Set('case do done elif else esac fi for function if in select then until while time coproc'.split(' ')),
-    java: new Set('abstract assert boolean break byte case catch char class const continue default do double else enum extends final finally float for goto if implements import instanceof int interface long native new package private protected public return short static strictfp super switch synchronized this throw throws transient try void volatile while true false null'.split(' ')),
-    c: new Set('auto break case char const continue default do double else enum extern float for goto if int long register return short signed sizeof static struct switch typedef union unsigned void volatile while'.split(' ')),
-    cpp: new Set('alignas alignof and asm auto bool break case catch char class const constexpr continue default delete do double else enum explicit export extern false float for friend if inline int long mutable namespace new noexcept nullptr operator private protected public register reinterpret_cast return short signed sizeof static struct switch template this throw true try typedef typename union unsigned using virtual void volatile while'.split(' ')),
-    csharp: new Set('abstract as base bool break byte case catch char checked class const continue decimal default delegate do double else enum event explicit extern false finally fixed float for foreach goto if implicit in int interface internal is lock long namespace new null object operator out override params private protected public readonly ref return sbyte sealed short sizeof stackalloc static string struct switch this throw true try typeof uint ulong unchecked unsafe ushort using virtual void volatile while async await var'.split(' ')),
-    sql: new Set('select from where join inner left right full on as and or not null insert into values update set delete create table alter drop group by order having limit distinct union all case when then else end'.split(' '))
-  };
-
-  const builtinSets = {
-    python: new Set('print len range str int float list dict set tuple bool open input sum min max enumerate zip map filter isinstance super self requests'.split(' ')),
-    javascript: new Set('console Math JSON Object Array String Number Boolean Promise Date Map Set fetch window document navigator localStorage'.split(' ')),
-    typescript: new Set('console Math JSON Object Array String Number Boolean Promise Date Map Set fetch window document navigator localStorage'.split(' ')),
-    powershell: new Set('Write-Host Write-Output Get-Item Get-ChildItem Set-Location Test-Path Start-Process Stop-Process Invoke-RestMethod Invoke-WebRequest'.split(' '))
   };
 
   function normalizeLanguage(raw) {
@@ -42,16 +24,8 @@
     return { label: match[0], key: match[1] };
   }
 
-  function normalizeMarkdownSource(value) {
-    let text = String(value || '');
-    text = text.split('\\`\\`\\`').join('```');
-    text = text.replace(/`{4,}/g, '```');
-    return text;
-  }
-
   function normalizeCodeText(value) {
     let code = String(value || '');
-    // Some local models return escaped newlines/tabs literally inside fenced code.
     if (!code.includes('\n') && /\\n/.test(code)) code = code.replace(/\\n/g, '\n');
     if (/\\t/.test(code)) code = code.replace(/\\t/g, '\t');
     return code.replace(/^\s*\r?\n/, '').replace(/\s+$/, '');
@@ -66,41 +40,16 @@
       .replace(/'/g, '&#39;');
   }
 
-  function tokenClass(token, lang) {
-    if (/^(?:\/\/|#|\/\*)/.test(token)) return 'comment';
-    if (/^["'`]/.test(token)) return 'string';
-    if (/^\d/.test(token)) return 'number';
-    if (keywordSets[lang]?.has(token)) return 'keyword';
-    if (builtinSets[lang]?.has(token)) return 'builtin';
-    return '';
-  }
-
-  function highlightGeneric(code, lang) {
-    const tokenPattern = /("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\/\*[\s\S]*?\*\/|\/\/[^\n]*|#[^\n]*|\b\d+(?:\.\d+)?\b|\b[A-Za-z_$][\w$-]*\b)/g;
-    let out = '';
-    let last = 0;
-    for (const match of code.matchAll(tokenPattern)) {
-      const index = match.index ?? 0;
-      out += escapeHtml(code.slice(last, index));
-      const token = match[0];
-      const cls = tokenClass(token, lang);
-      out += cls ? `<span class="jz-syn-${cls}">${escapeHtml(token)}</span>` : escapeHtml(token);
-      last = index + token.length;
-    }
-    out += escapeHtml(code.slice(last));
-    return out;
-  }
-
-  function highlightHtml(code) {
-    return escapeHtml(code)
-      .replace(/(&lt;\/?)([A-Za-z][\w:-]*)/g, '$1<span class="jz-syn-tag">$2</span>')
-      .replace(/\s([A-Za-z_:][-\w:.]*)(=)/g, ' <span class="jz-syn-attr">$1</span>$2')
-      .replace(/(&quot;.*?&quot;|&#39;.*?&#39;)/g, '<span class="jz-syn-string">$1</span>');
-  }
-
   function highlight(code, lang) {
-    if (lang === 'html') return highlightHtml(code);
-    return highlightGeneric(code, lang);
+    const escaped = escapeHtml(code);
+    if (lang === 'html') {
+      return escaped
+        .replace(/(&lt;\/?)([A-Za-z][\w:-]*)/g, '$1<span class="jz-syn-tag">$2</span>')
+        .replace(/\s([A-Za-z_:][-\w:.]*)(=)/g, ' <span class="jz-syn-attr">$1</span>$2');
+    }
+    return escaped
+      .replace(/(&quot;.*?&quot;|&#39;.*?&#39;|`.*?`)/g, '<span class="jz-syn-string">$1</span>')
+      .replace(/\b(\d+(?:\.\d+)?)\b/g, '<span class="jz-syn-number">$1</span>');
   }
 
   function parseFences(source) {
@@ -129,10 +78,7 @@
   }
 
   async function copyText(text) {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-      return;
-    }
+    if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text);
     const area = document.createElement('textarea');
     area.value = text;
     area.style.position = 'fixed';
@@ -148,7 +94,6 @@
     button.type = 'button';
     button.className = 'jazz-copy-code';
     button.innerHTML = `${COPY_ICON}<span>Copy code</span>`;
-    button.setAttribute('aria-label', 'Copy code');
     button.addEventListener('click', async event => {
       event.preventDefault();
       event.stopPropagation();
@@ -159,10 +104,9 @@
         window.setTimeout(() => {
           button.classList.remove('copied');
           button.innerHTML = `${COPY_ICON}<span>Copy code</span>`;
-        }, 1400);
+        }, 1200);
       } catch {
-        button.querySelector('span').textContent = 'Copy failed';
-        window.setTimeout(() => { button.innerHTML = `${COPY_ICON}<span>Copy code</span>`; }, 1400);
+        button.textContent = 'Copy failed';
       }
     });
     return button;
@@ -170,41 +114,21 @@
 
   function renderCodeCard(code, language) {
     const lang = normalizeLanguage(language);
-    const normalizedCode = normalizeCodeText(code);
+    const normalized = normalizeCodeText(code);
     const card = document.createElement('section');
     card.className = `jazz-code-card jazz-${lang.key}`;
-
     const header = document.createElement('div');
     header.className = 'jazz-code-header';
-
     const label = document.createElement('span');
     label.className = 'jazz-code-language';
     label.textContent = lang.label;
-
+    header.append(label, makeCopyButton(normalized));
     const pre = document.createElement('pre');
     const codeEl = document.createElement('code');
-    codeEl.innerHTML = highlight(normalizedCode, lang.key);
+    codeEl.innerHTML = highlight(normalized, lang.key);
     pre.appendChild(codeEl);
-
-    header.append(label, makeCopyButton(normalizedCode));
     card.append(header, pre);
     return card;
-  }
-
-  function appendInlineMarkdown(container, line) {
-    const regex = /(`[^`]+`|\*\*[^*]+\*\*)/g;
-    let last = 0;
-    for (const match of line.matchAll(regex)) {
-      const index = match.index ?? 0;
-      if (index > last) container.append(document.createTextNode(line.slice(last, index)));
-      const token = match[0];
-      const element = document.createElement(token.startsWith('`') ? 'code' : 'strong');
-      element.className = token.startsWith('`') ? 'jazz-inline-code' : '';
-      element.textContent = token.startsWith('`') ? token.slice(1, -1) : token.slice(2, -2);
-      container.append(element);
-      last = index + token.length;
-    }
-    if (last < line.length) container.append(document.createTextNode(line.slice(last)));
   }
 
   function renderProse(text) {
@@ -212,51 +136,24 @@
     wrapper.className = 'jazz-rich-prose';
     const normalized = String(text || '').trim();
     if (!normalized) return wrapper;
-
     for (const rawLine of normalized.split(/\r?\n/)) {
       const line = rawLine.trimEnd();
-      if (!line.trim()) {
-        const spacer = document.createElement('div');
-        spacer.className = 'jazz-prose-spacer';
-        wrapper.appendChild(spacer);
-        continue;
-      }
-
-      if (/^[-*]\s+/.test(line)) {
-        const row = document.createElement('div');
-        row.className = 'jazz-prose-list-item';
-        const bullet = document.createElement('span');
-        bullet.textContent = '•';
-        const copy = document.createElement('span');
-        appendInlineMarkdown(copy, line.replace(/^[-*]\s+/, ''));
-        row.append(bullet, copy);
-        wrapper.appendChild(row);
-        continue;
-      }
-
-      const paragraph = document.createElement('div');
-      paragraph.className = 'jazz-prose-line';
-      appendInlineMarkdown(paragraph, line);
-      wrapper.appendChild(paragraph);
+      if (!line.trim()) continue;
+      const row = document.createElement('div');
+      row.className = /^[-*]\s+/.test(line) ? 'jazz-prose-list-item' : 'jazz-prose-line';
+      row.textContent = /^[-*]\s+/.test(line) ? `• ${line.replace(/^[-*]\s+/, '')}` : line;
+      wrapper.appendChild(row);
     }
     return wrapper;
   }
 
-  function renderRichMessage(target) {
-    if (!(target instanceof HTMLElement)) return;
-    if (target.closest('.jazz-rich-message')) return;
-
-    const rawSource = target.textContent || '';
-    if (target.dataset.jazzRichSource === rawSource && target.querySelector('.jazz-code-card')) return;
-
-    const source = normalizeMarkdownSource(rawSource);
+  function renderStableTarget(target, source) {
     const parts = source.includes('```') ? parseFences(source) : null;
     const bare = !parts ? detectBareCode(source) : null;
     if (!parts && !bare) return;
 
     const wrapper = document.createElement('div');
     wrapper.className = 'jazz-rich-message';
-
     if (parts) {
       for (const part of parts) {
         if (part.type === 'code') wrapper.appendChild(renderCodeCard(part.value, part.language));
@@ -266,25 +163,42 @@
       wrapper.appendChild(renderCodeCard(bare.code, bare.language));
     }
 
-    target.dataset.jazzRichSource = rawSource;
+    target.dataset.jazzRichSource = source.slice(0, 2000);
     target.replaceChildren(wrapper);
   }
 
   function scan() {
-    document.querySelectorAll('.jazz-bubble > div').forEach(renderRichMessage);
+    scanTimer = 0;
+    if (document.hidden) return;
+    const now = performance.now();
+    const targets = document.querySelectorAll('.jazz-bubble > div:first-child');
+    for (const target of targets) {
+      if (!(target instanceof HTMLElement)) continue;
+      if (target.querySelector('.jazz-rich-message')) continue;
+      const source = String(target.textContent || '');
+      if (!source || source.length > MAX_SOURCE || source.includes('▌')) continue;
+
+      const previous = seen.get(target);
+      if (!previous || previous.text !== source) {
+        seen.set(target, { text: source, since: now });
+        continue;
+      }
+      if (now - previous.since < STABLE_MS) continue;
+      renderStableTarget(target, source);
+    }
   }
 
-  function scheduleScan() {
-    window.clearTimeout(scanTimer);
-    scanTimer = window.setTimeout(scan, 80);
+  function scheduleScan(delay = SCAN_MS) {
+    if (scanTimer) return;
+    scanTimer = window.setTimeout(scan, delay);
   }
 
-  const observer = new MutationObserver(scheduleScan);
-  function start() {
-    scan();
-    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
-  }
-
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once: true });
-  else start();
+  // Deliberately avoid a document-wide MutationObserver. React/Ollama can update
+  // chat text many times per second; observing every character made the whole page
+  // contend with syntax rendering. A low-frequency stable-message scan is enough.
+  const interval = window.setInterval(() => scheduleScan(0), SCAN_MS);
+  window.addEventListener('visibilitychange', () => { if (!document.hidden) scheduleScan(0); });
+  window.addEventListener('beforeunload', () => window.clearInterval(interval), { once: true });
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => scheduleScan(0), { once: true });
+  else scheduleScan(0);
 })();
