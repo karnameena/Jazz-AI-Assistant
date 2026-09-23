@@ -100,6 +100,10 @@ function verifyOwner(req) {
   return safeEqual(req.headers.authorization || "", `Bearer ${ownerToken}`);
 }
 
+function logDeviceAuthFailure(pathname, auth) {
+  console.warn(`[Jazz Recovery Relay] device request rejected path=${pathname} status=${auth.status} reason=${auth.error}`);
+}
+
 function queueCommand(type, args = {}) {
   const id = crypto.randomUUID();
   const item = {
@@ -113,6 +117,7 @@ function queueCommand(type, args = {}) {
     completedAt: null
   };
   commands.set(id, item);
+  console.log(`[Jazz Recovery Relay] queued command type=${type} id=${id}`);
   return item;
 }
 
@@ -123,6 +128,7 @@ function nextCommand() {
     .sort((a, b) => a.createdAt - b.createdAt)[0];
   if (!item) return null;
   item.leasedUntil = now + 30_000;
+  console.log(`[Jazz Recovery Relay] leased command type=${item.type} id=${item.id}`);
   return { id: item.id, type: item.type, args: item.args, createdAt: item.createdAt };
 }
 
@@ -198,14 +204,24 @@ const server = http.createServer(async (req, res) => {
   const pathname = url.pathname;
 
   if (req.method === "GET" && pathname === "/health") {
-    return json(res, 200, { ok: true, service: "jazz-recovery-relay", version: "0.1.0" });
+    return json(res, 200, {
+      ok: true,
+      service: "jazz-recovery-relay",
+      version: "0.1.1",
+      deviceAuthConfigured: Boolean(deviceToken),
+      ownerAuthConfigured: Boolean(ownerToken),
+      expectedDeviceIdConfigured: Boolean(expectedDeviceId)
+    });
   }
 
   try {
     if (pathname === "/android/device/heartbeat" && req.method === "POST") {
       const body = await parseBody(req);
       const auth = verifyDeviceRequest(req, pathname, body.raw);
-      if (!auth.ok) return json(res, auth.status, { ok: false, error: auth.error });
+      if (!auth.ok) {
+        logDeviceAuthFailure(pathname, auth);
+        return json(res, auth.status, { ok: false, error: auth.error });
+      }
       const input = body.json;
       if (input.deviceId && input.deviceId !== auth.deviceId) return json(res, 403, { ok: false, error: "Device identity mismatch" });
       state.deviceId = auth.deviceId;
@@ -214,12 +230,16 @@ const server = http.createServer(async (req, res) => {
       state.status = input.status || state.status;
       if (input.lastKnownLocation?.ok) state.location = input.lastKnownLocation;
       state.lastSeen = new Date().toISOString();
+      console.log(`[Jazz Recovery Relay] heartbeat accepted device=${auth.deviceId} mode=${state.mode}`);
       return json(res, 200, { ok: true, serverTime: Date.now() });
     }
 
     if (pathname === "/android/device/commands/next" && req.method === "GET") {
       const auth = verifyDeviceRequest(req, pathname, "");
-      if (!auth.ok) return json(res, auth.status, { ok: false, error: auth.error });
+      if (!auth.ok) {
+        logDeviceAuthFailure(pathname, auth);
+        return json(res, auth.status, { ok: false, error: auth.error });
+      }
       const requested = url.searchParams.get("deviceId") || "";
       if (requested && requested !== auth.deviceId) return json(res, 403, { ok: false, error: "Device identity mismatch" });
       state.deviceId = auth.deviceId;
@@ -231,7 +251,10 @@ const server = http.createServer(async (req, res) => {
     if (resultMatch && req.method === "POST") {
       const body = await parseBody(req);
       const auth = verifyDeviceRequest(req, pathname, body.raw);
-      if (!auth.ok) return json(res, auth.status, { ok: false, error: auth.error });
+      if (!auth.ok) {
+        logDeviceAuthFailure(pathname, auth);
+        return json(res, auth.status, { ok: false, error: auth.error });
+      }
       const input = body.json;
       if (input.deviceId && input.deviceId !== auth.deviceId) return json(res, 403, { ok: false, error: "Device identity mismatch" });
       const command = commands.get(resultMatch[1]);
@@ -241,55 +264,63 @@ const server = http.createServer(async (req, res) => {
       command.completedAt = Date.now();
       updateStateFromResult(command, command.result);
       state.lastSeen = new Date().toISOString();
+      console.log(`[Jazz Recovery Relay] command completed type=${command.type} id=${command.id} ok=${command.result?.ok !== false}`);
       return json(res, 200, { ok: true });
     }
 
     if (!verifyOwner(req)) {
+      console.warn(`[Jazz Recovery Relay] owner request rejected method=${req.method} path=${pathname}`);
       return json(res, 401, { ok: false, error: "Owner authorization required" });
     }
 
-    if (req.method === "GET" && pathname === "/android/device/status") {
+    if (req.method === "GET" && (pathname === "/android/device/status" || pathname === "/status")) {
       return json(res, 200, publicStatus());
     }
 
-    if (req.method === "POST" && pathname === "/android/device/refresh") {
+    if (req.method === "POST" && (pathname === "/android/device/refresh" || pathname === "/refresh")) {
       return json(res, 200, await queueAndWait("device_status", {}));
     }
 
-    if (req.method === "GET" && pathname === "/android/device/location") {
+    if (req.method === "GET" && (pathname === "/android/device/location" || pathname === "/location")) {
       const response = await queueAndWait("device_location", {});
       if (response.completed && response.result?.ok) state.location = response.result;
       return json(res, 200, response.completed ? response : { ...response, lastKnownLocation: state.location });
     }
 
-    if (req.method === "POST" && pathname === "/android/device/ring") {
+    if (req.method === "POST" && (pathname === "/android/device/ring" || pathname === "/ring")) {
       const body = await parseBody(req);
       return json(res, 200, await queueAndWait("ring_device", { durationMs: Number(body.json.durationMs || 30_000) }));
     }
 
-    if (req.method === "POST" && pathname === "/android/device/recovery-mode") {
+    if (req.method === "POST" && (pathname === "/android/device/recovery-mode" || pathname === "/recovery-mode")) {
       const body = await parseBody(req);
       return json(res, 200, await queueAndWait("set_recovery_mode", { enabled: body.json.enabled !== false }));
     }
 
-    if (req.method === "POST" && pathname === "/android/device/camera") {
+    if (req.method === "POST" && (pathname === "/android/device/camera" || pathname === "/camera")) {
       const body = await parseBody(req);
       const camera = body.json.camera === "rear" ? "rear" : "front";
       const response = await queueAndWait("recovery_photo", { camera }, 30_000);
       return json(res, 200, response);
     }
 
-    if (req.method === "GET" && pathname === "/android/device/recovery-photo") {
+    if (req.method === "GET" && (pathname === "/android/device/recovery-photo" || pathname === "/recovery-photo")) {
       return json(res, 200, state.photo || { ok: false, status: "NO_RECOVERY_PHOTO" });
     }
 
     return json(res, 404, { ok: false, error: "Not found" });
   } catch (error) {
+    console.error(`[Jazz Recovery Relay] request failed method=${req.method} path=${pathname}: ${error instanceof Error ? error.message : String(error)}`);
     return json(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) });
   }
 });
 
+server.on("error", error => {
+  console.error(`[Jazz Recovery Relay] server error: ${error.message}`);
+});
+
 server.listen(port, "0.0.0.0", () => {
   console.log(`[Jazz Recovery Relay] listening on :${port}`);
-  console.log(`[Jazz Recovery Relay] device auth=${deviceToken ? "configured" : "MISSING"}, owner auth=${ownerToken ? "configured" : "MISSING"}`);
+  console.log(`[Jazz Recovery Relay] version=0.1.1`);
+  console.log(`[Jazz Recovery Relay] device auth=${deviceToken ? "configured" : "MISSING"}, owner auth=${ownerToken ? "configured" : "MISSING"}, expected device id=${expectedDeviceId || "ANY"}`);
 });
