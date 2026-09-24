@@ -7,8 +7,10 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.provider.Settings
 import android.view.accessibility.AccessibilityManager
 import android.widget.Button
@@ -16,7 +18,9 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import androidx.core.content.ContextCompat
 import com.gunakarna.jazzassistant.recovery.LostDeviceManager
+import com.gunakarna.jazzassistant.recovery.RecoveryForegroundService
 import com.gunakarna.jazzassistant.recovery.RecoveryHeartbeatWorker
 import com.gunakarna.jazzassistant.recovery.RecoveryNetworkClient
 import com.gunakarna.jazzassistant.recovery.RecoverySecurityManager
@@ -36,6 +40,9 @@ class MainActivity : Activity() {
             .also { prefs.edit().putString("bridge_token", it).apply() }
 
         RecoveryHeartbeatWorker.schedule(this)
+        if (recoverySecurity.serverUrl().isNotBlank()) {
+            try { ContextCompat.startForegroundService(this, RecoveryForegroundService.intent(this)) } catch (_: Exception) {}
+        }
 
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -85,7 +92,7 @@ class MainActivity : Activity() {
             setPadding(0, 18, 0, 6)
         })
         content.addView(TextView(this).apply {
-            text = "Owner-authorized recovery uses an outbound HTTPS connection. It is separate from the existing ADB and Accessibility workflows."
+            text = "Owner-authorized recovery uses an outbound HTTPS connection over Wi-Fi or mobile data."
             textSize = 14f
         })
 
@@ -110,7 +117,7 @@ class MainActivity : Activity() {
                     RecoveryHeartbeatWorker.schedule(this@MainActivity)
                     RecoveryHeartbeatWorker.syncNow(this@MainActivity)
                     refreshStatus()
-                    recoveryStatusView.append("\nImmediate recovery sync queued.")
+                    recoveryStatusView.append("\nImmediate secure recovery sync started.")
                 } catch (e: Exception) {
                     recoveryStatusView.text = "Recovery setup error: ${e.message}"
                 }
@@ -125,6 +132,21 @@ class MainActivity : Activity() {
         content.addView(Button(this).apply {
             text = "Request Recovery Permissions"
             setOnClickListener { requestRecoveryPermissions() }
+        })
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            content.addView(Button(this).apply {
+                text = "Allow Background Location"
+                setOnClickListener { requestBackgroundLocation() }
+            })
+        }
+
+        content.addView(Button(this).apply {
+            text = "Battery / Background Settings"
+            setOnClickListener {
+                try { startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
+                catch (_: Exception) { startActivity(Intent(Settings.ACTION_APPLICATION_SETTINGS)) }
+            }
         })
 
         content.addView(Button(this).apply {
@@ -177,20 +199,26 @@ class MainActivity : Activity() {
             ?: "Unknown"
         statusView.text = buildString {
             appendLine("Android Companion: Connected")
-            appendLine("Accessibility: ${if (enabled) "Enabled" else "Disabled"}")
+            appendLine("Accessibility: ${if (enabled) "Enabled" else "Disabled — manual re-enable required in Android Accessibility settings"}")
             appendLine("Jazz local API: ${if (service != null) "Connected" else "Waiting"}")
             appendLine("Current App: $currentPackage")
             append("Automation: ${if (service != null) "Ready" else "Waiting for Accessibility Service"}")
         }
 
         if (::recoveryStatusView.isInitialized) {
+            val power = getSystemService(POWER_SERVICE) as PowerManager
+            val backgroundLocation = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                checkSelfPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED
+            } else true
             recoveryStatusView.text = buildString {
                 appendLine("Device: ${recoverySecurity.deviceName()}")
                 appendLine("Device ID: ${recoverySecurity.deviceId()}")
                 appendLine("Recovery mode: ${lostDeviceManager.mode()}")
                 appendLine("Recovery server: ${recoverySecurity.serverUrl().ifBlank { "Not configured" }}")
+                appendLine("Background location: ${if (backgroundLocation) "Allowed" else "Not allowed"}")
+                appendLine("Battery optimization exemption: ${if (power.isIgnoringBatteryOptimizations(packageName)) "Allowed" else "Not allowed"}")
                 appendLine("Security: Android Keystore encrypted pairing token + signed requests")
-                append("Use 'Test Recovery Connection Now' after saving the HTTPS relay URL.")
+                append("Recovery channel supports validated Wi-Fi and mobile data.")
             }
         }
     }
@@ -207,7 +235,7 @@ class MainActivity : Activity() {
                 val result = RecoveryNetworkClient(applicationContext).syncOnce()
                 runOnUiThread {
                     recoveryStatusView.text = buildString {
-                        appendLine("Recovery connection: OK")
+                        appendLine("Recovery connection: ${if (result.optBoolean("ok", false)) "OK" else "WAITING"}")
                         appendLine("Server: ${recoverySecurity.serverUrl()}")
                         appendLine("Device ID: ${recoverySecurity.deviceId()}")
                         append("Result: ${result.toString()}")
@@ -234,6 +262,17 @@ class MainActivity : Activity() {
         )
         if (Build.VERSION.SDK_INT >= 33) permissions += Manifest.permission.POST_NOTIFICATIONS
         requestPermissions(permissions.toTypedArray(), 7301)
+    }
+
+    private fun requestBackgroundLocation() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
+            checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            recoveryStatusView.text = "Grant foreground Location first, then allow Background Location."
+            requestRecoveryPermissions()
+            return
+        }
+        requestPermissions(arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION), 7302)
     }
 
     private fun isJazzAccessibilityEnabled(): Boolean {
