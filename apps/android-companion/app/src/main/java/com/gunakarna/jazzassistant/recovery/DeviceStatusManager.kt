@@ -1,11 +1,15 @@
 package com.gunakarna.jazzassistant.recovery
 
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.BatteryManager
+import android.os.PowerManager
+import android.view.accessibility.AccessibilityManager
+import com.gunakarna.jazzassistant.JazzAccessibilityService
 import org.json.JSONObject
 
 class DeviceStatusManager(private val context: Context) {
@@ -26,10 +30,12 @@ class DeviceStatusManager(private val context: Context) {
             capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "WIFI"
             capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "CELLULAR"
             capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ETHERNET"
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN) -> "VPN"
             else -> "OTHER"
         }
-        val online = capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true &&
-            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+        val hasInternetCapability = capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+        val validated = capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
+        val online = hasInternetCapability && validated
 
         val powerSource = when (plugged) {
             BatteryManager.BATTERY_PLUGGED_AC -> "AC"
@@ -38,13 +44,40 @@ class DeviceStatusManager(private val context: Context) {
             else -> "BATTERY"
         }
 
+        val power = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+        val ignoringBatteryOptimizations = power.isIgnoringBatteryOptimizations(context.packageName)
+        val accessibilityEnabled = isJazzAccessibilityEnabled()
+        val accessibilityConnected = JazzAccessibilityService.instance != null
+
         return JSONObject()
             .put("battery", battery)
             .put("charging", charging)
             .put("powerSource", powerSource)
             .put("lowBattery", battery in 0..15)
             .put("online", online)
+            .put("internetCapability", hasInternetCapability)
+            .put("networkValidated", validated)
             .put("network", networkType)
+            .put("batteryOptimizationIgnored", ignoringBatteryOptimizations)
+            .put("accessibilityEnabled", accessibilityEnabled)
+            .put("accessibilityConnected", accessibilityConnected)
+            .put(
+                "accessibilityHealth",
+                when {
+                    accessibilityConnected -> "READY"
+                    accessibilityEnabled -> "ENABLED_BUT_NOT_CONNECTED"
+                    else -> "MANUAL_REENABLE_REQUIRED"
+                }
+            )
             .put("timestamp", System.currentTimeMillis())
+    }
+
+    private fun isJazzAccessibilityEnabled(): Boolean {
+        val manager = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
+        return manager.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
+            .any { info ->
+                info.resolveInfo.serviceInfo.packageName == context.packageName &&
+                    info.resolveInfo.serviceInfo.name.endsWith("JazzAccessibilityService")
+            }
     }
 }
