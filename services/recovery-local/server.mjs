@@ -2,6 +2,7 @@ import http from "node:http";
 
 const port = Number(process.env.JAZZ_RECOVERY_LOCAL_PORT || 8799);
 const relayUrl = String(process.env.JAZZ_RECOVERY_RELAY_URL || "").trim().replace(/\/$/, "");
+const localRelayUrl = String(process.env.JAZZ_RECOVERY_LOCAL_RELAY_URL || "http://127.0.0.1:8788").trim().replace(/\/$/, "");
 const ownerToken = String(process.env.JAZZ_RECOVERY_OWNER_TOKEN || "").trim();
 const allowedOrigins = new Set([
   "http://localhost:5173",
@@ -38,18 +39,31 @@ function parseJson(req) {
   });
 }
 
+function validLocalRelay(value) {
+  return /^http:\/\/(?:127\.0\.0\.1|localhost):\d+$/i.test(String(value || ""));
+}
+
 function ensureConfigured() {
-  if (!relayUrl || !ownerToken) {
-    throw new Error("Jazz recovery relay is not configured. Set JAZZ_RECOVERY_RELAY_URL and JAZZ_RECOVERY_OWNER_TOKEN in services/recovery-local/.env.");
+  if (!ownerToken) {
+    throw new Error("Jazz recovery owner authorization is not configured. Set JAZZ_RECOVERY_OWNER_TOKEN in services/recovery-local/.env.");
   }
-  if (!relayUrl.startsWith("https://")) {
+  if (relayUrl && !relayUrl.startsWith("https://")) {
     throw new Error("JAZZ_RECOVERY_RELAY_URL must use HTTPS.");
+  }
+  if (localRelayUrl && !validLocalRelay(localRelayUrl)) {
+    throw new Error("JAZZ_RECOVERY_LOCAL_RELAY_URL must point to localhost/127.0.0.1 only.");
+  }
+  if (!relayUrl && !localRelayUrl) {
+    throw new Error("No Jazz recovery relay is configured.");
   }
 }
 
-async function relay(path, method = "GET", body = null) {
-  ensureConfigured();
-  const response = await fetch(`${relayUrl}${path}`, {
+function relayCandidates() {
+  return [...new Set([relayUrl, localRelayUrl].filter(Boolean))];
+}
+
+async function relayRequest(baseUrl, path, method = "GET", body = null) {
+  const response = await fetch(`${baseUrl}${path}`, {
     method,
     headers: {
       Authorization: `Bearer ${ownerToken}`,
@@ -63,8 +77,39 @@ async function relay(path, method = "GET", body = null) {
   let data;
   try { data = JSON.parse(text || "{}"); }
   catch { data = { ok: false, error: text || `Relay returned ${response.status}` }; }
-  if (!response.ok) throw new Error(data.error || data.message || `Recovery relay returned ${response.status}`);
-  return data;
+  return { response, data };
+}
+
+async function relay(path, method = "GET", body = null) {
+  ensureConfigured();
+  const candidates = relayCandidates();
+  let lastError = null;
+
+  for (let index = 0; index < candidates.length; index += 1) {
+    const baseUrl = candidates[index];
+    try {
+      const { response, data } = await relayRequest(baseUrl, path, method, body);
+      if (response.ok) return data;
+
+      const message = data.error || data.message || `Recovery relay returned ${response.status}`;
+      lastError = new Error(message);
+
+      // Authorization failures are real security failures, not transport failures.
+      // Do not bypass them by silently switching to another endpoint.
+      if (response.status === 401 || response.status === 403) throw lastError;
+
+      const hasFallback = index < candidates.length - 1;
+      if (!hasFallback) throw lastError;
+      console.warn(`[Jazz Recovery Local] relay ${baseUrl} returned ${response.status}; trying localhost recovery relay fallback.`);
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      const hasFallback = index < candidates.length - 1;
+      if (!hasFallback) break;
+      console.warn(`[Jazz Recovery Local] relay ${baseUrl} unavailable (${lastError.message}); trying ${candidates[index + 1]}.`);
+    }
+  }
+
+  throw new Error(lastError?.message || "Recovery relay is unavailable.");
 }
 
 function parseRecoveryIntent(message) {
@@ -218,8 +263,10 @@ const server = http.createServer(async (req, res) => {
     return sendJson(req, res, 200, {
       ok: true,
       service: "jazz-recovery-local",
-      configured: Boolean(relayUrl && ownerToken),
-      relayUrl: relayUrl || null
+      configured: Boolean(ownerToken && (relayUrl || localRelayUrl)),
+      relayUrl: relayUrl || null,
+      localRelayUrl: localRelayUrl || null,
+      localhostFallback: Boolean(localRelayUrl)
     });
   }
 
@@ -273,5 +320,6 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(port, "127.0.0.1", () => {
   console.log(`[Jazz Recovery Local] listening on 127.0.0.1:${port}`);
-  console.log(`[Jazz Recovery Local] relay=${relayUrl || "NOT CONFIGURED"}`);
+  console.log(`[Jazz Recovery Local] hosted relay=${relayUrl || "NOT CONFIGURED"}`);
+  console.log(`[Jazz Recovery Local] localhost fallback=${localRelayUrl || "DISABLED"}`);
 });
