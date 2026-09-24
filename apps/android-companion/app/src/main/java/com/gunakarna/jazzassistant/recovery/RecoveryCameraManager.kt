@@ -1,8 +1,6 @@
 package com.gunakarna.jazzassistant.recovery
 
 import android.Manifest
-import android.app.ActivityManager
-import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -41,16 +39,17 @@ class RecoveryCameraManager(private val context: Context) {
     fun capture(camera: String): JSONObject {
         val lens = camera.lowercase().let { if (it == "rear") "rear" else "front" }
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            return blocked("CAMERA_PERMISSION_REQUIRED", "Camera permission has not been granted.")
-        }
-        val keyguard = context.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
-        if (keyguard.isKeyguardLocked) {
-            return blocked("CAMERA_CAPTURE_BLOCKED_BY_ANDROID", "Android blocks recovery camera capture while the device is locked.")
-        }
-        if (!isAppForeground()) {
-            return blocked("CAMERA_CAPTURE_BLOCKED_BY_ANDROID", "Android currently prevents camera access because Jazz Android Companion is not in the foreground.")
+            return blocked(
+                "CAMERA_PERMISSION_REQUIRED",
+                "Camera permission is unavailable. Open Jazz Android Companion once and grant Camera permission."
+            )
         }
 
+        // Do not reject a recovery photo just because the keyguard is locked or the
+        // Companion UI is not foreground. RecoveryCaptureActivity is intentionally
+        // allowed to appear over the keyguard and attempt CameraX capture while the
+        // device remains locked. Android/OEM policy can still deny a background
+        // activity/camera start; when that happens the exact failure is returned.
         val latch = CountDownLatch(1)
         synchronized(captureLock) {
             captureLatch = latch
@@ -59,16 +58,25 @@ class RecoveryCameraManager(private val context: Context) {
 
         return try {
             val intent = Intent(context, RecoveryCaptureActivity::class.java)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                .addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS or
+                        Intent.FLAG_ACTIVITY_NO_HISTORY
+                )
                 .putExtra("camera", lens)
+                .putExtra("recovery", true)
             context.startActivity(intent)
+
             val finished = latch.await(25, TimeUnit.SECONDS)
             synchronized(captureLock) {
                 val result = captureResult
                 captureLatch = null
                 captureResult = null
                 if (!finished || result == null) {
-                    blocked("CAMERA_CAPTURE_TIMEOUT", "Camera capture did not finish in time.")
+                    blocked(
+                        "CAMERA_CAPTURE_TIMEOUT_OR_OS_BLOCKED",
+                        "Recovery camera did not complete. Android may have blocked background camera/activity access while locked."
+                    )
                 } else {
                     result
                 }
@@ -78,16 +86,11 @@ class RecoveryCameraManager(private val context: Context) {
                 captureLatch = null
                 captureResult = null
             }
-            blocked("CAMERA_CAPTURE_FAILED", e.message ?: "Camera capture failed")
+            blocked(
+                "CAMERA_CAPTURE_OS_BLOCKED",
+                e.message ?: "Android blocked the recovery camera start in the current device state."
+            )
         }
-    }
-
-    private fun isAppForeground(): Boolean {
-        val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-        val process = ActivityManager.RunningAppProcessInfo()
-        ActivityManager.getMyMemoryState(process)
-        return process.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND ||
-            process.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE
     }
 
     private fun blocked(status: String, message: String): JSONObject = JSONObject()
