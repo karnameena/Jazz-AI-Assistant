@@ -35,23 +35,25 @@ class RecoveryForegroundService : Service() {
             try { acquire(10 * 60 * 1000L) } catch (_: Exception) {}
         }
 
+        // Keep the already-paired recovery channel alive even while Lost Mode is OFF.
+        // That is what makes a remote "Enable Lost Mode" command possible. When Lost
+        // Mode is ON this same channel also carries location/ring/photo commands.
         scheduler.scheduleWithFixedDelay({
-            if (!LostDeviceManager(this).isEnabled()) return@scheduleWithFixedDelay
+            val client = RecoveryNetworkClient(this)
+            if (!client.isConfigured()) return@scheduleWithFixedDelay
             try {
-                RecoveryNetworkClient(this).syncOnce()
+                client.syncOnce()
             } catch (_: Exception) {
-                // Keep the foreground service alive. The next short interval retry or
-                // WorkManager retry will reconnect after Wi-Fi/cellular changes.
                 RecoveryHeartbeatWorker.syncNow(this)
             }
             try {
                 if (wakeLock?.isHeld != true) wakeLock?.acquire(10 * 60 * 1000L)
             } catch (_: Exception) {}
-        }, 0, 8, TimeUnit.SECONDS)
+        }, 0, 10, TimeUnit.SECONDS)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (!LostDeviceManager(this).isEnabled()) {
+        if (!RecoveryNetworkClient(this).isConfigured()) {
             stopSelf()
             return START_NOT_STICKY
         }
@@ -60,9 +62,7 @@ class RecoveryForegroundService : Service() {
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        if (LostDeviceManager(this).isEnabled()) {
-            RecoveryHeartbeatWorker.syncNow(this)
-        }
+        RecoveryHeartbeatWorker.syncNow(this)
         super.onTaskRemoved(rootIntent)
     }
 
@@ -70,7 +70,7 @@ class RecoveryForegroundService : Service() {
         scheduler.shutdownNow()
         try { if (wakeLock?.isHeld == true) wakeLock?.release() } catch (_: Exception) {}
         wakeLock = null
-        if (LostDeviceManager(this).isEnabled()) RecoveryHeartbeatWorker.syncNow(this)
+        if (RecoveryNetworkClient(this).isConfigured()) RecoveryHeartbeatWorker.syncNow(this)
         super.onDestroy()
     }
 
@@ -96,9 +96,10 @@ class RecoveryForegroundService : Service() {
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
+        val mode = LostDeviceManager(this).mode()
         return Notification.Builder(this, CHANNEL_ID)
-            .setContentTitle("Jazz Device Recovery active")
-            .setContentText("Secure recovery is ready on Wi-Fi or mobile data.")
+            .setContentTitle("Jazz Device Recovery ready")
+            .setContentText(if (mode == LostDeviceManager.LOST_DEVICE_MODE) "Lost Mode active • Wi-Fi or mobile data" else "Secure recovery channel ready • Lost Mode off")
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
             .setContentIntent(open)
             .setOngoing(true)
