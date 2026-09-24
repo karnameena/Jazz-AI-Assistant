@@ -11,6 +11,7 @@ const COMMAND_ALIASES = new Map([
 ]);
 
 const APP_SLOT_WORDS = new Set(["open", "launch", "start", "in", "on", "using", "from"]);
+const SENSITIVE_COMMAND_WORDS = new Set(["pay", "send", "unlock"]);
 const SENSITIVE_EXACT = /\b(?:pay|send\s+money|unlock)\b/i;
 const URL_OR_PATH = /(?:https?:\/\/\S+|(?:[a-z]:\\|\/)[^\s]+|\b[\w.-]+\.(?:com|in|org|net|io)\b)/i;
 
@@ -128,6 +129,10 @@ function normalizeCommandWords(text, corrections) {
 
     let best = null;
     for (const candidate of COMMAND_WORDS) {
+      // Never manufacture a sensitive verb from a typo. Exact "pay", "send" and
+      // "unlock" remain valid commands, while near-misses are handled later by
+      // sensitiveNearMiss() and must be explicitly clarified by the user.
+      if (SENSITIVE_COMMAND_WORDS.has(candidate)) continue;
       const distance = levenshtein(lower, candidate);
       const allowed = Math.max(1, Math.floor(candidate.length / 4));
       if (distance <= allowed && (!best || distance < best.distance)) best = { candidate, distance };
