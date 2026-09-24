@@ -2,7 +2,6 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $root
 
-$expectedVersion = "0.10.0-local"
 $apiPort = 8797
 $sttPort = 8798
 $recoveryPort = 8799
@@ -83,14 +82,23 @@ Stop-PortListener $bridgePort
 Stop-PortListener $webPort
 Start-Sleep -Milliseconds 600
 
-# Refuse to boot an old checkout.
+# Verify the checked-out API by its current source version and required integration points.
+# Do not hard-code a specific release here: that made a valid newer API look stale.
 $serverFile = Join-Path $root "services\api\src\server.mjs"
-$serverText = Get-Content $serverFile -Raw
-if ($serverText -notmatch [regex]::Escape("const VERSION = `"$expectedVersion`"")) {
-  throw "This local server.mjs is not the current Jazz API. Run repair-jazz-runtime.ps1 first."
+if (-not (Test-Path $serverFile)) {
+  throw "Jazz API source is missing: $serverFile"
 }
+$serverText = Get-Content $serverFile -Raw
+$versionMatch = [regex]::Match($serverText, 'const\s+VERSION\s*=\s*"(?<version>\d+\.\d+\.\d+-local)"')
+if (-not $versionMatch.Success) {
+  throw "Jazz API source does not expose a valid VERSION. Pull the current repository and retry."
+}
+$expectedVersion = $versionMatch.Groups['version'].Value
 if ($serverText -match "I tried the configured model and resilient fallbacks") {
   throw "Legacy Gemini code is still present. Run repair-jazz-runtime.ps1 first."
+}
+if ($serverText -notmatch 'utterance-normalizer\.mjs' -or $serverText -notmatch 'normalizeUtterance') {
+  throw "Jazz API understanding integration is missing. Run repair-jazz-runtime.ps1 first."
 }
 Write-Host "Local Jazz API source verified: $expectedVersion" -ForegroundColor Green
 
@@ -140,7 +148,7 @@ if (-not $apiReady) {
 
 $apiHealth = Invoke-RestMethod $healthUrl -TimeoutSec 5
 if ($apiHealth.version -ne $expectedVersion) {
-  throw "Wrong Jazz API version. Expected $expectedVersion but got $($apiHealth.version)."
+  throw "Wrong Jazz API runtime. Source expects $expectedVersion but health endpoint reports $($apiHealth.version)."
 }
 if ($apiHealth.provider -ne "ollama") {
   throw "Wrong provider. Expected ollama but got $($apiHealth.provider)."
@@ -333,7 +341,7 @@ Write-Host "Jazz health:" -ForegroundColor Cyan
 (Invoke-RestMethod $healthUrl -TimeoutSec 5) | ConvertTo-Json -Depth 6
 Write-Host ""
 Write-Host "Jazz startup completed." -ForegroundColor Green
-Write-Host "Web: http://localhost:$webPort/?v=20260922-recovery1" -ForegroundColor Green
+Write-Host "Web: http://localhost:$webPort/?v=20260924-understanding2" -ForegroundColor Green
 Write-Host "API: http://127.0.0.1:$apiPort/health" -ForegroundColor Green
 Write-Host "STT: http://127.0.0.1:$sttPort/health" -ForegroundColor Green
 Write-Host "Recovery: http://127.0.0.1:$recoveryPort/health" -ForegroundColor Green
