@@ -2,7 +2,9 @@ package com.gunakarna.jazzassistant.recovery
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.os.Build
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
@@ -19,7 +21,25 @@ class RecoveryCaptureActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        previewView = PreviewView(this)
+
+        // Recovery capture may be requested while the device is locked. This does not
+        // unlock the phone; it only permits this owner-authorized activity to appear
+        // over the keyguard when the OS/OEM allows it.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true)
+            setTurnScreenOn(true)
+        } else {
+            @Suppress("DEPRECATION")
+            window.addFlags(
+                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                    WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+            )
+        }
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
+        previewView = PreviewView(this).apply {
+            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+        }
         setContentView(previewView)
         startCapture(intent.getStringExtra("camera") ?: "front")
     }
@@ -48,20 +68,25 @@ class RecoveryCaptureActivity : ComponentActivity() {
                         override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
                             compressIfNeeded(file)
                             RecoveryCameraManager.completeCapture(file, camera)
-                            finish()
+                            finishAndRemoveTask()
                         }
 
                         override fun onError(exception: ImageCaptureException) {
                             RecoveryCameraManager.completeCapture(null, camera, exception.message)
-                            finish()
+                            finishAndRemoveTask()
                         }
                     }
                 )
             } catch (e: Exception) {
                 RecoveryCameraManager.completeCapture(null, camera, e.message)
-                finish()
+                finishAndRemoveTask()
             }
         }, ContextCompat.getMainExecutor(this))
+    }
+
+    override fun onDestroy() {
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        super.onDestroy()
     }
 
     private fun compressIfNeeded(file: File) {
