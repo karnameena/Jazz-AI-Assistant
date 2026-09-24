@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { normalizeUtterance } from "./utterance-normalizer.mjs";
 
 const DEFAULT_URL = "http://127.0.0.1:11434";
 const DEFAULT_MODEL = "qwen2.5:7b";
@@ -108,13 +109,22 @@ function chatPayload(model, systemInstruction, message, stream) {
   };
 }
 
+function normalizeForBrain(message) {
+  // Conversational text goes through the same conservative understanding layer.
+  // This does not execute anything; Android/script execution has already been
+  // offered to the existing command router before Ollama is called.
+  const understanding = normalizeUtterance(message, { source: "typed" });
+  return understanding.normalized || String(message || "").trim();
+}
+
 export async function callOllama(message, systemInstruction) {
   const config = ollamaConfig();
   const model = await resolveModel();
+  const normalizedMessage = normalizeForBrain(message);
   const response = await fetchWithTimeout(`${config.url}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(chatPayload(model, systemInstruction, message, false))
+    body: JSON.stringify(chatPayload(model, systemInstruction, normalizedMessage, false))
   }, Number(process.env.JAZZ_OLLAMA_TIMEOUT_MS || 120000));
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
@@ -129,10 +139,11 @@ export async function callOllama(message, systemInstruction) {
 export async function streamOllama(message, systemInstruction, onText) {
   const config = ollamaConfig();
   const model = await resolveModel();
+  const normalizedMessage = normalizeForBrain(message);
   const response = await fetch(`${config.url}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(chatPayload(model, systemInstruction, message, true))
+    body: JSON.stringify(chatPayload(model, systemInstruction, normalizedMessage, true))
   });
   if (!response.ok || !response.body) {
     const detail = await response.text().catch(() => "");
