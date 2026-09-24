@@ -15,6 +15,8 @@ $runtimeFiles = @(
   "services/api/src/device-bridge.mjs",
   "services/api/src/android-intents.mjs",
   "services/api/src/script-registry.mjs",
+  "services/api/src/utterance-normalizer.mjs",
+  "services/api/tests/utterance-normalizer.test.mjs",
   "services/api/telegram.env.example",
   "services/stt/server.mjs",
   "services/recovery-local/server.mjs",
@@ -121,11 +123,25 @@ $voiceTs = Get-Content ".\apps\web\src\voice.ts" -Raw
 if ($voiceTs -notmatch '/stt-local/health' -or $voiceTs -notmatch '/stt-local/transcribe' -or $voiceTs -notmatch 'startLocalRecognition') {
   throw "Repair failed: Jazz web is not configured to use local Whisper speech-to-text."
 }
+if ($voiceTs -notmatch '/stt-local/normalize' -or $voiceTs -notmatch 'normalizeRecognizedText') {
+  throw "Repair failed: browser speech results are not using the Jazz understanding layer."
+}
 if (-not (Test-Path ".\services\stt\server.mjs")) {
   throw "Repair failed: Jazz local STT service is missing."
 }
 if (-not (Test-Path ".\tools\whisper\setup-windows.ps1")) {
   throw "Repair failed: Jazz Whisper setup script is missing."
+}
+if (-not (Test-Path ".\services\api\src\utterance-normalizer.mjs")) {
+  throw "Repair failed: Jazz utterance normalizer is missing."
+}
+$understanding = Get-Content ".\services\api\src\utterance-normalizer.mjs" -Raw
+if ($understanding -notmatch 'normalizeUtterance' -or $understanding -notmatch 'requiresClarification' -or $understanding -notmatch 'debugUnderstanding') {
+  throw "Repair failed: Jazz confidence-based understanding layer is incomplete."
+}
+$sttServerText = Get-Content ".\services\stt\server.mjs" -Raw
+if ($sttServerText -notmatch 'rawText' -or $sttServerText -notmatch '"/normalize"' -or $sttServerText -notmatch '--prompt') {
+  throw "Repair failed: Jazz STT raw transcript/normalization/prompt integration is incomplete."
 }
 
 $startJazz = Get-Content ".\start-jazz.ps1" -Raw
@@ -210,6 +226,12 @@ if (react.version !== '18.3.1' || reactDom.version !== '18.3.1') process.exit(2)
 $versionCheck | node
 if ($LASTEXITCODE -ne 0) { throw "React runtime verification failed. Expected React/ReactDOM 18.3.1." }
 
+Write-Host "Validating Jazz understanding regression tests..." -ForegroundColor Cyan
+& node ".\services\api\tests\utterance-normalizer.test.mjs"
+if ($LASTEXITCODE -ne 0) {
+  throw "Jazz speech/typing understanding regression tests failed."
+}
+
 # Compile the complete web app before starting Vite. This catches malformed TSX/JSX,
 # missing imports, and Vite transform failures during repair instead of leaving the
 # browser stuck on a red overlay after startup.
@@ -228,6 +250,7 @@ Remove-Item (Join-Path $root "node_modules\.vite-jazz") -Recurse -Force -ErrorAc
 
 Write-Host "Runtime source repaired successfully." -ForegroundColor Green
 Write-Host "React runtime verified: one pinned React 18.3.1 + ReactDOM 18.3.1 installation." -ForegroundColor Green
+Write-Host "Jazz understanding verified: typo/STT normalization + confidence/safety tests passed." -ForegroundColor Green
 Write-Host "Jazz web production build verified: TSX/JSX + Vite transform passed." -ForegroundColor Green
 Write-Host "Jazz local voice verified: Whisper service + Vite proxy + browser microphone pipeline are wired." -ForegroundColor Green
 Write-Host "Jazz rich-code renderer verified." -ForegroundColor Green
