@@ -79,7 +79,26 @@ export async function handleAndroidIntent(message) {
     };
   }
 
+  const hadWakeWord = /^\s*(?:hey\s+)?jazz\b/i.test(understanding.normalized);
   const text = stripWakePhrase(understanding.normalized);
+  if (!text && hadWakeWord) {
+    return {
+      assistant: "Hey Mama 👋 I'm here and listening. What do you want me to do?",
+      executed: false,
+      mode: "local-wake",
+      tool: "understanding.wake",
+      intentVersion: ANDROID_INTENTS_VERSION
+    };
+  }
+  if (hadWakeWord && /^(?:can you hear me|are you there|you there)[?.! ]*$/i.test(text)) {
+    return {
+      assistant: "Yes, Mama. I can hear you. I'm ready.",
+      executed: false,
+      mode: "local-wake",
+      tool: "understanding.wake",
+      intentVersion: ANDROID_INTENTS_VERSION
+    };
+  }
   if (!text) return null;
 
   const deviceId = deviceFor(text);
