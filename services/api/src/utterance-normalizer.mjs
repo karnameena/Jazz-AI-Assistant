@@ -1,6 +1,6 @@
 const COMMAND_WORDS = [
   "open", "launch", "start", "close", "scroll", "swipe", "search", "play",
-  "tap", "click", "type", "read", "show", "check"
+  "tap", "click", "type", "read", "show", "check", "pay", "send", "unlock"
 ];
 
 const COMMAND_ALIASES = new Map([
