@@ -20,18 +20,20 @@ class LostDeviceManager(private val context: Context) {
     fun setEnabled(enabled: Boolean) {
         prefs.edit().putBoolean(LOST_MODE, enabled).apply()
         RecoveryHeartbeatWorker.schedule(context)
-        if (enabled) {
+
+        // Keep the secure paired recovery channel alive in both NORMAL_MODE and
+        // LOST_DEVICE_MODE. Otherwise Jazz could not remotely enable Lost Mode when
+        // the phone is already missing. The service remains owner-authenticated and
+        // only starts when a recovery server has been configured.
+        if (RecoveryNetworkClient(context).isConfigured()) {
             try {
                 ContextCompat.startForegroundService(
                     context,
                     RecoveryForegroundService.intent(context)
                 )
             } catch (_: Exception) {
-                // Android can temporarily refuse foreground-service starts depending
-                // on app/device state. The WorkManager heartbeat remains scheduled.
+                RecoveryHeartbeatWorker.syncNow(context)
             }
-        } else {
-            context.stopService(RecoveryForegroundService.intent(context))
         }
     }
 }
