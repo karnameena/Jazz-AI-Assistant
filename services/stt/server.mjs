@@ -136,17 +136,17 @@ async function runWhisper(wavBuffer) {
     "-otxt",
     "-of", outputPrefix
   ];
-  const promptedArgs = config.prompt ? [...baseArgs, "-p", config.prompt] : baseArgs;
+  const promptedArgs = config.prompt ? [...baseArgs, "--prompt", config.prompt] : baseArgs;
 
   try {
     let output;
     try {
       output = await executeWhisper(config, promptedArgs);
     } catch (error) {
-      // Older whisper.cpp builds may not support -p. Fall back without the prompt
+      // Older whisper.cpp builds may not support --prompt. Fall back without it
       // instead of breaking Jazz voice input.
       const detail = String(error?.message || "");
-      if (config.prompt && /(?:unknown|unrecognized|invalid).*(?:-p|prompt)|(?:-p|prompt).*(?:unknown|unrecognized|invalid)/i.test(detail)) {
+      if (config.prompt && /(?:unknown|unrecognized|invalid).*(?:--prompt|prompt)|(?:--prompt|prompt).*(?:unknown|unrecognized|invalid)/i.test(detail)) {
         output = await executeWhisper(config, baseArgs);
       } else {
         throw error;
