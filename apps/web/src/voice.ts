@@ -15,9 +15,10 @@ export class JazzVoice {
   private listeningRequested = false;
   private recognitionStarted = false;
   private recognitionStarting = false;
+  private finalizingRecognition = false;
   private restartTimer: number | null = null;
   private restartAttempts = 0;
-  private recognitionLanguage = "en-US";
+  private recognitionLanguage = "en-IN";
   private triedLanguageFallback = false;
   private switchingToLocal = false;
 
@@ -53,7 +54,9 @@ export class JazzVoice {
     this.setVisualState("idle");
 
     const browserLanguage = String(navigator.language || "").trim();
-    this.recognitionLanguage = /^en[-_]/i.test(browserLanguage) ? browserLanguage.replace("_", "-") : "en-US";
+    // Jazz targets Indian/Tamil-accented English by default. Respect an explicit
+    // Indian-English browser locale; otherwise keep en-IN as the recognition hint.
+    if (/^en[-_]IN$/i.test(browserLanguage)) this.recognitionLanguage = "en-IN";
 
     const Recognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (Recognition) {
@@ -61,7 +64,7 @@ export class JazzVoice {
       this.recognition.lang = this.recognitionLanguage;
       this.recognition.interimResults = true;
       this.recognition.continuous = false;
-      this.recognition.maxAlternatives = 1;
+      this.recognition.maxAlternatives = 3;
 
       this.recognition.onstart = () => {
         this.switchingToLocal = false;
@@ -77,7 +80,7 @@ export class JazzVoice {
       this.recognition.onend = () => {
         this.recognitionStarting = false;
         this.recognitionStarted = false;
-        if (this.switchingToLocal || this.localSttMode || this.localSttSubmitting) return;
+        if (this.finalizingRecognition || this.switchingToLocal || this.localSttMode || this.localSttSubmitting) return;
         if (!this.listeningRequested) {
           this.stopMicMonitor();
           this.setVisualState("idle");
@@ -150,8 +153,20 @@ export class JazzVoice {
         const interimText = interim.trim();
         const completedText = finalText.trim();
 
-        if (interimText) this.callbacks.onInterim?.(this.stripWakePhrase(interimText));
-        if (completedText) this.callbacks.onFinal?.(this.stripWakePhrase(completedText));
+        // Interim text stays raw/natural in the existing chat input. Only a final
+        // utterance is normalized, and normalization itself never executes actions.
+        if (interimText) this.callbacks.onInterim?.(interimText);
+        if (completedText) {
+          this.finalizingRecognition = true;
+          void this.normalizeRecognizedText(completedText, "voice")
+            .then(text => {
+              if (text) this.callbacks.onFinal?.(text);
+            })
+            .finally(() => {
+              this.finalizingRecognition = false;
+              if (this.listeningRequested && !this.recognitionStarted && !this.recognitionStarting) this.scheduleRestart(250);
+            });
+        }
       };
     }
 
@@ -193,6 +208,7 @@ export class JazzVoice {
   private failListening(message: string) {
     this.listeningRequested = false;
     this.switchingToLocal = false;
+    this.finalizingRecognition = false;
     this.stopMicMonitor();
     this.setVisualState("idle");
     this.callbacks.onState?.("idle");
@@ -230,6 +246,26 @@ export class JazzVoice {
     } catch {
       this.localSttHealth = { ready: false, checkedAt: now };
       return false;
+    }
+  }
+
+  private async normalizeRecognizedText(text: string, source: "voice" | "typed" = "voice") {
+    const raw = String(text || "").trim();
+    if (!raw) return "";
+    try {
+      const response = await fetch("/stt-local/normalize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: raw, source })
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok || !data?.ok) return raw;
+      // Low-confidence input is intentionally not silently rewritten. It reaches
+      // the existing router in its raw form, where execution guards can clarify.
+      if (data.requiresClarification) return raw;
+      return String(data.normalized || raw).trim() || raw;
+    } catch {
+      return raw;
     }
   }
 
@@ -424,7 +460,7 @@ export class JazzVoice {
       const data = await response.json().catch(() => null);
       if (!response.ok || !data?.ok) throw new Error(data?.error || "Local transcription failed.");
 
-      const text = this.stripWakePhrase(String(data.text || "").trim());
+      const text = String(data.text || "").trim();
       if (!text) throw new Error("Jazz did not detect clear speech in that recording.");
       this.callbacks.onFinal?.(text);
     } catch (error) {
@@ -595,7 +631,7 @@ export class JazzVoice {
   }
 
   private scheduleRestart(delay: number) {
-    if (!this.listeningRequested || this.restartTimer !== null || this.localSttMode || this.switchingToLocal) return;
+    if (!this.listeningRequested || this.restartTimer !== null || this.localSttMode || this.switchingToLocal || this.finalizingRecognition) return;
     if (this.restartAttempts >= 8) {
       this.failListening("Speech recognition stopped repeatedly. Tap the microphone and try again.");
       return;
@@ -620,12 +656,13 @@ export class JazzVoice {
       return;
     }
 
-    if (this.listeningRequested && (this.recognitionStarted || this.recognitionStarting || this.localSttMode || this.localSttSubmitting)) return;
+    if (this.listeningRequested && (this.recognitionStarted || this.recognitionStarting || this.localSttMode || this.localSttSubmitting || this.finalizingRecognition)) return;
 
     this.listeningRequested = true;
     this.restartAttempts = 0;
     this.triedLanguageFallback = false;
     this.switchingToLocal = false;
+    this.finalizingRecognition = false;
     this.setLevel(0.08);
 
     if (this.restartTimer !== null) {
@@ -673,6 +710,7 @@ export class JazzVoice {
     this.recognitionStarting = false;
     this.recognitionStarted = false;
     this.switchingToLocal = false;
+    this.finalizingRecognition = false;
 
     if (this.restartTimer !== null) {
       window.clearTimeout(this.restartTimer);
