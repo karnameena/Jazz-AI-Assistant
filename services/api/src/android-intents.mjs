@@ -1,7 +1,7 @@
 import { getDevice, sendAndroidCommand, sendAndroidScript } from "./device-bridge.mjs";
 import { debugUnderstanding, normalizeUtterance } from "./utterance-normalizer.mjs";
 
-export const ANDROID_INTENTS_VERSION = "generic-companion-v20-understanding";
+export const ANDROID_INTENTS_VERSION = "generic-companion-v21-reels-home";
 
 function deviceFor(text) {
   return /\btablet\b/i.test(text) ? "android-tablet" : "android-phone";
@@ -50,24 +50,23 @@ function looksLikeAndroidCommand(text) {
   return [
     /^(?:open|launch|start)\s+.+/i,
     /^close\s+.+/i,
-    /^(?:go\s+)?back$/i,
-    /^(?:go\s+)?home(?:\s+screen)?$/i,
-    /^(?:open\s+)?recent\s+apps$/i,
-    /^open\s+notifications$/i,
+    /^(?:go\s+)?back[.!? ]*$/i,
+    /^(?:go\s+)?home(?:\s+screen)?[.!? ]*$/i,
+    /^(?:open\s+)?recent\s+apps[.!? ]*$/i,
+    /^open\s+notifications[.!? ]*$/i,
     /^(?:scroll|swipe)\s+(?:up|down).*/i,
+    /^(?:like|heart)(?:\s+(?:this|the|current))?\s+(?:reel|video)[.!? ]*$/i,
+    /^double\s+tap(?:\s+(?:this|the|current))?\s+(?:reel|video)[.!? ]*$/i,
     /^(?:tap|click)\s+.+/i,
     /^long\s+press\s+.+/i,
     /^type\s+.+/i,
-    /^clear\s+text$/i,
+    /^clear\s+text[.!? ]*$/i,
     /^search\s+.+/i,
     /^(?:message|whatsapp|whats\s*app|send\s+.+\s+to\s+.+\s+on\s+whats\s*app).*/i
   ].some(pattern => pattern.test(text));
 }
 
 export async function handleAndroidIntent(message) {
-  // This is the existing Android command router. The only new step is conservative
-  // interpretation before matching; execution still goes through the same bridge,
-  // script registry, companion permissions and AccessibilityService controls.
   const understanding = normalizeUtterance(message, { source: "typed" });
   debugUnderstanding(understanding);
   if (understanding.requiresClarification) {
@@ -186,8 +185,15 @@ export async function handleAndroidIntent(message) {
       };
     }
 
+    const homeCommand = /^(?:go\s+)?home(?:\s+screen)?[.!? ]*$/i.test(text);
+    const likeReelCommand = /^(?:like|heart)(?:\s+(?:this|the|current))?\s+(?:reel|video)[.!? ]*$/i.test(text)
+      || /^double\s+tap(?:\s+(?:this|the|current))?\s+(?:reel|video)[.!? ]*$/i.test(text);
     return {
-      assistant: result?.message || "Done, Mama.",
+      assistant: homeCommand
+        ? "Android home screen opened."
+        : likeReelCommand
+          ? "Liked the current reel with a double tap."
+          : (result?.message || "Done, Mama."),
       executed: true,
       tool: "android.automation",
       intentVersion: ANDROID_INTENTS_VERSION,
