@@ -4,6 +4,7 @@ import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import androidx.core.content.ContextCompat
 import java.nio.charset.StandardCharsets
 import java.security.KeyStore
 import java.security.MessageDigest
@@ -48,6 +49,17 @@ class RecoverySecurityManager(private val context: Context) {
             "Recovery server must use HTTPS."
         }
         prefs.edit().putString(SERVER_URL, normalized).apply()
+
+        if (normalized.isNotBlank()) {
+            RecoveryHeartbeatWorker.schedule(context)
+            try {
+                ContextCompat.startForegroundService(context, RecoveryForegroundService.intent(context))
+            } catch (_: Exception) {
+                RecoveryHeartbeatWorker.syncNow(context)
+            }
+        } else {
+            context.stopService(RecoveryForegroundService.intent(context))
+        }
     }
 
     fun pairingToken(): String {
