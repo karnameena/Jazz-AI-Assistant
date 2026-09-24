@@ -23,8 +23,19 @@ const sequence = normalizeUtterance("hey jas opan instgram and scrol ap", { sour
 assert.equal(sequence.normalized, "hey jazz open Instagram and scroll up");
 assert.deepEqual(sequence.intents.map(item => item.intent), ["OPEN_APP", "SCROLL_UP"]);
 
+const whatsappSearch = normalizeUtterance("serch Guna in whatsap", { source: "typed" });
+assert.equal(whatsappSearch.normalized, "search Guna in WhatsApp");
+
+const youtubePlay = normalizeUtterance("ply vaathi coming in youtub", { source: "typed" });
+assert.equal(youtubePlay.normalized, "play vaathi coming in YouTube");
+
 // Arbitrary values are deliberately not blindly corrected.
 assert.equal(normalizeUtterance("type 'opn youtub'", { source: "typed" }).normalized, "type 'opn youtub'");
 assert.equal(normalizeUtterance("open https://example.com/opn", { source: "typed" }).normalized, "open https://example.com/opn");
+assert.equal(normalizeUtterance("search instgram", { source: "typed" }).normalized, "search instgram");
 
-console.log(`Jazz understanding tests passed: ${cases.length + 3}`);
+// Fuzzy matching is not allowed to manufacture a sensitive command.
+const uncertainUnlock = normalizeUtterance("unlok mobile", { source: "voice" });
+assert.notEqual(uncertainUnlock.intent, "UNLOCK_MOBILE");
+
+console.log(`Jazz understanding tests passed: ${cases.length + 7}`);
