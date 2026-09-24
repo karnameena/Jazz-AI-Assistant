@@ -9,6 +9,7 @@ Write-Host "Repairing Jazz runtime from origin/main..." -ForegroundColor Cyan
 $runtimeFiles = @(
   "package.json",
   "pnpm-workspace.yaml",
+  "services/api/package.json",
   "services/api/src/server.mjs",
   "services/api/src/ollama.mjs",
   "services/api/src/tts.mjs",
@@ -34,6 +35,7 @@ $runtimeFiles = @(
   "apps/web/scripts/telegram-login.mjs",
   "apps/web/index.html",
   "apps/web/public/api-runtime.js",
+  "apps/web/public/local-stt-bootstrap.js",
   "apps/web/public/favicon.svg",
   "apps/web/public/rich-code.js",
   "apps/web/public/rich-code.css",
@@ -58,12 +60,20 @@ if ($LASTEXITCODE -ne 0) { throw "git fetch origin main failed." }
 git checkout origin/main -- $runtimeFiles
 if ($LASTEXITCODE -ne 0) { throw "Could not refresh Jazz runtime files from origin/main." }
 
+# Validate the current API version from source instead of pinning repair to one release.
+# A hard-coded 0.10.0 check previously rejected the newer 0.10.1 API.
 $server = Get-Content ".\services\api\src\server.mjs" -Raw
-if ($server -notmatch 'const VERSION = "0\.10\.0-local"') {
-  throw "Repair failed: expected Jazz API 0.10.0-local was not found."
+$versionMatch = [regex]::Match($server, 'const\s+VERSION\s*=\s*"(?<version>\d+\.\d+\.\d+-local)"')
+if (-not $versionMatch.Success) {
+  throw "Repair failed: Jazz API VERSION declaration is missing or invalid."
 }
+$currentApiVersion = $versionMatch.Groups['version'].Value
+Write-Host "Jazz API source version from origin/main: $currentApiVersion" -ForegroundColor Green
 if ($server -match 'I tried the configured model and resilient fallbacks') {
   throw "Repair failed: legacy Gemini fallback text still exists."
+}
+if ($server -notmatch 'utterance-normalizer\.mjs' -or $server -notmatch 'normalizeUtterance') {
+  throw "Repair failed: API-wide Jazz understanding integration is missing."
 }
 
 $apiRuntime = Get-Content ".\apps\web\public\api-runtime.js" -Raw
@@ -92,6 +102,9 @@ if ($indexHtml -notmatch 'recovery-ui\.js' -or $indexHtml -notmatch 'recovery-ui
 }
 if (-not (Test-Path ".\apps\web\public\recovery-ui.js") -or -not (Test-Path ".\apps\web\public\recovery-ui.css")) {
   throw "Repair failed: Jazz Device Recovery UI assets are missing."
+}
+if (-not (Test-Path ".\apps\web\public\local-stt-bootstrap.js")) {
+  throw "Repair failed: Jazz browser speech-recognition reliability bootstrap is missing."
 }
 
 $mainTsx = Get-Content ".\apps\web\src\main.tsx" -Raw
@@ -143,6 +156,10 @@ $sttServerText = Get-Content ".\services\stt\server.mjs" -Raw
 if ($sttServerText -notmatch 'rawText' -or $sttServerText -notmatch '"/normalize"' -or $sttServerText -notmatch '--prompt') {
   throw "Repair failed: Jazz STT raw transcript/normalization/prompt integration is incomplete."
 }
+$apiPackage = Get-Content ".\services\api\package.json" -Raw
+if ($apiPackage -notmatch 'utterance-normalizer\.test\.mjs') {
+  throw "Repair failed: Jazz API understanding regression test script is missing."
+}
 
 $startJazz = Get-Content ".\start-jazz.ps1" -Raw
 if ($startJazz -notmatch 'Local Whisper STT READY' -or $startJazz -notmatch 'services\\stt\\server\.mjs' -or $startJazz -notmatch 'JAZZ_STT_PORT') {
@@ -150,6 +167,12 @@ if ($startJazz -notmatch 'Local Whisper STT READY' -or $startJazz -notmatch 'ser
 }
 if ($startJazz -notmatch 'Recovery proxy READY' -or $startJazz -notmatch 'services\\recovery-local\\server\.mjs') {
   throw "Repair failed: start-jazz.ps1 does not start the isolated recovery proxy."
+}
+if ($startJazz -match '\$expectedVersion\s*=\s*"\d+\.\d+\.\d+-local"') {
+  throw "Repair failed: start-jazz.ps1 still hard-codes an API version and can reject newer valid builds."
+}
+if ($startJazz -notmatch 'versionMatch' -or $startJazz -notmatch 'Source expects') {
+  throw "Repair failed: start-jazz.ps1 is not using source-derived API version verification."
 }
 if (-not (Test-Path ".\services\recovery-local\server.mjs") -or -not (Test-Path ".\services\recovery-relay\server.mjs")) {
   throw "Repair failed: Jazz Device Recovery services are missing."
@@ -249,6 +272,7 @@ Remove-Item (Join-Path $root "node_modules\.vite") -Recurse -Force -ErrorAction 
 Remove-Item (Join-Path $root "node_modules\.vite-jazz") -Recurse -Force -ErrorAction SilentlyContinue
 
 Write-Host "Runtime source repaired successfully." -ForegroundColor Green
+Write-Host "Jazz API source verified: $currentApiVersion (version-aware startup)." -ForegroundColor Green
 Write-Host "React runtime verified: one pinned React 18.3.1 + ReactDOM 18.3.1 installation." -ForegroundColor Green
 Write-Host "Jazz understanding verified: typo/STT normalization + confidence/safety tests passed." -ForegroundColor Green
 Write-Host "Jazz web production build verified: TSX/JSX + Vite transform passed." -ForegroundColor Green
