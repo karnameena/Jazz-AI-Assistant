@@ -156,7 +156,18 @@ class MainActivity : Activity() {
 
         content.addView(Button(this).apply {
             text = "Copy Recovery Pairing Token"
-            setOnClickListener { copyText("Jazz recovery pairing token", recoverySecurity.pairingToken()) }
+            setOnClickListener {
+                val recoveryToken = recoverySecurity.pairingToken()
+                copyText("Jazz recovery pairing token", recoveryToken)
+                if (recoverySecurity.pairingTokenNeedsRelayUpdate()) {
+                    recoveryStatusView.text = buildString {
+                        appendLine("Recovery security token was repaired after an Android Keystore reset.")
+                        appendLine("A NEW pairing token has been copied.")
+                        appendLine("Update JAZZ_RECOVERY_DEVICE_TOKEN in services/recovery-relay/.env with this new token.")
+                        append("Then restart the recovery relay and tap Test Recovery Connection Now.")
+                    }
+                }
+            }
         })
 
         content.addView(Button(this).apply {
@@ -218,6 +229,9 @@ class MainActivity : Activity() {
                 appendLine("Background location: ${if (backgroundLocation) "Allowed" else "Not allowed"}")
                 appendLine("Battery optimization exemption: ${if (power.isIgnoringBatteryOptimizations(packageName)) "Allowed" else "Not allowed"}")
                 appendLine("Security: Android Keystore encrypted pairing token + signed requests")
+                if (recoverySecurity.pairingTokenNeedsRelayUpdate()) {
+                    appendLine("Pairing: NEW TOKEN MUST BE COPIED TO RECOVERY RELAY")
+                }
                 append("Recovery channel supports validated Wi-Fi and mobile data.")
             }
         }
@@ -229,10 +243,25 @@ class MainActivity : Activity() {
             return
         }
 
+        // Accessing the token here also repairs a stale restored ciphertext/Keystore
+        // mismatch before a network request is attempted.
+        recoverySecurity.pairingToken()
+        if (recoverySecurity.pairingTokenNeedsRelayUpdate()) {
+            recoveryStatusView.text = buildString {
+                appendLine("Recovery pairing needs one-time repair.")
+                appendLine("Android restored an old encrypted token but its Keystore key changed.")
+                appendLine("Tap COPY RECOVERY PAIRING TOKEN.")
+                appendLine("Put that new value into JAZZ_RECOVERY_DEVICE_TOKEN in services/recovery-relay/.env.")
+                append("Restart the relay, then test again.")
+            }
+            return
+        }
+
         recoveryStatusView.text = "Testing recovery connection now…"
         Thread {
             try {
                 val result = RecoveryNetworkClient(applicationContext).syncOnce()
+                if (result.optBoolean("ok", false)) recoverySecurity.markPairingTokenSynchronized()
                 runOnUiThread {
                     recoveryStatusView.text = buildString {
                         appendLine("Recovery connection: ${if (result.optBoolean("ok", false)) "OK" else "WAITING"}")
