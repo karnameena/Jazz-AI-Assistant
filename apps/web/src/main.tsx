@@ -14,7 +14,17 @@ import "./chat-overrides.css";
 
 interface Message { id: number; sender: "user" | "jazz"; text: string; time: string; }
 interface ReminderItem { id: string; title: string; time: string; }
-interface DeviceItem { id: string; name: string; kind: string; status: string; bridge: boolean; }
+interface DeviceItem {
+  id: string;
+  name: string;
+  kind: string;
+  status: string;
+  bridge: boolean;
+  connected?: boolean;
+  serial?: string | null;
+  identity?: string | null;
+  lastSeen?: string | null;
+}
 type DayMode = "morning" | "afternoon" | "evening" | "night";
 type QuickCommand = { label: string; icon: React.ReactNode; run: () => void | Promise<void>; };
 
@@ -38,11 +48,11 @@ async function apiJson(path: string, options?: RequestInit) {
   return data;
 }
 
-async function streamChat(message: string, onText: (chunk: string) => void) {
+async function streamChat(message: string, onText: (chunk: string) => void, source: "voice" | "typed" = "typed") {
   const response = await fetch("/api/chat/stream", {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-    body: JSON.stringify({ message })
+    body: JSON.stringify({ message, source })
   });
   if (!response.ok || !response.body) throw new Error("Streaming API unavailable");
   const reader = response.body.getReader();
@@ -96,7 +106,19 @@ function App() {
   useEffect(() => {
     const timer = window.setInterval(() => setDayMode(getDayMode()), 30_000);
     apiJson("/api/reminders").then(data => setReminders(data.items || [])).catch(() => setReminders([]));
-    apiJson("/api/devices").then(data => setDevices(data.items || [])).catch(() => setDevices([]));
+
+    const refreshDevices = () => {
+      apiJson("/api/devices", { cache: "no-store" })
+        .then(data => setDevices(Array.isArray(data.items) ? data.items : []))
+        .catch(() => undefined);
+    };
+    refreshDevices();
+    const deviceTimer = window.setInterval(refreshDevices, 3000);
+    const onFocus = () => refreshDevices();
+    const onVisibility = () => { if (!document.hidden) refreshDevices(); };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibility);
+
     const voice = new JazzVoice({
       onState: state => setVoiceState(state),
       onInterim: text => { setVoiceTranscript(text); setInput(text); },
@@ -109,7 +131,13 @@ function App() {
     });
     voiceRef.current = voice;
     setMessages([{ id: Date.now(), sender: "jazz", text: "Hey Mama 👋 Jazz is online and ready.", time: nowTime() }]);
-    return () => { window.clearInterval(timer); voice.stop(); };
+    return () => {
+      window.clearInterval(timer);
+      window.clearInterval(deviceTimer);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibility);
+      voice.stop();
+    };
   }, []);
 
   useEffect(() => { messagesRef.current?.scrollTo({ top: messagesRef.current.scrollHeight, behavior: "smooth" }); }, [messages]);
@@ -144,9 +172,11 @@ function App() {
       } else if (force && available.trim()) {
         spokenChars = spokenBuffer.length;
         queueSpeech(available.trim());
-      } else if (available.length > 180) {
-        const cut = available.lastIndexOf(" ", 170);
-        if (cut > 40) { spokenChars += cut + 1; queueSpeech(available.slice(0, cut).trim()); }
+      } else if (available.length > 82) {
+        // Start speaking much earlier instead of waiting for a ~180 character block.
+        // Cutting on a word boundary keeps the voice natural while lowering perceived latency.
+        const cut = available.lastIndexOf(" ", 72);
+        if (cut > 28) { spokenChars += cut + 1; queueSpeech(available.slice(0, cut).trim()); }
       }
     };
     try {
@@ -154,16 +184,16 @@ function App() {
         spokenBuffer += chunk;
         setMessages(current => current.map(item => item.id === replyId ? { ...item, text: item.text + chunk } : item));
         flushSpeech(false);
-      });
+      }, voice ? "voice" : "typed");
       flushSpeech(true);
     } catch {
       try {
-        const data = await apiJson("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: value }) });
+        const data = await apiJson("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: value, source: voice ? "voice" : "typed" }) });
         const reply = data.assistant || "Jazz is ready.";
         setMessages(current => current.map(item => item.id === replyId ? { ...item, text: reply } : item));
         queueSpeech(reply);
       } catch {
-        const reply = "Jazz could not reach the API. Start the API on port 8787 and try again.";
+        const reply = "Jazz could not reach the API. Start the API on port 8797 and try again.";
         setMessages(current => current.map(item => item.id === replyId ? { ...item, text: reply } : item));
         queueSpeech(reply);
       }
@@ -195,15 +225,32 @@ function App() {
     catch (error) { addJazzMessage(`I couldn’t control ${device.name}: ${error instanceof Error ? error.message : "Device command failed"}`); }
   };
 
-  const preferredAndroid = devices.find(d => d.kind === "android" && d.bridge) || devices.find(d => d.kind === "android");
+  const preferredAndroid = devices.find(d => d.kind === "android" && d.bridge && d.connected)
+    || devices.find(d => d.kind === "android" && d.bridge)
+    || devices.find(d => d.kind === "android");
+  const connectedAndroidDevices = devices.filter(d => d.kind === "android" && d.bridge && d.connected);
+
   const quickCommands: QuickCommand[] = useMemo(() => [
     { label: "Open YouTube", icon: <Youtube size={17} />, run: () => preferredAndroid && void runAndroidCommand(preferredAndroid, "launch_app", { packageName: "com.google.android.youtube" }) },
     { label: "Send WhatsApp", icon: <Webhook size={17} />, run: () => preferredAndroid && void runAndroidCommand(preferredAndroid, "launch_app", { packageName: "com.whatsapp" }) },
-    { label: "Take a screenshot", icon: <Camera size={17} />, run: () => { setToast("Screenshot action is reserved for the Android bridge"); addJazzMessage("Screenshot is the next bridge action to enable; the UI control is ready."); } },
+    { label: "Take a screenshot", icon: <Camera size={17} />, run: () => { setToast("Screenshot workflow is available through Jazz chat or the Android bridge."); setInput("take a screenshot of my mobile"); } },
     { label: "Open Instagram", icon: <Instagram size={17} />, run: () => preferredAndroid && void runAndroidCommand(preferredAndroid, "launch_app", { packageName: "com.instagram.android" }) },
     { label: "Play music", icon: <Music2 size={17} />, run: () => preferredAndroid && void runAndroidCommand(preferredAndroid, "launch_app", { packageName: "com.google.android.apps.youtube.music" }) }
   ], [preferredAndroid, devices]);
+
+  const discoveredDeviceActions: QuickCommand[] = connectedAndroidDevices.map(device => ({
+    label: `${device.name} • Online`,
+    icon: <Smartphone size={17} />,
+    run: () => {
+      setActiveNav("Devices");
+      setShowAllDevices(true);
+      setToast(`${device.name} is connected`);
+      addJazzMessage(`${device.name} is connected${device.serial ? ` via ${device.serial}` : ""}.`);
+    }
+  }));
+
   const quickActionList: QuickCommand[] = [
+    ...discoveredDeviceActions,
     { label: "Take a Note", icon: <FileText size={17} />, run: takeNote },
     { label: "Set Reminder", icon: <Bell size={17} />, run: setReminder },
     { label: "Open Calculator", icon: <Timer size={17} />, run: () => preferredAndroid && void runAndroidCommand(preferredAndroid, "launch_app", { packageName: "com.android.calculator2" }) },
@@ -251,7 +298,7 @@ function App() {
         </section>
         <aside className="right-column">
           <DashboardCard icon={<Sparkles />} title="Quick Actions" action="Edit"><div className="quick-actions-grid">{quickActionList.map(action => <QuickAction key={action.label} {...action} />)}</div></DashboardCard>
-          <DashboardCard icon={<Smartphone />} title="Devices" action={showAllDevices ? "Collapse" : "See all"} actionClick={() => setShowAllDevices(v => !v)}><div className="device-list">{(visibleDevices.length ? visibleDevices : [{ id: "android-phone", name: "Android Phone", kind: "android", status: "not configured", bridge: false }]).map(device => <DeviceRow key={device.id} device={device} onClick={() => setShowAllDevices(true)} />)}</div></DashboardCard>
+          <DashboardCard icon={<Smartphone />} title="Devices" action={showAllDevices ? "Collapse" : "See all"} actionClick={() => setShowAllDevices(v => !v)}><div className="device-list">{(visibleDevices.length ? visibleDevices : [{ id: "android-phone", name: "Android Phone", kind: "android", status: "not-configured", bridge: false, connected: false }]).map(device => <DeviceRow key={device.id} device={device} onClick={() => setShowAllDevices(true)} />)}</div></DashboardCard>
           <DashboardCard icon={<Bell />} title="Upcoming Reminders" action="See all"><div className="reminder-list">{reminders.length ? reminders.slice(0, 3).map(item => <ReminderRow key={item.id} item={item} />) : <div className="empty-row">No reminders yet. Use Set Reminder.</div>}</div></DashboardCard>
           <div className="status-card"><div className="status-top"><div><div className="status-heading"><span className="status-icon"><Zap size={16} /></span><strong>Jazz Status</strong></div><p>Voice assistant ready • {voiceState === "listening" ? "listening..." : voiceState === "speaking" ? "speaking..." : "online"}</p></div><span className="online-badge">Online</span></div><div className="status-wave">{Array.from({ length: 22 }, (_, i) => <i key={i} style={{ height: `${6 + ((i * 11) % 27)}px` }} />)}</div></div>
         </aside>
@@ -308,7 +355,15 @@ function Stat({ label, value }: { label: string; value: string }) { return <div 
 function Suggestion({ label, icon, onClick }: { label: string; icon: React.ReactNode; onClick: () => void }) { return <button onClick={onClick}>{React.cloneElement(icon as React.ReactElement, { size: 13 })}{label}</button>; }
 function QuickAction({ label, icon, run }: QuickCommand) { return <button className="quick-action" onClick={() => void run()}>{icon}<span>{label}</span></button>; }
 function DashboardCard({ icon, title, action, actionClick, children }: { icon: React.ReactNode; title: string; action?: string; actionClick?: () => void; children: React.ReactNode }) { return <section className="dashboard-card"><div className="card-heading"><div><span className="card-icon">{React.cloneElement(icon as React.ReactElement, { size: 16 })}</span><strong>{title}</strong></div>{action && <button onClick={actionClick}>{action}</button>}</div>{children}</section>; }
-function DeviceRow({ device, onClick }: { device: DeviceItem; onClick: () => void }) { return <button className="device-row" onClick={onClick}><span className="device-icon">{device.kind === "android" ? <Smartphone size={18} /> : <Laptop size={18} />}</span><span className="device-copy"><strong>{device.name}</strong><small className={device.bridge ? "ok" : "muted"}>{device.bridge ? `Connected · ${device.status === "configured" ? "100%" : device.status}` : "Not configured"}</small></span><Volume2 size={15} /></button>; }
+function DeviceRow({ device, onClick }: { device: DeviceItem; onClick: () => void }) {
+  const connected = device.connected === true || device.status === "connected";
+  const detail = connected
+    ? `Connected${device.serial ? ` · ${device.serial}` : ""}`
+    : device.bridge
+      ? device.status === "discovering" ? "Discovering…" : device.status === "bridge-offline" ? "ADB bridge offline" : "Offline"
+      : "Not configured";
+  return <button className="device-row" onClick={onClick}><span className="device-icon">{device.kind === "android" ? <Smartphone size={18} /> : <Laptop size={18} />}</span><span className="device-copy"><strong>{device.name}</strong><small className={connected ? "ok" : "muted"}>{detail}</small></span><Volume2 size={15} /></button>;
+}
 function ReminderRow({ item }: { item: ReminderItem }) { return <div className="reminder-row"><span className="reminder-icon"><Bell size={15} /></span><span><strong>{item.title}</strong><small>{item.time}</small></span></div>; }
 function Feature({ icon, title, sub, badge }: { icon: React.ReactNode; title: string; sub: string; badge?: string }) { return <div className="feature"><span className="feature-icon">{React.cloneElement(icon as React.ReactElement, { size: 17 })}</span><span><strong>{title}</strong><small>{sub}</small></span>{badge && <em>{badge}</em>}</div>; }
 function Legend({ dot, label, value }: { dot: string; label: string; value: string }) { return <div className="legend"><span className={`dot ${dot}`} /><span>{label}</span><strong>{value}</strong></div>; }
