@@ -4,10 +4,7 @@ const port = Number(process.env.JAZZ_RECOVERY_LOCAL_PORT || 8799);
 const relayUrl = String(process.env.JAZZ_RECOVERY_RELAY_URL || "").trim().replace(/\/$/, "");
 const localRelayUrl = String(process.env.JAZZ_RECOVERY_LOCAL_RELAY_URL || "http://127.0.0.1:8788").trim().replace(/\/$/, "");
 const ownerToken = String(process.env.JAZZ_RECOVERY_OWNER_TOKEN || "").trim();
-const allowedOrigins = new Set([
-  "http://localhost:5173",
-  "http://127.0.0.1:5173"
-]);
+const allowedOrigins = new Set(["http://localhost:5173", "http://127.0.0.1:5173"]);
 
 function sendJson(req, res, status, payload) {
   const origin = String(req.headers.origin || "");
@@ -44,18 +41,10 @@ function validLocalRelay(value) {
 }
 
 function ensureConfigured() {
-  if (!ownerToken) {
-    throw new Error("Jazz recovery owner authorization is not configured. Set JAZZ_RECOVERY_OWNER_TOKEN in services/recovery-local/.env.");
-  }
-  if (relayUrl && !relayUrl.startsWith("https://")) {
-    throw new Error("JAZZ_RECOVERY_RELAY_URL must use HTTPS.");
-  }
-  if (localRelayUrl && !validLocalRelay(localRelayUrl)) {
-    throw new Error("JAZZ_RECOVERY_LOCAL_RELAY_URL must point to localhost/127.0.0.1 only.");
-  }
-  if (!relayUrl && !localRelayUrl) {
-    throw new Error("No Jazz recovery relay is configured.");
-  }
+  if (!ownerToken) throw new Error("Jazz recovery owner authorization is not configured.");
+  if (relayUrl && !relayUrl.startsWith("https://")) throw new Error("JAZZ_RECOVERY_RELAY_URL must use HTTPS.");
+  if (localRelayUrl && !validLocalRelay(localRelayUrl)) throw new Error("JAZZ_RECOVERY_LOCAL_RELAY_URL must point to localhost only.");
+  if (!relayUrl && !localRelayUrl) throw new Error("No Jazz recovery relay is configured.");
 }
 
 function relayCandidates() {
@@ -84,90 +73,84 @@ async function relay(path, method = "GET", body = null) {
   ensureConfigured();
   const candidates = relayCandidates();
   let lastError = null;
-
   for (let index = 0; index < candidates.length; index += 1) {
     const baseUrl = candidates[index];
     try {
       const { response, data } = await relayRequest(baseUrl, path, method, body);
       if (response.ok) return data;
-
       const message = data.error || data.message || `Recovery relay returned ${response.status}`;
       lastError = new Error(message);
-
-      // Authorization failures are real security failures, not transport failures.
-      // Do not bypass them by silently switching to another endpoint.
       if (response.status === 401 || response.status === 403) throw lastError;
-
-      const hasFallback = index < candidates.length - 1;
-      if (!hasFallback) throw lastError;
-      console.warn(`[Jazz Recovery Local] relay ${baseUrl} returned ${response.status}; trying localhost recovery relay fallback.`);
+      if (index === candidates.length - 1) throw lastError;
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
-      const hasFallback = index < candidates.length - 1;
-      if (!hasFallback) break;
-      console.warn(`[Jazz Recovery Local] relay ${baseUrl} unavailable (${lastError.message}); trying ${candidates[index + 1]}.`);
+      if (index === candidates.length - 1) break;
+      console.warn(`[Jazz Recovery Local] ${baseUrl} unavailable (${lastError.message}); trying ${candidates[index + 1]}.`);
     }
   }
-
   throw new Error(lastError?.message || "Recovery relay is unavailable.");
 }
 
 function parseRecoveryIntent(message) {
   const text = String(message || "").trim().toLowerCase().replace(/\s+/g, " ");
   if (!text) return null;
-  if (/\b(?:where is|where's|locate|find|send me)\b.{0,40}\b(?:my )?(?:mobile|phone)\b/.test(text) || /\bmobile location\b/.test(text) || /\bphone location\b/.test(text)) {
-    return { type: "location" };
-  }
-  if (/\b(?:take|capture)\b.{0,40}\bfront(?:-camera| camera)?\b.{0,40}\b(?:recovery )?photo\b/.test(text)) {
-    return { type: "camera", camera: "front" };
-  }
-  if (/\b(?:take|capture)\b.{0,40}\brear(?:-camera| camera)?\b.{0,40}\b(?:recovery )?photo\b/.test(text)) {
-    return { type: "camera", camera: "rear" };
-  }
-  if (/\b(?:latest|last)\b.{0,30}\brecovery photo\b/.test(text) || /\bsend me\b.{0,30}\brecovery photo\b/.test(text)) {
-    return { type: "photo" };
-  }
-  if (/\b(?:battery|battery level)\b/.test(text) && /\b(?:phone|mobile|lost)\b/.test(text)) {
-    return { type: "status", focus: "battery" };
-  }
-  if (/\b(?:is|whether)\b.{0,25}\b(?:my )?(?:phone|mobile)\b.{0,25}\bonline\b/.test(text) || /\bphone online\b/.test(text)) {
-    return { type: "status", focus: "online" };
-  }
-  if (/\bring\b.{0,25}\b(?:my )?(?:phone|mobile)\b/.test(text)) {
-    return { type: "ring" };
-  }
-  if (/\benable\b.{0,30}\blost device mode\b/.test(text)) {
-    return { type: "mode", enabled: true };
-  }
-  if (/\bdisable\b.{0,30}\blost device mode\b/.test(text)) {
-    return { type: "mode", enabled: false };
-  }
-  if (/\b(?:lost phone|device recovery|recovery status|refresh recovery)\b/.test(text)) {
-    return { type: "status" };
-  }
+  if (/\b(?:where is|where's|locate|find|send me)\b.{0,40}\b(?:my )?(?:mobile|phone)\b/.test(text) || /\b(?:mobile|phone) location\b/.test(text)) return { type: "location" };
+  if (/\b(?:take|capture)\b.{0,40}\bfront(?:-camera| camera)?\b.{0,40}\b(?:recovery )?photo\b/.test(text)) return { type: "camera", camera: "front" };
+  if (/\b(?:take|capture)\b.{0,40}\brear(?:-camera| camera)?\b.{0,40}\b(?:recovery )?photo\b/.test(text)) return { type: "camera", camera: "rear" };
+  if (/\b(?:latest|last|send me)\b.{0,30}\brecovery photo\b/.test(text)) return { type: "photo" };
+  if (/\b(?:battery|battery level)\b/.test(text) && /\b(?:phone|mobile|lost)\b/.test(text)) return { type: "status", focus: "battery" };
+  if (/\b(?:is|whether)\b.{0,25}\b(?:my )?(?:phone|mobile)\b.{0,25}\bonline\b/.test(text) || /\bphone online\b/.test(text)) return { type: "status", focus: "online" };
+  if (/\bring\b.{0,25}\b(?:my )?(?:phone|mobile)\b/.test(text)) return { type: "ring" };
+  if (/\benable\b.{0,30}\blost device mode\b/.test(text)) return { type: "mode", enabled: true };
+  if (/\bdisable\b.{0,30}\blost device mode\b/.test(text)) return { type: "mode", enabled: false };
+  if (/\b(?:lost phone|device recovery|recovery status|refresh recovery)\b/.test(text)) return { type: "status" };
   return null;
 }
 
+function accessibilityGuidance(status = {}) {
+  if (status.accessibilityHealth === "MANUAL_REENABLE_REQUIRED") {
+    return " Jazz Accessibility Service is disabled; Android does not allow apps to silently re-enable Accessibility, so re-enable Jazz Accessibility Service in Android Accessibility settings when you regain access to the phone.";
+  }
+  if (status.accessibilityHealth === "ENABLED_BUT_NOT_CONNECTED") {
+    return " Jazz Accessibility Service is enabled but not currently connected; Android should reconnect it automatically. If it does not, open Accessibility settings and toggle Jazz off/on.";
+  }
+  return "";
+}
+
 function statusAssistant(data, focus) {
-  const online = data.online ? "online" : "offline";
   const status = data.status || {};
   if (focus === "battery") {
-    if (typeof status.battery === "number" && status.battery >= 0) {
-      return `Your phone battery is ${status.battery}%${status.charging ? " and charging" : ""}.`;
-    }
-    return "I don't have a recent battery reading from your phone yet.";
+    return typeof status.battery === "number" && status.battery >= 0
+      ? `Your phone battery is ${status.battery}%${status.charging ? " and charging" : ""}.`
+      : "I don't have a recent battery reading from your phone yet.";
   }
   if (focus === "online") {
     return data.online
       ? `Your phone is online on ${status.network || "the network"}. Last contact: ${data.lastSeen || "just now"}.`
-      : `Your phone is currently offline. Last seen: ${data.lastSeen || "unknown"}.`;
+      : `Your phone is offline or has no reachable internet. Last seen: ${data.lastSeen || "unknown"}.${accessibilityGuidance(status)}`;
   }
-  return `${data.deviceName || "Mama Android"} is ${online}. Battery: ${typeof status.battery === "number" ? `${status.battery}%` : "unknown"}. Network: ${status.network || "unknown"}. Recovery: ${data.mode || "NORMAL_MODE"}. Last seen: ${data.lastSeen || "unknown"}.`;
+  return `${data.deviceName || "Mama Android"} is ${data.online ? "online" : "offline"}. Battery: ${typeof status.battery === "number" ? `${status.battery}%` : "unknown"}. Network: ${status.network || "unknown"}. Recovery: ${data.mode || "NORMAL_MODE"}. Last seen: ${data.lastSeen || "unknown"}.${accessibilityGuidance(status)}`;
+}
+
+function unreachableMessage(status) {
+  const snapshot = status?.status || {};
+  if (!status?.lastSeen) return "The Android Companion has not reached the recovery relay yet. Check the phone's recovery server URL and internet permission/setup.";
+  if (snapshot.network === "OFFLINE" || snapshot.online === false) return `The phone is currently unreachable because it has no validated internet connection. Last seen: ${status.lastSeen}. Jazz will retry automatically when Wi-Fi or mobile data returns.`;
+  return `The phone is not responding to recovery commands right now. Last seen: ${status.lastSeen}. Android may be in Doze, background-restricted, powered off, or temporarily without internet. Jazz recovery will keep retrying safely.`;
+}
+
+async function currentStatus() {
+  return relay("/android/device/status");
+}
+
+async function ensureReachable() {
+  const status = await currentStatus();
+  return { status, reachable: status.online === true };
 }
 
 function locationPayload(data) {
   const result = data.result?.ok ? data.result : data.lastKnownLocation?.ok ? data.lastKnownLocation : data.lastKnownLocation || null;
-  if (!result?.latitude && result?.latitude !== 0) return null;
+  if (!result || (result.latitude === undefined && result.latitude !== 0)) return null;
   return {
     latitude: result.latitude,
     longitude: result.longitude,
@@ -192,62 +175,63 @@ function photoMarker(photo) {
 
 async function executeIntent(intent) {
   if (intent.type === "status") {
-    const data = await relay("/android/device/status");
+    const data = await currentStatus();
     return { assistant: statusAssistant(data, intent.focus), recovery: { type: "status", data } };
   }
+
+  if (intent.type === "photo") {
+    const photo = await relay("/android/device/recovery-photo");
+    return photo.ok
+      ? { assistant: `Here is the latest recovery photo. [[JAZZ_RECOVERY_PHOTO]]${JSON.stringify(photoMarker(photo))}`, recovery: { type: "photo", data: photoMarker(photo) } }
+      : { assistant: "There is no recovery photo available yet.", recovery: { type: "photo", data: photoMarker(photo) } };
+  }
+
+  const health = await ensureReachable();
+  if (!health.reachable) {
+    if (intent.type === "location" && health.status.lastKnownLocation) {
+      const location = locationPayload({ lastKnownLocation: health.status.lastKnownLocation, completed: false });
+      if (location) {
+        return {
+          assistant: `${unreachableMessage(health.status)} Showing the last known location. [[JAZZ_RECOVERY_LOCATION]]${JSON.stringify(location)}`,
+          recovery: { type: "location", data: location }
+        };
+      }
+    }
+    return { assistant: unreachableMessage(health.status), recovery: { type: intent.type, data: health.status } };
+  }
+
   if (intent.type === "location") {
     const data = await relay("/android/device/location");
     const location = locationPayload(data);
-    if (!location) {
-      return { assistant: data.message || "The phone has not returned a location yet. The request is queued for the paired Companion.", recovery: { type: "location", data } };
-    }
+    if (!location) return { assistant: unreachableMessage(await currentStatus()), recovery: { type: "location", data } };
     const freshness = location.status === "LIVE_LOCATION" ? "Location acquired" : "Last known location";
     return {
       assistant: `${freshness} with ±${Math.round(Number(location.accuracyMeters || 0))} m accuracy. [[JAZZ_RECOVERY_LOCATION]]${JSON.stringify(location)}`,
       recovery: { type: "location", data: location }
     };
   }
+
   if (intent.type === "ring") {
     const data = await relay("/android/device/ring", "POST", {});
-    const result = data.result || {};
-    return {
-      assistant: data.completed
-        ? (result.message || "Your registered phone is ringing.")
-        : (data.message || "Ring command queued for your registered phone."),
-      recovery: { type: "ring", data }
-    };
+    if (!data.completed) return { assistant: unreachableMessage(await currentStatus()), recovery: { type: "ring", data } };
+    return { assistant: data.result?.message || "Your registered phone is ringing.", recovery: { type: "ring", data } };
   }
+
   if (intent.type === "mode") {
     const data = await relay("/android/device/recovery-mode", "POST", { enabled: intent.enabled });
-    return {
-      assistant: data.completed
-        ? (data.result?.message || `Lost Device Mode ${intent.enabled ? "enabled" : "disabled"}.`)
-        : (data.message || `Lost Device Mode ${intent.enabled ? "enable" : "disable"} command queued.`),
-      recovery: { type: "mode", data }
-    };
+    if (!data.completed) return { assistant: unreachableMessage(await currentStatus()), recovery: { type: "mode", data } };
+    return { assistant: data.result?.message || `Lost Device Mode ${intent.enabled ? "enabled" : "disabled"}.`, recovery: { type: "mode", data } };
   }
+
   if (intent.type === "camera") {
     const data = await relay("/android/device/camera", "POST", { camera: intent.camera });
-    if (data.completed && data.result?.ok === false) {
-      return {
-        assistant: data.result.message || data.result.error || "Android currently prevents recovery camera access in this device state.",
-        recovery: { type: "camera", data }
-      };
+    if (!data.completed) return { assistant: unreachableMessage(await currentStatus()), recovery: { type: "camera", data } };
+    if (data.result?.ok === false) {
+      return { assistant: data.result.message || data.result.error || "Android blocked recovery camera access in the current device state.", recovery: { type: "camera", data } };
     }
-    if (data.completed && data.result?.ok) {
-      const photo = await relay("/android/device/recovery-photo");
-      return {
-        assistant: `Recovery photo captured from your registered phone. [[JAZZ_RECOVERY_PHOTO]]${JSON.stringify(photoMarker(photo))}`,
-        recovery: { type: "photo", data: photoMarker(photo) }
-      };
-    }
-    return { assistant: data.message || "Recovery camera command queued for your registered phone.", recovery: { type: "camera", data } };
-  }
-  if (intent.type === "photo") {
     const photo = await relay("/android/device/recovery-photo");
-    if (!photo.ok) return { assistant: "There is no recovery photo available yet.", recovery: { type: "photo", data: photoMarker(photo) } };
     return {
-      assistant: `Here is the latest recovery photo. [[JAZZ_RECOVERY_PHOTO]]${JSON.stringify(photoMarker(photo))}`,
+      assistant: `Recovery photo captured from your registered phone. [[JAZZ_RECOVERY_PHOTO]]${JSON.stringify(photoMarker(photo))}`,
       recovery: { type: "photo", data: photoMarker(photo) }
     };
   }
@@ -278,23 +262,15 @@ const server = http.createServer(async (req, res) => {
       const result = await executeIntent(intent);
       return sendJson(req, res, 200, { ok: true, recognized: true, intent, ...result });
     }
-
-    if (req.method === "GET" && path === "/api/recovery/status") {
-      const data = await relay("/android/device/status");
-      return sendJson(req, res, 200, { ok: true, data });
-    }
-    if (req.method === "POST" && path === "/api/recovery/refresh") {
-      const data = await relay("/android/device/refresh", "POST", {});
-      return sendJson(req, res, 200, { ok: true, data });
-    }
+    if (req.method === "GET" && path === "/api/recovery/status") return sendJson(req, res, 200, { ok: true, data: await currentStatus() });
+    if (req.method === "POST" && path === "/api/recovery/refresh") return sendJson(req, res, 200, { ok: true, data: await relay("/android/device/refresh", "POST", {}) });
     if (req.method === "GET" && path === "/api/recovery/location") {
+      const health = await ensureReachable();
+      if (!health.reachable) return sendJson(req, res, 200, { ok: true, reachable: false, diagnosis: unreachableMessage(health.status), data: health.status, location: locationPayload({ lastKnownLocation: health.status.lastKnownLocation }) });
       const data = await relay("/android/device/location");
-      return sendJson(req, res, 200, { ok: true, data, location: locationPayload(data) });
+      return sendJson(req, res, 200, { ok: true, reachable: true, data, location: locationPayload(data) });
     }
-    if (req.method === "POST" && path === "/api/recovery/ring") {
-      const data = await relay("/android/device/ring", "POST", {});
-      return sendJson(req, res, 200, { ok: true, data });
-    }
+    if (req.method === "POST" && path === "/api/recovery/ring") return sendJson(req, res, 200, { ok: true, data: await relay("/android/device/ring", "POST", {}) });
     if (req.method === "POST" && path === "/api/recovery/camera") {
       const input = await parseJson(req);
       const data = await relay("/android/device/camera", "POST", { camera: input.camera === "rear" ? "rear" : "front" });
@@ -302,16 +278,11 @@ const server = http.createServer(async (req, res) => {
       if (data.completed && data.result?.ok) photo = await relay("/android/device/recovery-photo");
       return sendJson(req, res, 200, { ok: true, data, photo: photo ? photoMarker(photo) : null });
     }
-    if (req.method === "GET" && path === "/api/recovery/photo") {
-      const data = await relay("/android/device/recovery-photo");
-      return sendJson(req, res, 200, { ok: true, data });
-    }
+    if (req.method === "GET" && path === "/api/recovery/photo") return sendJson(req, res, 200, { ok: true, data: await relay("/android/device/recovery-photo") });
     if (req.method === "POST" && path === "/api/recovery/mode") {
       const input = await parseJson(req);
-      const data = await relay("/android/device/recovery-mode", "POST", { enabled: input.enabled !== false });
-      return sendJson(req, res, 200, { ok: true, data });
+      return sendJson(req, res, 200, { ok: true, data: await relay("/android/device/recovery-mode", "POST", { enabled: input.enabled !== false }) });
     }
-
     return sendJson(req, res, 404, { ok: false, error: "Not found" });
   } catch (error) {
     return sendJson(req, res, 503, { ok: false, error: error instanceof Error ? error.message : String(error) });
@@ -320,6 +291,5 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(port, "127.0.0.1", () => {
   console.log(`[Jazz Recovery Local] listening on 127.0.0.1:${port}`);
-  console.log(`[Jazz Recovery Local] hosted relay=${relayUrl || "NOT CONFIGURED"}`);
-  console.log(`[Jazz Recovery Local] localhost fallback=${localRelayUrl || "DISABLED"}`);
+  console.log(`[Jazz Recovery Local] relay=${relayUrl || "NOT CONFIGURED"}, localhost fallback=${localRelayUrl || "DISABLED"}`);
 });
