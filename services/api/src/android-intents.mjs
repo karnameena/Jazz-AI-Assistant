@@ -1,6 +1,7 @@
 import { getDevice, sendAndroidCommand, sendAndroidScript } from "./device-bridge.mjs";
+import { normalizeUtterance } from "./utterance-normalizer.mjs";
 
-export const ANDROID_INTENTS_VERSION = "generic-companion-v19";
+export const ANDROID_INTENTS_VERSION = "generic-companion-v20-understanding";
 
 function deviceFor(text) {
   return /\btablet\b/i.test(text) ? "android-tablet" : "android-phone";
@@ -32,9 +33,13 @@ function isScreenshotCommand(text) {
   return /\b(?:take\s+(?:a\s+)?screenshot|screenshot\s+(?:my\s+)?phone)\b/i.test(text);
 }
 
+function isMobileStatusCommand(text) {
+  return /^(?:what\s+is|what's|check|show)\s+(?:my\s+)?mobile\s+status[?.! ]*$/i.test(text);
+}
+
 function youtubePlayQuery(text) {
   if (!/\byoutube\b/i.test(text) || !/\bplay\b/i.test(text)) return null;
-  const match = text.match(/\bplay\s+(.+?)(?:\s+(?:on|in)\s+youtube)?(?:\s+jazz)?[.!?]*$/i);
+  const match = text.match(/(?:^|\band\s+)play\s+(.+?)(?:\s+(?:on|in)\s+youtube)?(?:\s+jazz)?[.!?]*$/i);
   if (!match) return null;
   return match[1]
     .replace(/^[\s'"‘’“”`]+|[\s'"‘’“”`.,!?;:]+$/g, "")
@@ -60,7 +65,20 @@ function looksLikeAndroidCommand(text) {
 }
 
 export async function handleAndroidIntent(message) {
-  const text = stripWakePhrase(message);
+  // This is the existing Android command router. The only new step is conservative
+  // interpretation before matching; execution still goes through the same bridge,
+  // script registry, companion permissions and AccessibilityService controls.
+  const understanding = normalizeUtterance(message, { source: "typed" });
+  if (understanding.requiresClarification) {
+    return {
+      assistant: understanding.suggestion || "I’m not confident enough to execute that Android command. Please rephrase it.",
+      executed: false,
+      tool: "android.understanding",
+      intentVersion: ANDROID_INTENTS_VERSION
+    };
+  }
+
+  const text = stripWakePhrase(understanding.normalized);
   if (!text) return null;
 
   const deviceId = deviceFor(text);
@@ -102,6 +120,23 @@ export async function handleAndroidIntent(message) {
         scriptName: "screenshot",
         intentVersion: ANDROID_INTENTS_VERSION,
         result
+      };
+    }
+
+    if (isMobileStatusCommand(text)) {
+      const [info, screen] = await Promise.all([
+        sendAndroidCommand(deviceId, "device_info", {}),
+        sendAndroidCommand(deviceId, "screen_state", {})
+      ]);
+      const interactive = screen?.interactive === true ? "screen on" : "screen off";
+      const locked = screen?.locked === true ? "locked" : "unlocked";
+      const model = info?.model || device.name;
+      return {
+        assistant: `${model} is connected; ${interactive}, ${locked}.`,
+        executed: true,
+        tool: "android.status",
+        intentVersion: ANDROID_INTENTS_VERSION,
+        result: { info, screen }
       };
     }
 
