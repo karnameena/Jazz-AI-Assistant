@@ -1,0 +1,24 @@
+/* Keep the primary chat workspace anchored while the taller right dashboard scrolls.
+   This prevents the large empty center area that appeared when the dashboard was
+   scrolled past the end of the chat column. Chat messages continue to scroll inside
+   .chat-messages as before. */
+.dashboard-scroll{
+  overscroll-behavior:contain;
+  scroll-behavior:smooth;
+}
+.dashboard-grid{
+  align-items:start;
+}
+.center-column{
+  position:sticky;
+  top:0;
+  align-self:start;
+  z-index:2;
+}
+.chat-panel{
+  max-height:calc(100vh - 188px);
+}
+@media(max-width:950px){
+  .center-column{position:static}
+  .chat-panel{max-height:none}
+}
