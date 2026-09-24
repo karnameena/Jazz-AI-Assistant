@@ -4,8 +4,9 @@ import { findScriptForMessage, getScript, listScripts } from "./script-registry.
 import { handleAndroidIntent } from "./android-intents.mjs";
 import { callOllama, ensureOllamaReady, getOllamaStatus, streamOllama } from "./ollama.mjs";
 import { getTtsStatus, streamPiperRaw, synthesizeWithPiper } from "./tts.mjs";
+import { debugUnderstanding, normalizeUtterance } from "./utterance-normalizer.mjs";
 
-const VERSION = "0.10.0-local";
+const VERSION = "0.10.1-local";
 const port = Number(process.env.PORT || 8787);
 const memories = [];
 const reminders = [];
@@ -88,6 +89,26 @@ function normalizeLocalText(value) {
     .replace(/^[*_`~\s]+/, "")
     .replace(/[*_`~\s]+$/, "")
     .trim();
+}
+
+function interpretIncomingMessage(message, source = "typed") {
+  const understanding = normalizeUtterance(message, { source: source === "voice" ? "voice" : "typed" });
+  debugUnderstanding(understanding);
+  return {
+    understanding,
+    message: understanding.requiresClarification
+      ? understanding.raw
+      : (understanding.normalized || understanding.raw)
+  };
+}
+
+function clarificationReply(understanding) {
+  if (!understanding?.requiresClarification) return null;
+  return {
+    assistant: understanding.suggestion || "I’m not confident enough to execute that command. Please rephrase it.",
+    mode: "clarification",
+    executed: false
+  };
 }
 
 function extractResponsesText(data) {
@@ -326,7 +347,7 @@ function brainUnavailableReply(error) {
   };
 }
 
-async function assistantReply(message) {
+async function assistantReplyPrepared(message) {
   const local = await localAssistantReply(message);
   if (local) return local;
   try {
@@ -339,8 +360,26 @@ async function assistantReply(message) {
   return brainUnavailableReply("No brain provider returned text.");
 }
 
-async function streamAssistantReply(message, res) {
-  const local = await localAssistantReply(message);
+async function assistantReply(message, source = "typed") {
+  const interpreted = interpretIncomingMessage(message, source);
+  const clarification = clarificationReply(interpreted.understanding);
+  if (clarification) return clarification;
+  return assistantReplyPrepared(interpreted.message);
+}
+
+async function streamAssistantReply(message, res, source = "typed") {
+  const interpreted = interpretIncomingMessage(message, source);
+  const clarification = clarificationReply(interpreted.understanding);
+  if (clarification) {
+    sendSse(res, "meta", { mode: "clarification", version: VERSION });
+    sendSse(res, "text", { text: clarification.assistant });
+    sendSse(res, "done", clarification);
+    res.end();
+    return;
+  }
+
+  const preparedMessage = interpreted.message;
+  const local = await localAssistantReply(preparedMessage);
   if (local) {
     sendSse(res, "meta", { mode: local.mode || "local-assistant", version: VERSION });
     sendSse(res, "text", { text: local.assistant });
@@ -361,7 +400,7 @@ async function streamAssistantReply(message, res) {
   try {
     if (provider === "ollama") {
       sendSse(res, "meta", { mode: "ollama", streaming: true, version: VERSION });
-      const model = await streamOllama(String(message).trim(), prompt, emit);
+      const model = await streamOllama(String(preparedMessage).trim(), prompt, emit);
       sendSse(res, "done", { assistant: fullText.trim(), mode: "ollama", model });
       res.end();
       return;
@@ -370,7 +409,7 @@ async function streamAssistantReply(message, res) {
     if (provider === "gemini") {
       try {
         sendSse(res, "meta", { mode: "gemini", streaming: true, version: VERSION });
-        const model = await streamGemini(String(message).trim(), prompt, emit);
+        const model = await streamGemini(String(preparedMessage).trim(), prompt, emit);
         sendSse(res, "done", { assistant: fullText.trim(), mode: "gemini", model });
         res.end();
         return;
@@ -379,14 +418,14 @@ async function streamAssistantReply(message, res) {
         console.warn(`[Jazz] Gemini stream failed; using Ollama — ${error instanceof Error ? error.message : String(error)}`);
         fullText = "";
         sendSse(res, "meta", { mode: "ollama-fallback", streaming: true, version: VERSION });
-        const model = await streamOllama(String(message).trim(), prompt, emit);
+        const model = await streamOllama(String(preparedMessage).trim(), prompt, emit);
         sendSse(res, "done", { assistant: fullText.trim(), mode: "ollama-fallback", model });
         res.end();
         return;
       }
     }
 
-    const result = await assistantReply(message);
+    const result = await assistantReplyPrepared(preparedMessage);
     sendSse(res, "meta", { mode: result.mode || "llm", model: result.model || null, version: VERSION });
     sendSse(res, "text", { text: result.assistant });
     sendSse(res, "done", result);
@@ -498,14 +537,16 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && req.url === "/api/chat/stream") {
       const input = await parseJson(req);
       const message = typeof input.message === "string" ? input.message : "";
+      const source = input.source === "voice" ? "voice" : "typed";
       sendSseHeaders(res);
-      await streamAssistantReply(message, res);
+      await streamAssistantReply(message, res, source);
       return;
     }
 
     if (req.method === "POST" && req.url === "/api/chat") {
       const input = await parseJson(req);
-      const result = await assistantReply(typeof input.message === "string" ? input.message : "");
+      const source = input.source === "voice" ? "voice" : "typed";
+      const result = await assistantReply(typeof input.message === "string" ? input.message : "", source);
       return sendJson(res, 200, { ok: true, version: VERSION, ...result });
     }
 
