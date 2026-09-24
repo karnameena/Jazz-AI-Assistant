@@ -28,6 +28,11 @@ interface DeviceItem {
 type DayMode = "morning" | "afternoon" | "evening" | "night";
 type QuickCommand = { label: string; icon: React.ReactNode; run: () => void | Promise<void>; };
 
+const CHAT_STORAGE_KEY = "jazz-chat-history-v1";
+const DRAFT_STORAGE_KEY = "jazz-chat-draft-v1";
+const MODE_STORAGE_KEY = "jazz-active-mode-v1";
+const NAV_STORAGE_KEY = "jazz-active-nav-v1";
+
 function getDayMode(hour = new Date().getHours()): DayMode {
   if (hour >= 5 && hour < 12) return "morning";
   if (hour >= 12 && hour < 17) return "afternoon";
@@ -41,6 +46,22 @@ function greetingFor(mode: DayMode) {
   return { title: "Good Night, Mama 👋", subtitle: "Jazz is online and ready to assist you." };
 }
 function nowTime() { return new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }); }
+function readStoredMessages(): Message[] {
+  try {
+    const raw = localStorage.getItem(CHAT_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(item => item && (item.sender === "user" || item.sender === "jazz") && typeof item.text === "string" && typeof item.time === "string")
+      .slice(-250)
+      .map((item, index) => ({ id: Number(item.id) || Date.now() + index, sender: item.sender, text: item.text, time: item.time }));
+  } catch { return []; }
+}
+function readStoredString(key: string, fallback: string) {
+  try { return localStorage.getItem(key) || fallback; } catch { return fallback; }
+}
+function writeStoredString(key: string, value: string) {
+  try { localStorage.setItem(key, value); } catch { /* Browser storage may be unavailable or full. */ }
+}
 async function apiJson(path: string, options?: RequestInit) {
   const response = await fetch(path, options);
   const data = await response.json();
@@ -81,16 +102,19 @@ async function streamChat(message: string, onText: (chunk: string) => void, sour
 }
 
 function App() {
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<Message[]>(() => {
+    const stored = readStoredMessages();
+    return stored.length ? stored : [{ id: Date.now(), sender: "jazz", text: "Hey Mama 👋 Jazz is online and ready.", time: nowTime() }];
+  });
   const [reminders, setReminders] = useState<ReminderItem[]>([]);
   const [devices, setDevices] = useState<DeviceItem[]>([]);
-  const [input, setInput] = useState("");
-  const [activeMode, setActiveMode] = useState("AI Chat");
-  const [activeNav, setActiveNav] = useState("Chat");
+  const [input, setInput] = useState(() => readStoredString(DRAFT_STORAGE_KEY, ""));
+  const [activeMode, setActiveMode] = useState(() => readStoredString(MODE_STORAGE_KEY, "AI Chat"));
+  const [activeNav, setActiveNav] = useState(() => readStoredString(NAV_STORAGE_KEY, "Chat"));
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [voiceState, setVoiceState] = useState<"idle" | "listening" | "speaking" | "unsupported">("idle");
   const [voiceTranscript, setVoiceTranscript] = useState("");
-  const [profileImage, setProfileImage] = useState<string>(() => localStorage.getItem("jazz-profile-image") || "");
+  const [profileImage, setProfileImage] = useState<string>(() => readStoredString("jazz-profile-image", ""));
   const [dayMode, setDayMode] = useState<DayMode>(() => getDayMode());
   const [searchOpen, setSearchOpen] = useState(false);
   const [telegramOpen, setTelegramOpen] = useState(false);
@@ -101,6 +125,8 @@ function App() {
   const speechQueueRef = useRef(Promise.resolve());
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const profileInputRef = useRef<HTMLInputElement | null>(null);
+  const sendInFlightRef = useRef(false);
+  const lastSubmissionRef = useRef<{ value: string; at: number } | null>(null);
   const greeting = greetingFor(dayMode);
 
   useEffect(() => {
@@ -130,7 +156,6 @@ function App() {
       onError: message => addJazzMessage(message)
     });
     voiceRef.current = voice;
-    setMessages([{ id: Date.now(), sender: "jazz", text: "Hey Mama 👋 Jazz is online and ready.", time: nowTime() }]);
     return () => {
       window.clearInterval(timer);
       window.clearInterval(deviceTimer);
@@ -141,6 +166,15 @@ function App() {
   }, []);
 
   useEffect(() => { messagesRef.current?.scrollTo({ top: messagesRef.current.scrollHeight, behavior: "smooth" }); }, [messages]);
+  useEffect(() => {
+    try {
+      const stable = messages.filter(item => item.text.trim()).slice(-250);
+      localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(stable));
+    } catch { /* Keep chat usable even if browser storage is full. */ }
+  }, [messages]);
+  useEffect(() => { writeStoredString(DRAFT_STORAGE_KEY, input); }, [input]);
+  useEffect(() => { writeStoredString(MODE_STORAGE_KEY, activeMode); }, [activeMode]);
+  useEffect(() => { writeStoredString(NAV_STORAGE_KEY, activeNav); }, [activeNav]);
   useEffect(() => { if (!toast) return; const t = window.setTimeout(() => setToast(""), 2400); return () => window.clearTimeout(t); }, [toast]);
 
   const addJazzMessage = (text: string) => setMessages(current => [...current, { id: Date.now() + Math.random(), sender: "jazz", text, time: nowTime() }]);
@@ -153,7 +187,11 @@ function App() {
 
   const sendMessage = async (valueOverride?: string, voice?: JazzVoice) => {
     const value = (valueOverride ?? input).trim();
-    if (!value) return;
+    if (!value || sendInFlightRef.current) return;
+    const now = Date.now();
+    if (lastSubmissionRef.current?.value === value && now - lastSubmissionRef.current.at < 1800) return;
+    lastSubmissionRef.current = { value, at: now };
+    sendInFlightRef.current = true;
     voice?.stop();
     setMessages(current => [...current, { id: Date.now(), sender: "user", text: value, time: nowTime() }]);
     setInput(""); setVoiceTranscript("");
@@ -161,6 +199,7 @@ function App() {
     setMessages(current => [...current, { id: replyId, sender: "jazz", text: "", time: nowTime() }]);
     let spokenBuffer = "";
     let spokenChars = 0;
+    let receivedStreamText = false;
     const flushSpeech = (force = false) => {
       const available = spokenBuffer.slice(spokenChars);
       if (!available) return;
@@ -173,30 +212,38 @@ function App() {
         spokenChars = spokenBuffer.length;
         queueSpeech(available.trim());
       } else if (available.length > 82) {
-        // Start speaking much earlier instead of waiting for a ~180 character block.
-        // Cutting on a word boundary keeps the voice natural while lowering perceived latency.
         const cut = available.lastIndexOf(" ", 72);
         if (cut > 28) { spokenChars += cut + 1; queueSpeech(available.slice(0, cut).trim()); }
       }
     };
     try {
       await streamChat(value, chunk => {
+        receivedStreamText = true;
         spokenBuffer += chunk;
         setMessages(current => current.map(item => item.id === replyId ? { ...item, text: item.text + chunk } : item));
         flushSpeech(false);
       }, voice ? "voice" : "typed");
       flushSpeech(true);
     } catch {
-      try {
-        const data = await apiJson("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: value, source: voice ? "voice" : "typed" }) });
-        const reply = data.assistant || "Jazz is ready.";
-        setMessages(current => current.map(item => item.id === replyId ? { ...item, text: reply } : item));
-        queueSpeech(reply);
-      } catch {
-        const reply = "Jazz could not reach the API. Start the API on port 8797 and try again.";
-        setMessages(current => current.map(item => item.id === replyId ? { ...item, text: reply } : item));
-        queueSpeech(reply);
+      // Never replay an action after the streaming endpoint already returned text.
+      // A lost connection after a script executed must not trigger a second payment,
+      // unlock, or other side-effecting command through the JSON fallback endpoint.
+      if (receivedStreamText) {
+        flushSpeech(true);
+      } else {
+        try {
+          const data = await apiJson("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: value, source: voice ? "voice" : "typed" }) });
+          const reply = data.assistant || "Jazz is ready.";
+          setMessages(current => current.map(item => item.id === replyId ? { ...item, text: reply } : item));
+          queueSpeech(reply);
+        } catch {
+          const reply = "Jazz could not reach the local API. Check Jazz Status and try again.";
+          setMessages(current => current.map(item => item.id === replyId ? { ...item, text: reply } : item));
+          queueSpeech(reply);
+        }
       }
+    } finally {
+      sendInFlightRef.current = false;
     }
   };
 
@@ -260,7 +307,7 @@ function App() {
   ];
   const onProfileSelected = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]; if (!file || !file.type.startsWith("image/")) return;
-    const reader = new FileReader(); reader.onload = () => { const result = typeof reader.result === "string" ? reader.result : ""; if (result) { setProfileImage(result); localStorage.setItem("jazz-profile-image", result); } }; reader.readAsDataURL(file);
+    const reader = new FileReader(); reader.onload = () => { const result = typeof reader.result === "string" ? reader.result : ""; if (result) { setProfileImage(result); writeStoredString("jazz-profile-image", result); } }; reader.readAsDataURL(file);
   };
   const visibleDevices = showAllDevices ? devices : devices.slice(0, 3);
 
