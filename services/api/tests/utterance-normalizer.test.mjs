@@ -9,7 +9,8 @@ const cases = [
   ["open whatsap", "open WhatsApp", "OPEN_APP"],
   ["serch guna", "search guna", "SEARCH_UI"],
   ["opn swigy", "open Swiggy", "OPEN_APP"],
-  ["hey jazz what is my mobile status", "hey jazz what is my mobile status", "MOBILE_STATUS"]
+  ["hey jazz what is my mobile status", "hey jazz what is my mobile status", "MOBILE_STATUS"],
+  ["Hey Jazz, pay ₹1 to Mom. She asked me to buy Clinic Plus.", "hey jazz pay ₹1 to Mom. She asked me to buy Clinic Plus.", "PAY_MOM"]
 ];
 
 for (const [raw, expected, intent] of cases) {
