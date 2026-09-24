@@ -75,6 +75,20 @@ class AccessibilityActions(private val service: AccessibilityService) {
         return service.dispatchGesture(gesture, null, null)
     }
 
+    fun doubleTapCenter(): Boolean {
+        val metrics: DisplayMetrics = service.resources.displayMetrics
+        val x = metrics.widthPixels * 0.5f
+        // Aim slightly above the vertical center so Instagram's caption/nav areas are avoided.
+        val y = metrics.heightPixels * 0.43f
+        val firstTap = Path().apply { moveTo(x, y) }
+        val secondTap = Path().apply { moveTo(x, y) }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(firstTap, 0, 70))
+            .addStroke(GestureDescription.StrokeDescription(secondTap, 150, 70))
+            .build()
+        return service.dispatchGesture(gesture, null, null)
+    }
+
     fun pressBack(): Boolean = service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
     fun pressHome(): Boolean = service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME)
     fun openRecents(): Boolean = service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_RECENTS)
