@@ -83,7 +83,10 @@ async function bridgePost(path, payload) {
     });
   } catch {
     setBridgeOffline();
-    throw new Error(`Windows ADB bridge is unavailable at ${windowsBridgeUrl}. Start the bridge and try again.`);
+    // Do not automatically replay POST actions here. Some commands (especially
+    // payment workflows) are not safe to execute twice if the response was lost
+    // after Windows already started the script. Reconnect is handled separately.
+    throw new Error("Mobile connection is temporarily unavailable. Jazz could not confirm the Android action, so it was not retried automatically.");
   }
 
   const text = await response.text();
@@ -92,7 +95,7 @@ async function bridgePost(path, payload) {
   catch { data = { message: text }; }
 
   if (!response.ok) {
-    throw new Error(data?.error || data?.message || "Windows ADB bridge request failed");
+    throw new Error(data?.error || data?.message || "Windows Android bridge request failed");
   }
 
   const device = getDevice(payload?.deviceId);
