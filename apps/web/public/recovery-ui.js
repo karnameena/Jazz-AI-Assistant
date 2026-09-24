@@ -38,6 +38,33 @@
     return box;
   }
 
+  function actionButton(label, command) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = label;
+    button.addEventListener("click", () => {
+      if (sendThroughJazz(command)) closePanel();
+    });
+    return button;
+  }
+
+  function renderActions(panel, data = null) {
+    const actions = panel?.querySelector(".jazz-recovery-actions");
+    if (!actions) return;
+    actions.textContent = "";
+    const lostModeOn = data?.mode === "LOST_DEVICE_MODE";
+    actions.append(
+      actionButton("📍 Get Location", "Hey Jazz, where is my phone?"),
+      actionButton("🔔 Ring Phone", "Hey Jazz, ring my phone"),
+      actionButton("📷 Front Camera", "Hey Jazz, take a front-camera recovery photo"),
+      actionButton("📷 Rear Camera", "Hey Jazz, take a rear-camera recovery photo"),
+      actionButton("↻ Refresh Status", "Hey Jazz, recovery status"),
+      lostModeOn
+        ? actionButton("⏹ Disable Lost Mode", "Hey Jazz, disable lost device mode")
+        : actionButton("🛡 Enable Lost Mode", "Hey Jazz, enable lost device mode")
+    );
+  }
+
   async function loadPanelStatus(panel) {
     const statusBox = panel.querySelector(".jazz-recovery-status");
     if (!statusBox) return;
@@ -57,20 +84,15 @@
         metric("Network", status.network || "Unknown"),
         metric("Last Seen", safeDate(data.lastSeen))
       );
+      if (status.accessibilityHealth) {
+        grid.append(metric("Accessibility", status.accessibilityHealth === "READY" ? "READY" : status.accessibilityHealth));
+      }
       statusBox.appendChild(grid);
+      renderActions(panel, data);
     } catch (error) {
       statusBox.textContent = error instanceof Error ? error.message : "Recovery service unavailable";
+      renderActions(panel, null);
     }
-  }
-
-  function actionButton(label, command) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.textContent = label;
-    button.addEventListener("click", () => {
-      if (sendThroughJazz(command)) closePanel();
-    });
-    return button;
   }
 
   function openPanel() {
@@ -85,21 +107,14 @@
         </div>
         <div class="jazz-recovery-status">Checking secure recovery relay…</div>
         <div class="jazz-recovery-actions"></div>
-        <div class="jazz-recovery-note">Recovery uses the separate hosted relay and Android Companion outbound connection. Existing ADB, PowerShell scripts, Accessibility automation, voice, and Ollama flows stay independent.</div>
+        <div class="jazz-recovery-note">Recovery uses the existing secure relay and Android Companion outbound connection over any validated internet connection, including mobile data. Android may require manual permission or Accessibility re-enabling if the OS/OEM disables it.</div>
       </section>`;
     overlay.addEventListener("click", event => { if (event.target === overlay) closePanel(); });
     overlay.querySelector(".jazz-recovery-close")?.addEventListener("click", closePanel);
-    const actions = overlay.querySelector(".jazz-recovery-actions");
-    actions?.append(
-      actionButton("📍 Get Location", "Hey Jazz, where is my phone?"),
-      actionButton("🔔 Ring Phone", "Hey Jazz, ring my phone"),
-      actionButton("📷 Front Camera", "Hey Jazz, take a front-camera recovery photo"),
-      actionButton("📷 Rear Camera", "Hey Jazz, take a rear-camera recovery photo"),
-      actionButton("↻ Refresh Status", "Hey Jazz, recovery status"),
-      actionButton("⏹ Disable Lost Mode", "Hey Jazz, disable lost device mode")
-    );
     document.body.appendChild(overlay);
-    loadPanelStatus(overlay.querySelector(".jazz-recovery-panel"));
+    const panel = overlay.querySelector(".jazz-recovery-panel");
+    renderActions(panel, null);
+    loadPanelStatus(panel);
   }
 
   function closePanel() {
@@ -132,16 +147,35 @@
     card.className = "jazz-recovery-card";
     const map = document.createElement("div");
     map.className = "jazz-recovery-map-preview";
-    const pin = document.createElement("div"); pin.className = "jazz-recovery-pin"; map.appendChild(pin);
+
+    const latitude = Number(data.latitude);
+    const longitude = Number(data.longitude);
+    if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
+      const frame = document.createElement("iframe");
+      frame.title = "Phone location map";
+      frame.loading = "lazy";
+      frame.referrerPolicy = "no-referrer-when-downgrade";
+      frame.src = `https://maps.google.com/maps?q=${encodeURIComponent(`${latitude},${longitude}`)}&z=16&output=embed`;
+      Object.assign(frame.style, {
+        position: "relative",
+        zIndex: "4",
+        width: "100%",
+        height: "100%",
+        border: "0",
+        display: "block"
+      });
+      map.appendChild(frame);
+    }
+
     const body = document.createElement("div"); body.className = "jazz-recovery-card-body";
     const title = document.createElement("div"); title.className = "jazz-recovery-card-title";
     const titleText = document.createElement("span"); titleText.textContent = data.status === "LIVE_LOCATION" ? "Live phone location" : "Last known phone location";
     const pill = document.createElement("span"); pill.className = "jazz-recovery-pill"; pill.textContent = data.status || "LOCATION";
     title.append(titleText, pill);
     const sub = document.createElement("div"); sub.className = "jazz-recovery-card-sub";
-    sub.textContent = `${Number(data.latitude).toFixed(5)}, ${Number(data.longitude).toFixed(5)} • Accuracy ±${Math.round(Number(data.accuracyMeters || 0))} m • ${safeDate(data.timestamp)}`;
+    sub.textContent = `${latitude.toFixed(5)}, ${longitude.toFixed(5)} • Accuracy ±${Math.round(Number(data.accuracyMeters || 0))} m • ${safeDate(data.timestamp)}`;
     const link = document.createElement("a");
-    link.href = `https://www.google.com/maps?q=${encodeURIComponent(`${data.latitude},${data.longitude}`)}`;
+    link.href = `https://www.google.com/maps?q=${encodeURIComponent(`${latitude},${longitude}`)}`;
     link.target = "_blank"; link.rel = "noopener noreferrer"; link.textContent = "Open Location ↗";
     body.append(title, sub, link);
     card.append(map, body);
@@ -210,10 +244,6 @@
     enrichChat();
   }
 
-  // Avoid observing every React character mutation. Ollama streams many tokens per
-  // second, and the old document-wide MutationObserver repeatedly scanned the whole
-  // dashboard. A lightweight sub-second refresh keeps Recovery responsive without
-  // blocking the main thread.
   pollTimer = window.setInterval(lightweightRefresh, POLL_MS);
   window.addEventListener("visibilitychange", () => { if (!document.hidden) lightweightRefresh(); });
   window.addEventListener("beforeunload", () => window.clearInterval(pollTimer), { once: true });
