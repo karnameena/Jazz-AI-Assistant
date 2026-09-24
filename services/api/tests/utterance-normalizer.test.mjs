@@ -31,11 +31,15 @@ assert.equal(youtubePlay.normalized, "play vaathi coming in YouTube");
 
 // Arbitrary values are deliberately not blindly corrected.
 assert.equal(normalizeUtterance("type 'opn youtub'", { source: "typed" }).normalized, "type 'opn youtub'");
+assert.equal(normalizeUtterance("type opn youtub", { source: "typed" }).normalized, "type opn youtub");
+assert.equal(normalizeUtterance("message Guna saying opn youtub", { source: "typed" }).normalized, "message Guna saying opn youtub");
 assert.equal(normalizeUtterance("open https://example.com/opn", { source: "typed" }).normalized, "open https://example.com/opn");
 assert.equal(normalizeUtterance("search instgram", { source: "typed" }).normalized, "search instgram");
 
-// Fuzzy matching is not allowed to manufacture a sensitive command.
+// Fuzzy matching may suggest, but never manufacture/execute, a sensitive action.
 const uncertainUnlock = normalizeUtterance("unlok mobile", { source: "voice" });
 assert.notEqual(uncertainUnlock.intent, "UNLOCK_MOBILE");
+assert.equal(uncertainUnlock.requiresClarification, true);
+assert.match(uncertainUnlock.suggestion || "", /unlock mobile/i);
 
-console.log(`Jazz understanding tests passed: ${cases.length + 7}`);
+console.log(`Jazz understanding tests passed: ${cases.length + 10}`);
