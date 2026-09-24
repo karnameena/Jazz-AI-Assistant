@@ -78,13 +78,12 @@ function protectArbitraryData(text) {
 }
 
 function replaceTracked(text, pattern, replacement, corrections, kind = "alias", penalty = 0.02) {
-  const output = text.replace(pattern, (...args) => {
+  return text.replace(pattern, (...args) => {
     const original = args[0];
     const next = typeof replacement === "function" ? replacement(...args) : replacement;
     if (String(original) !== String(next)) corrections.push({ from: original, to: next, kind, penalty });
     return next;
   });
-  return output;
 }
 
 function normalizeWake(text, corrections) {
@@ -113,6 +112,34 @@ function normalizeApps(text, corrections) {
   return output;
 }
 
+function fuzzyApps(text, corrections) {
+  if (!commandContext(text)) return text;
+  const tokens = text.split(/(\s+)/);
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (/^\s+$/.test(token) || /__JAZZ_PROTECTED_/i.test(token)) continue;
+    const bare = token.replace(/[^a-z]/gi, "");
+    if (bare.length < 4) continue;
+    const lower = bare.toLowerCase();
+    let best = null;
+    for (const app of APP_ALIASES) {
+      const candidates = [app.canonical, ...app.variants]
+        .map(value => value.toLowerCase().replace(/\s+/g, ""))
+        .filter(value => value.length >= 4);
+      for (const candidate of candidates) {
+        const distance = levenshtein(lower, candidate);
+        const allowed = candidate.length >= 8 ? 2 : 1;
+        if (distance <= allowed && (!best || distance < best.distance)) best = { app, distance };
+      }
+    }
+    if (best && lower !== best.app.canonical.toLowerCase()) {
+      tokens[i] = token.replace(new RegExp(escapeRegex(bare), "i"), best.app.canonical);
+      corrections.push({ from: bare, to: best.app.canonical, kind: "fuzzy-app", penalty: 0.07 + best.distance * 0.02 });
+    }
+  }
+  return tokens.join("");
+}
+
 function fuzzyCommandWords(text, corrections) {
   const tokens = text.split(/(\s+)/);
   let afterConjunction = true;
@@ -122,6 +149,10 @@ function fuzzyCommandWords(text, corrections) {
     const bare = token.replace(/[^a-z]/gi, "");
     if (!bare) continue;
     const lower = bare.toLowerCase();
+
+    // Wake words are context, not the command verb. Keep looking for the first
+    // actionable word after "hey jazz".
+    if (afterConjunction && (lower === "hey" || lower === "jazz")) continue;
     if (lower === "and" || lower === "then") {
       afterConjunction = true;
       continue;
@@ -131,6 +162,7 @@ function fuzzyCommandWords(text, corrections) {
       afterConjunction = false;
       continue;
     }
+
     let best = null;
     for (const candidate of COMMAND_WORDS) {
       const distance = levenshtein(lower, candidate);
@@ -201,6 +233,7 @@ export function normalizeUtterance(raw, options = {}) {
   text = normalizeCommandPhrases(text, corrections);
   text = fuzzyCommandWords(text, corrections);
   text = normalizeApps(text, corrections);
+  text = fuzzyApps(text, corrections);
   text = normalizeSpaces(protectedText.restore(text));
 
   const intents = detectIntents(text);
