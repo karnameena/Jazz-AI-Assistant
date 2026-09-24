@@ -1,5 +1,5 @@
 import { getDevice, sendAndroidCommand, sendAndroidScript } from "./device-bridge.mjs";
-import { normalizeUtterance } from "./utterance-normalizer.mjs";
+import { debugUnderstanding, normalizeUtterance } from "./utterance-normalizer.mjs";
 
 export const ANDROID_INTENTS_VERSION = "generic-companion-v20-understanding";
 
@@ -69,6 +69,7 @@ export async function handleAndroidIntent(message) {
   // interpretation before matching; execution still goes through the same bridge,
   // script registry, companion permissions and AccessibilityService controls.
   const understanding = normalizeUtterance(message, { source: "typed" });
+  debugUnderstanding(understanding);
   if (understanding.requiresClarification) {
     return {
       assistant: understanding.suggestion || "I’m not confident enough to execute that Android command. Please rephrase it.",
