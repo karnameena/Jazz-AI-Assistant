@@ -3,6 +3,7 @@ const COMMAND_WORDS = [
   "tap", "click", "type", "read", "show", "check"
 ];
 
+const APP_SLOT_WORDS = new Set(["open", "launch", "start", "in", "on", "using", "from"]);
 const SENSITIVE_EXACT = /\b(?:pay|send\s+money|unlock)\b/i;
 const URL_OR_PATH = /(?:https?:\/\/\S+|(?:[a-z]:\\|\/)[^\s]+|\b[\w.-]+\.(?:com|in|org|net|io)\b)/i;
 
@@ -96,46 +97,55 @@ function normalizeWake(text, corrections) {
   return replacement + text.slice(match[0].length);
 }
 
-function commandContext(text) {
-  return /\b(?:open|launch|start|close|scroll|swipe|search|play|message|text|send|show|check|status)\b/i.test(text);
-}
-
 function normalizeApps(text, corrections) {
-  if (!commandContext(text)) return text;
   let output = text;
   for (const app of APP_ALIASES) {
     for (const variant of [...app.variants].sort((a, b) => b.length - a.length)) {
-      const pattern = new RegExp(`\\b${escapeRegex(variant).replace(/\\ /g, "\\s+")}\\b`, "gi");
-      output = replaceTracked(output, pattern, app.canonical, corrections, "app", variant.toLowerCase() === app.canonical.toLowerCase() ? 0 : 0.015);
+      const escaped = escapeRegex(variant).replace(/\\ /g, "\\s+");
+      const pattern = new RegExp(`\\b(open|launch|start|in|on|using|from)\\s+(${escaped})\\b`, "gi");
+      output = replaceTracked(
+        output,
+        pattern,
+        (_, prefix) => `${prefix} ${app.canonical}`,
+        corrections,
+        "app",
+        variant.toLowerCase().replace(/\s+/g, "") === app.canonical.toLowerCase().replace(/\s+/g, "") ? 0 : 0.015
+      );
     }
   }
   return output;
 }
 
 function fuzzyApps(text, corrections) {
-  if (!commandContext(text)) return text;
   const tokens = text.split(/(\s+)/);
+  let previousWord = "";
   for (let i = 0; i < tokens.length; i += 1) {
     const token = tokens[i];
-    if (/^\s+$/.test(token) || /__JAZZ_PROTECTED_/i.test(token)) continue;
+    if (/^\s+$/.test(token)) continue;
     const bare = token.replace(/[^a-z]/gi, "");
-    if (bare.length < 4) continue;
+    if (!bare) continue;
     const lower = bare.toLowerCase();
-    let best = null;
-    for (const app of APP_ALIASES) {
-      const candidates = [app.canonical, ...app.variants]
-        .map(value => value.toLowerCase().replace(/\s+/g, ""))
-        .filter(value => value.length >= 4);
-      for (const candidate of candidates) {
-        const distance = levenshtein(lower, candidate);
-        const allowed = candidate.length >= 8 ? 2 : 1;
-        if (distance <= allowed && (!best || distance < best.distance)) best = { app, distance };
+    const isAppSlot = APP_SLOT_WORDS.has(previousWord);
+    if (isAppSlot && bare.length >= 4 && !/__JAZZ_PROTECTED_/i.test(token)) {
+      let best = null;
+      for (const app of APP_ALIASES) {
+        const candidates = [app.canonical, ...app.variants]
+          .map(value => value.toLowerCase().replace(/\s+/g, ""))
+          .filter(value => value.length >= 4);
+        for (const candidate of candidates) {
+          const distance = levenshtein(lower, candidate);
+          const allowed = candidate.length >= 8 ? 2 : 1;
+          if (distance <= allowed && (!best || distance < best.distance)) best = { app, distance };
+        }
+      }
+      if (best && lower !== best.app.canonical.toLowerCase()) {
+        tokens[i] = token.replace(new RegExp(escapeRegex(bare), "i"), best.app.canonical);
+        corrections.push({ from: bare, to: best.app.canonical, kind: "fuzzy-app", penalty: 0.07 + best.distance * 0.02 });
+        previousWord = best.app.canonical.toLowerCase();
+        continue;
       }
     }
-    if (best && lower !== best.app.canonical.toLowerCase()) {
-      tokens[i] = token.replace(new RegExp(escapeRegex(bare), "i"), best.app.canonical);
-      corrections.push({ from: bare, to: best.app.canonical, kind: "fuzzy-app", penalty: 0.07 + best.distance * 0.02 });
-    }
+    previousWord = lower;
   }
   return tokens.join("");
 }
