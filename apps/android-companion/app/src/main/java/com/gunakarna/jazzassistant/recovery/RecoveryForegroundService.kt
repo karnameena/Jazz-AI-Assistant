@@ -8,6 +8,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.os.IBinder
+import android.os.PowerManager
 import com.gunakarna.jazzassistant.MainActivity
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -21,18 +22,32 @@ class RecoveryForegroundService : Service() {
     }
 
     private val scheduler = Executors.newSingleThreadScheduledExecutor()
+    private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onCreate() {
         super.onCreate()
         createChannel()
         startForeground(NOTIFICATION_ID, notification())
+
+        val power = getSystemService(POWER_SERVICE) as PowerManager
+        wakeLock = power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Jazz:RecoveryHeartbeat").apply {
+            setReferenceCounted(false)
+            try { acquire(10 * 60 * 1000L) } catch (_: Exception) {}
+        }
+
         scheduler.scheduleWithFixedDelay({
+            if (!LostDeviceManager(this).isEnabled()) return@scheduleWithFixedDelay
             try {
-                if (LostDeviceManager(this).isEnabled()) {
-                    RecoveryNetworkClient(this).syncOnce()
-                }
+                RecoveryNetworkClient(this).syncOnce()
+            } catch (_: Exception) {
+                // Keep the foreground service alive. The next short interval retry or
+                // WorkManager retry will reconnect after Wi-Fi/cellular changes.
+                RecoveryHeartbeatWorker.syncNow(this)
+            }
+            try {
+                if (wakeLock?.isHeld != true) wakeLock?.acquire(10 * 60 * 1000L)
             } catch (_: Exception) {}
-        }, 0, 10, TimeUnit.SECONDS)
+        }, 0, 8, TimeUnit.SECONDS)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -40,11 +55,22 @@ class RecoveryForegroundService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
+        RecoveryHeartbeatWorker.syncNow(this)
         return START_STICKY
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        if (LostDeviceManager(this).isEnabled()) {
+            RecoveryHeartbeatWorker.syncNow(this)
+        }
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {
         scheduler.shutdownNow()
+        try { if (wakeLock?.isHeld == true) wakeLock?.release() } catch (_: Exception) {}
+        wakeLock = null
+        if (LostDeviceManager(this).isEnabled()) RecoveryHeartbeatWorker.syncNow(this)
         super.onDestroy()
     }
 
@@ -72,7 +98,7 @@ class RecoveryForegroundService : Service() {
         )
         return Notification.Builder(this, CHANNEL_ID)
             .setContentTitle("Jazz Device Recovery active")
-            .setContentText("Secure recovery heartbeat is connected when internet is available.")
+            .setContentText("Secure recovery is ready on Wi-Fi or mobile data.")
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
             .setContentIntent(open)
             .setOngoing(true)
