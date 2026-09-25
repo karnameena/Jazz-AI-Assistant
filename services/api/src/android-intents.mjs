@@ -56,21 +56,17 @@ function directNavigationAction(text) {
 }
 
 function directSystemAction(text) {
-  if (/^(?:pause|pause\s+(?:it|music|media|this))[.!? ]*$/i.test(text)) return { action: "media_pause", args: {} };
-  if (/^(?:play|resume|play\s+(?:it|music|media|again))[.!? ]*$/i.test(text)) return { action: "media_play", args: {} };
-  if (/^(?:next\s+(?:song|track)|skip\s+(?:song|track))[.!? ]*$/i.test(text)) return { action: "media_next", args: {} };
-  if (/^(?:previous\s+(?:song|track)|previous)[.!? ]*$/i.test(text)) return { action: "media_previous", args: {} };
-  if (/^(?:increase|raise|turn\s+up)\s+(?:the\s+)?volume[.!? ]*$/i.test(text)) return { action: "volume_up", args: {} };
-  if (/^(?:decrease|lower|turn\s+down)\s+(?:the\s+)?volume[.!? ]*$/i.test(text)) return { action: "volume_down", args: {} };
-  if (/^mute(?:\s+(?:the\s+)?(?:phone|media|volume))?[.!? ]*$/i.test(text)) return { action: "mute", args: {} };
-  if (/^unmute(?:\s+(?:the\s+)?(?:phone|media|volume))?[.!? ]*$/i.test(text)) return { action: "unmute", args: {} };
-  if (/^(?:turn\s+)?(?:the\s+)?flash(?:light)?\s+on[.!? ]*$/i.test(text)) return { action: "flashlight_on", args: {} };
-  if (/^(?:turn\s+)?(?:the\s+)?flash(?:light)?\s+off[.!? ]*$/i.test(text)) return { action: "flashlight_off", args: {} };
-  if (/^(?:answer|answer\s+the\s+call)[.!? ]*$/i.test(text)) return { action: "answer_call", args: {} };
-  if (/^(?:end|hang\s+up|end\s+the\s+call)[.!? ]*$/i.test(text)) return { action: "end_call", args: {} };
-  const call = text.match(/^call\s+(.+?)[.!? ]*$/i);
-  if (call) return { action: "call_contact", args: { contact: call[1].trim() } };
-  return null;
+  if (/^(?:pause|pause\s+(?:it|music|media|this))[.!? ]*$/i.test(text)) return true;
+  if (/^(?:play|resume|play\s+(?:it|music|media|again))[.!? ]*$/i.test(text)) return true;
+  if (/^(?:next\s+(?:song|track)|skip\s+(?:song|track))[.!? ]*$/i.test(text)) return true;
+  if (/^(?:previous\s+(?:song|track)|previous)[.!? ]*$/i.test(text)) return true;
+  if (/^(?:increase|raise|turn\s+up)\s+(?:the\s+)?volume[.!? ]*$/i.test(text)) return true;
+  if (/^(?:decrease|lower|turn\s+down)\s+(?:the\s+)?volume[.!? ]*$/i.test(text)) return true;
+  if (/^mute(?:\s+(?:the\s+)?(?:phone|media|volume))?[.!? ]*$/i.test(text)) return true;
+  if (/^unmute(?:\s+(?:the\s+)?(?:phone|media|volume))?[.!? ]*$/i.test(text)) return true;
+  if (/^(?:turn\s+)?(?:the\s+)?flash(?:light)?\s+(?:on|off)[.!? ]*$/i.test(text)) return true;
+  if (/^(?:answer|answer\s+the\s+call|end|hang\s+up|end\s+the\s+call)[.!? ]*$/i.test(text)) return true;
+  return /^call\s+.+[.!? ]*$/i.test(text);
 }
 
 function youtubePlayQuery(text) {
@@ -186,9 +182,8 @@ export async function handleAndroidIntent(message) {
       return { assistant: result?.message || "Android navigation completed.", executed: result?.ok !== false, tool: "android.automation", intentVersion: ANDROID_INTENTS_VERSION, result };
     }
 
-    const systemAction = directSystemAction(text);
-    if (systemAction) {
-      const result = await sendAndroidCommand(deviceId, systemAction.action, systemAction.args);
+    if (directSystemAction(text)) {
+      const result = await sendAndroidCommand(deviceId, "execute_command", { command: text });
       return { assistant: result?.message || "Android system action completed.", executed: result?.ok !== false, tool: "android.system", intentVersion: ANDROID_INTENTS_VERSION, result };
     }
 
