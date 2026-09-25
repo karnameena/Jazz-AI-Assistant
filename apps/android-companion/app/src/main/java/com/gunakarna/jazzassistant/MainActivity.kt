@@ -65,6 +65,17 @@ class MainActivity : Activity() {
             setOnClickListener { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
         })
         content.addView(Button(this).apply {
+            text = "Open Notification Access Settings"
+            setOnClickListener {
+                try { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }
+                catch (_: Exception) { startActivity(Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")) }
+            }
+        })
+        content.addView(Button(this).apply {
+            text = "Grant Contacts / Phone Permissions"
+            setOnClickListener { requestAssistantPermissions() }
+        })
+        content.addView(Button(this).apply {
             text = "Copy Bridge Token"
             setOnClickListener { copyText("Jazz bridge token", token) }
         })
@@ -208,9 +219,19 @@ class MainActivity : Activity() {
         val currentPackage = service?.rootInActiveWindow?.packageName?.toString()
             ?: service?.lastForegroundPackage
             ?: "Unknown"
+        val notificationAccess = isNotificationAccessEnabled()
+        val contactsAllowed = checkSelfPermission(Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED
+        val callAllowed = checkSelfPermission(Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED
+        val answerAllowed = Build.VERSION.SDK_INT < Build.VERSION_CODES.O ||
+            checkSelfPermission(Manifest.permission.ANSWER_PHONE_CALLS) == PackageManager.PERMISSION_GRANTED
+
         statusView.text = buildString {
             appendLine("Android Companion: Connected")
             appendLine("Accessibility: ${if (enabled) "Enabled" else "Disabled — manual re-enable required in Android Accessibility settings"}")
+            appendLine("Notification Access: ${if (notificationAccess) "Enabled" else "Disabled — enable for media sessions and notification features"}")
+            appendLine("Contacts: ${if (contactsAllowed) "Allowed" else "Not allowed"}")
+            appendLine("Direct calls: ${if (callAllowed) "Allowed" else "Not allowed — Jazz will fall back to the dialer"}")
+            appendLine("Answer/end call permission: ${if (answerAllowed) "Allowed" else "Not allowed"}")
             appendLine("Jazz local API: ${if (service != null) "Connected" else "Waiting"}")
             appendLine("Current App: $currentPackage")
             append("Automation: ${if (service != null) "Ready" else "Waiting for Accessibility Service"}")
@@ -242,9 +263,6 @@ class MainActivity : Activity() {
             recoveryStatusView.text = "Recovery test failed: save the HTTPS recovery server URL first."
             return
         }
-
-        // Accessing the token here also repairs a stale restored ciphertext/Keystore
-        // mismatch before a network request is attempted.
         recoverySecurity.pairingToken()
         if (recoverySecurity.pairingTokenNeedsRelayUpdate()) {
             recoveryStatusView.text = buildString {
@@ -293,6 +311,17 @@ class MainActivity : Activity() {
         requestPermissions(permissions.toTypedArray(), 7301)
     }
 
+    private fun requestAssistantPermissions() {
+        val permissions = mutableListOf(
+            Manifest.permission.READ_CONTACTS,
+            Manifest.permission.CALL_PHONE,
+            Manifest.permission.READ_PHONE_STATE
+        )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) permissions += Manifest.permission.ANSWER_PHONE_CALLS
+        val missing = permissions.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+        if (missing.isNotEmpty()) requestPermissions(missing.toTypedArray(), 7401) else refreshStatus()
+    }
+
     private fun requestBackgroundLocation() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
@@ -308,6 +337,11 @@ class MainActivity : Activity() {
         val manager = getSystemService(ACCESSIBILITY_SERVICE) as AccessibilityManager
         return manager.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
             .any { info -> info.resolveInfo.serviceInfo.packageName == packageName && info.resolveInfo.serviceInfo.name.endsWith("JazzAccessibilityService") }
+    }
+
+    private fun isNotificationAccessEnabled(): Boolean {
+        val enabled = Settings.Secure.getString(contentResolver, "enabled_notification_listeners").orEmpty()
+        return enabled.split(":").any { component -> component.startsWith("$packageName/") }
     }
 
     private fun copyText(label: String, value: String) {
