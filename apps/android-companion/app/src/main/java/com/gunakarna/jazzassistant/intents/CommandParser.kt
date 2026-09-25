@@ -16,6 +16,7 @@ object CommandParser {
             .trim()
         if (text.isBlank()) return null
 
+        parseSystemCommand(text)?.let { return it }
         parseWhatsApp(text)?.let { return it }
 
         when {
@@ -67,6 +68,28 @@ object CommandParser {
 
         parseOpenSequence(text)?.let { return it }
         return null
+    }
+
+    private fun parseSystemCommand(text: String): ParsedCommand? {
+        return when {
+            text.matches(Regex("(?i)^(?:pause|pause\\s+(?:it|music|media|this))[.!? ]*$")) -> ParsedCommand("media_pause")
+            text.matches(Regex("(?i)^(?:play|resume|play\\s+(?:it|music|media|again))[.!? ]*$")) -> ParsedCommand("media_play")
+            text.matches(Regex("(?i)^(?:next\\s+(?:song|track)|skip\\s+(?:song|track))[.!? ]*$")) -> ParsedCommand("media_next")
+            text.matches(Regex("(?i)^(?:previous\\s+(?:song|track)|previous)[.!? ]*$")) -> ParsedCommand("media_previous")
+            text.matches(Regex("(?i)^(?:increase|raise|turn\\s+up)\\s+(?:the\\s+)?volume[.!? ]*$")) -> ParsedCommand("volume_up")
+            text.matches(Regex("(?i)^(?:decrease|lower|turn\\s+down)\\s+(?:the\\s+)?volume[.!? ]*$")) -> ParsedCommand("volume_down")
+            text.matches(Regex("(?i)^mute(?:\\s+(?:the\\s+)?(?:phone|media|volume))?[.!? ]*$")) -> ParsedCommand("mute")
+            text.matches(Regex("(?i)^unmute(?:\\s+(?:the\\s+)?(?:phone|media|volume))?[.!? ]*$")) -> ParsedCommand("unmute")
+            text.matches(Regex("(?i)^(?:turn\\s+)?(?:the\\s+)?flash(?:light)?\\s+on[.!? ]*$")) -> ParsedCommand("flashlight_on")
+            text.matches(Regex("(?i)^(?:turn\\s+)?(?:the\\s+)?flash(?:light)?\\s+off[.!? ]*$")) -> ParsedCommand("flashlight_off")
+            text.matches(Regex("(?i)^(?:answer|answer\\s+the\\s+call)[.!? ]*$")) -> ParsedCommand("answer_call")
+            text.matches(Regex("(?i)^(?:end|hang\\s+up|end\\s+the\\s+call)[.!? ]*$")) -> ParsedCommand("end_call")
+            Regex("(?i)^call\\s+(.+?)[.!? ]*$").find(text) != null -> {
+                val match = Regex("(?i)^call\\s+(.+?)[.!? ]*$").find(text)!!
+                ParsedCommand("call_contact", mapOf("contact" to cleanArg(match.groupValues[1])))
+            }
+            else -> null
+        }
     }
 
     private fun parseWhatsApp(text: String): ParsedCommand? {
