@@ -340,12 +340,14 @@ async function sendViaDirectAdb(deviceId, target, payload) {
   }
   if (["scroll_down", "scroll_up", "scroll_forward", "scroll_backward"].includes(action)) {
     const { width, height } = await screenSize(serial);
-    const forward = action === "scroll_down" || action === "scroll_forward";
+    // "scroll up" means the user's finger swipes upward, which advances a Reel.
+    // Keep the gesture vertical and preserve forward/backward aliases for compatibility.
+    const forward = action === "scroll_up" || action === "scroll_forward";
     const x = Math.round(width * 0.5);
     const fromY = Math.round(height * (forward ? 0.78 : 0.28));
     const toY = Math.round(height * (forward ? 0.28 : 0.78));
     await run(["-s", serial, "shell", "input", "swipe", String(x), String(fromY), String(x), String(toY), "420"]);
-    return ok("Scroll sent through direct ADB");
+    return ok(action === "scroll_up" ? "Scrolled up through direct ADB" : action === "scroll_down" ? "Scrolled down through direct ADB" : "Scroll sent through direct ADB");
   }
   if (action === "open_url") {
     const url = String(args.url || "");
