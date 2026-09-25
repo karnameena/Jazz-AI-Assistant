@@ -40,7 +40,10 @@ object CommandParser {
                 val match = Regex("(?i)^(?:scroll|swipe)\\s+(up|down)(?:\\s+(one|two|three|four|five|\\d+)\\s+times?)?[.!? ]*$").find(text)!!
                 val direction = match.groupValues[1].lowercase()
                 val count = wordNumber(match.groupValues.getOrElse(2) { "" }).coerceIn(1, 10)
-                return ParsedCommand("android_sequence", plan = ActionPlan(steps = List(count) { ActionStep(if (direction == "up") "scroll_forward" else "scroll_backward") }))
+                return ParsedCommand(
+                    "android_sequence",
+                    plan = ActionPlan(steps = List(count) { ActionStep(if (direction == "up") "scroll_up" else "scroll_down") })
+                )
             }
             text.matches(Regex("(?i)^(tap|click)\\s+.+$")) -> {
                 val label = cleanArg(text.substringAfter(" "))
@@ -133,14 +136,14 @@ object CommandParser {
         if (scroll != null) {
             val direction = scroll.groupValues[1].lowercase()
             val count = wordNumber(scroll.groupValues.getOrElse(2) { "" }).coerceIn(1, 10)
-            repeat(count) { steps += ActionStep(if (direction == "up") "scroll_forward" else "scroll_backward") }
+            repeat(count) { steps += ActionStep(if (direction == "up") "scroll_up" else "scroll_down") }
             return ParsedCommand("android_sequence", plan = ActionPlan(steps = steps))
         }
 
         val reels = Regex("(?i)^scroll\\s+(one|two|three|four|five|\\d+)\\s+reels?[.!? ]*$").find(tail)
         if (reels != null) {
             val count = wordNumber(reels.groupValues[1]).coerceIn(1, 10)
-            repeat(count) { steps += ActionStep("scroll_forward") }
+            repeat(count) { steps += ActionStep("scroll_up") }
             return ParsedCommand("android_sequence", plan = ActionPlan(steps = steps))
         }
 
