@@ -50,8 +50,6 @@ function directNavigationAction(text) {
   if (/^(?:go\s+)?back(?:\s+one\s+step)?[.!? ]*$/i.test(text)) return "back";
   if (/^(?:scroll|swipe)\s+up[.!? ]*$/i.test(text)) return "scroll_up";
   if (/^(?:scroll|swipe)\s+down[.!? ]*$/i.test(text)) return "scroll_down";
-  if (/^(?:scroll|swipe)\s+left[.!? ]*$/i.test(text)) return "swipe_left";
-  if (/^(?:scroll|swipe)\s+right[.!? ]*$/i.test(text)) return "swipe_right";
   return null;
 }
 
