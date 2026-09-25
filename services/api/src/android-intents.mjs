@@ -1,7 +1,7 @@
 import { getDevice, sendAndroidCommand, sendAndroidScript } from "./device-bridge.mjs";
 import { debugUnderstanding, normalizeUtterance } from "./utterance-normalizer.mjs";
 
-export const ANDROID_INTENTS_VERSION = "generic-companion-v21-reels-home";
+export const ANDROID_INTENTS_VERSION = "generic-companion-v22-resilient-reels-voice";
 
 function deviceFor(text) {
   return /\btablet\b/i.test(text) ? "android-tablet" : "android-phone";
@@ -35,6 +35,23 @@ function isScreenshotCommand(text) {
 
 function isMobileStatusCommand(text) {
   return /^(?:what\s+is|what's|check|show)\s+(?:my\s+)?mobile\s+status[?.! ]*$/i.test(text);
+}
+
+function isInstagramReelCommand(text) {
+  return /\binstagram\b/i.test(text) && /\b(?:reel|reels|video|videos)\b/i.test(text);
+}
+
+function isInstagramLikeCommand(text) {
+  return /^(?:like|heart)(?:\s+(?:this|the|current))?\s+(?:reel|video)[.!? ]*$/i.test(text)
+    || /^double\s+tap(?:\s+(?:this|the|current))?\s+(?:reel|video)[.!? ]*$/i.test(text);
+}
+
+function directNavigationAction(text) {
+  if (/^(?:go\s+)?home(?:\s+screen)?[.!? ]*$/i.test(text)) return "home";
+  if (/^(?:go\s+)?back[.!? ]*$/i.test(text)) return "back";
+  if (/^(?:scroll|swipe)\s+up[.!? ]*$/i.test(text)) return "scroll_forward";
+  if (/^(?:scroll|swipe)\s+down[.!? ]*$/i.test(text)) return "scroll_backward";
+  return null;
 }
 
 function youtubePlayQuery(text) {
@@ -172,6 +189,36 @@ export async function handleAndroidIntent(message) {
       };
     }
 
+    if (isInstagramReelCommand(text) || isInstagramLikeCommand(text)) {
+      const result = await sendAndroidScript(deviceId, "instagram", { request: text });
+      return {
+        assistant: result?.message || (isInstagramLikeCommand(text) ? "Liked the current reel." : "Instagram Reels opened."),
+        executed: result?.ok !== false,
+        tool: "android.script",
+        scriptName: "instagram",
+        intentVersion: ANDROID_INTENTS_VERSION,
+        result
+      };
+    }
+
+    const directAction = directNavigationAction(text);
+    if (directAction) {
+      const result = await sendAndroidCommand(deviceId, directAction, {});
+      return {
+        assistant: directAction === "home"
+          ? "Android home screen opened."
+          : directAction === "back"
+            ? "Went back on Android."
+            : directAction === "scroll_forward"
+              ? "Scrolled up."
+              : "Scrolled down.",
+        executed: result?.ok !== false,
+        tool: "android.automation",
+        intentVersion: ANDROID_INTENTS_VERSION,
+        result
+      };
+    }
+
     if (!looksLikeAndroidCommand(text)) return null;
 
     const result = await sendAndroidCommand(deviceId, "execute_command", { command: text });
@@ -185,15 +232,8 @@ export async function handleAndroidIntent(message) {
       };
     }
 
-    const homeCommand = /^(?:go\s+)?home(?:\s+screen)?[.!? ]*$/i.test(text);
-    const likeReelCommand = /^(?:like|heart)(?:\s+(?:this|the|current))?\s+(?:reel|video)[.!? ]*$/i.test(text)
-      || /^double\s+tap(?:\s+(?:this|the|current))?\s+(?:reel|video)[.!? ]*$/i.test(text);
     return {
-      assistant: homeCommand
-        ? "Android home screen opened."
-        : likeReelCommand
-          ? "Liked the current reel with a double tap."
-          : (result?.message || "Done, Mama."),
+      assistant: result?.message || "Done, Mama.",
       executed: true,
       tool: "android.automation",
       intentVersion: ANDROID_INTENTS_VERSION,
