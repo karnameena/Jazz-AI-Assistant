@@ -10,19 +10,27 @@ import android.view.accessibility.AccessibilityNodeInfo
 class AccessibilityActions(private val service: AccessibilityService) {
     fun clickNode(node: AccessibilityNodeInfo?): Boolean {
         val target = AccessibilityNodeFinder.findClickableParent(node) ?: return false
+        AccessibilityLogger.action("click class=${target.className} id=${target.viewIdResourceName ?: ""}")
         return target.performAction(AccessibilityNodeInfo.ACTION_CLICK)
     }
 
     fun clickText(text: String, exact: Boolean = false): Boolean {
         val root = service.rootInActiveWindow ?: return false
-        val node = AccessibilityNodeFinder.findNodeByText(root, text, exact)
+        val node = AccessibilityNodeFinder.findBestActionNode(root, text)
+            ?: AccessibilityNodeFinder.findNodeByText(root, text, exact)
             ?: AccessibilityNodeFinder.findNodeByContentDescription(root, text, exact)
         return clickNode(node)
     }
 
+    fun clickViewId(viewId: String): Boolean {
+        val root = service.rootInActiveWindow ?: return false
+        return clickNode(AccessibilityNodeFinder.findByViewId(root, viewId))
+    }
+
     fun longClickText(text: String): Boolean {
         val root = service.rootInActiveWindow ?: return false
-        val node = AccessibilityNodeFinder.findNodeByText(root, text, true)
+        val node = AccessibilityNodeFinder.findBestActionNode(root, text)
+            ?: AccessibilityNodeFinder.findNodeByText(root, text, true)
             ?: AccessibilityNodeFinder.findNodeByText(root, text, false)
             ?: AccessibilityNodeFinder.findNodeByContentDescription(root, text, false)
             ?: return false
@@ -31,10 +39,11 @@ class AccessibilityActions(private val service: AccessibilityService) {
     }
 
     fun setText(node: AccessibilityNodeInfo?, text: String): Boolean {
-        if (node == null || !node.isEnabled) return false
+        if (node == null || !node.isEnabled || !node.isVisibleToUser) return false
         val args = Bundle().apply {
             putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
         }
+        AccessibilityLogger.action("set_text class=${node.className} id=${node.viewIdResourceName ?: ""}")
         return node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
     }
 
@@ -46,39 +55,20 @@ class AccessibilityActions(private val service: AccessibilityService) {
 
     fun clearText(): Boolean = setText("")
 
-    fun scrollForward(): Boolean {
-        val root = service.rootInActiveWindow
-        val node = root?.let { AccessibilityNodeFinder.findScrollableNode(it) }
-        if (node?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD) == true) return true
-        return gestureScroll(forward = true)
-    }
+    fun scrollForward(): Boolean = swipeUp()
+    fun scrollBackward(): Boolean = swipeDown()
+    fun swipeUp(): Boolean = gestureSwipe(0.50f, 0.78f, 0.50f, 0.28f)
+    fun swipeDown(): Boolean = gestureSwipe(0.50f, 0.28f, 0.50f, 0.78f)
+    fun swipeLeft(): Boolean = gestureSwipe(0.82f, 0.50f, 0.18f, 0.50f)
+    fun swipeRight(): Boolean = gestureSwipe(0.18f, 0.50f, 0.82f, 0.50f)
 
-    fun scrollBackward(): Boolean {
-        val root = service.rootInActiveWindow
-        val node = root?.let { AccessibilityNodeFinder.findScrollableNode(it) }
-        if (node?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD) == true) return true
-        return gestureScroll(forward = false)
-    }
-
-    /**
-     * Voice commands "scroll up" / "swipe up" must always be a physical vertical
-     * finger swipe. Do not delegate these to ACTION_SCROLL_FORWARD because apps like
-     * Instagram may expose a horizontal carousel as the first scrollable node.
-     */
-    fun swipeUp(): Boolean = gestureScroll(forward = true)
-
-    /** Voice command "scroll down" / "swipe down": physical vertical finger swipe down. */
-    fun swipeDown(): Boolean = gestureScroll(forward = false)
-
-    private fun gestureScroll(forward: Boolean): Boolean {
+    private fun gestureSwipe(fromXRatio: Float, fromYRatio: Float, toXRatio: Float, toYRatio: Float): Boolean {
         val metrics: DisplayMetrics = service.resources.displayMetrics
-        val x = metrics.widthPixels * 0.5f
-        val fromY = metrics.heightPixels * if (forward) 0.78f else 0.28f
-        val toY = metrics.heightPixels * if (forward) 0.28f else 0.78f
         val path = Path().apply {
-            moveTo(x, fromY)
-            lineTo(x, toY)
+            moveTo(metrics.widthPixels * fromXRatio, metrics.heightPixels * fromYRatio)
+            lineTo(metrics.widthPixels * toXRatio, metrics.heightPixels * toYRatio)
         }
+        AccessibilityLogger.action("gesture_swipe from=$fromXRatio,$fromYRatio to=$toXRatio,$toYRatio")
         val gesture = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0, 420))
             .build()
@@ -88,7 +78,6 @@ class AccessibilityActions(private val service: AccessibilityService) {
     fun doubleTapCenter(): Boolean {
         val metrics: DisplayMetrics = service.resources.displayMetrics
         val x = metrics.widthPixels * 0.5f
-        // Aim slightly above the vertical center so Instagram's caption/nav areas are avoided.
         val y = metrics.heightPixels * 0.43f
         val firstTap = Path().apply { moveTo(x, y) }
         val secondTap = Path().apply { moveTo(x, y) }
