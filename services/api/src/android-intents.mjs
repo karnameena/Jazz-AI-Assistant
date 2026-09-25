@@ -1,7 +1,7 @@
 import { getDevice, sendAndroidCommand, sendAndroidScript } from "./device-bridge.mjs";
 import { debugUnderstanding, normalizeUtterance } from "./utterance-normalizer.mjs";
 
-export const ANDROID_INTENTS_VERSION = "generic-companion-v22-resilient-reels-voice";
+export const ANDROID_INTENTS_VERSION = "generic-companion-v23-vertical-reels";
 
 function deviceFor(text) {
   return /\btablet\b/i.test(text) ? "android-tablet" : "android-phone";
@@ -49,8 +49,8 @@ function isInstagramLikeCommand(text) {
 function directNavigationAction(text) {
   if (/^(?:go\s+)?home(?:\s+screen)?[.!? ]*$/i.test(text)) return "home";
   if (/^(?:go\s+)?back[.!? ]*$/i.test(text)) return "back";
-  if (/^(?:scroll|swipe)\s+up[.!? ]*$/i.test(text)) return "scroll_forward";
-  if (/^(?:scroll|swipe)\s+down[.!? ]*$/i.test(text)) return "scroll_backward";
+  if (/^(?:scroll|swipe)\s+up[.!? ]*$/i.test(text)) return "scroll_up";
+  if (/^(?:scroll|swipe)\s+down[.!? ]*$/i.test(text)) return "scroll_down";
   return null;
 }
 
@@ -209,7 +209,7 @@ export async function handleAndroidIntent(message) {
           ? "Android home screen opened."
           : directAction === "back"
             ? "Went back on Android."
-            : directAction === "scroll_forward"
+            : directAction === "scroll_up"
               ? "Scrolled up."
               : "Scrolled down.",
         executed: result?.ok !== false,
