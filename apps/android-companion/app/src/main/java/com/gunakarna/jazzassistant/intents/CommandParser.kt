@@ -19,8 +19,10 @@ object CommandParser {
         parseWhatsApp(text)?.let { return it }
 
         when {
-            text.matches(Regex("(?i)^(go\\s+)?back[.!? ]*$")) -> return sequence(ActionStep("back"))
+            text.matches(Regex("(?i)^(go\\s+)?back(?:\\s+one\\s+step)?[.!? ]*$")) -> return sequence(ActionStep("back"))
             text.matches(Regex("(?i)^(go\\s+)?home(\\s+screen)?[.!? ]*$")) -> return sequence(ActionStep("home"))
+            text.matches(Regex("(?i)^(open\\s+)?recent\\s+apps[.!? ]*$")) -> return sequence(ActionStep("recents"))
+            text.matches(Regex("(?i)^open\\s+notifications[.!? ]*$")) -> return sequence(ActionStep("notifications"))
             text.matches(Regex("(?i)^(?:like|heart)(?:\\s+(?:this|the|current))?\\s+(?:reel|video)[.!? ]*$")) -> return sequence(ActionStep("double_tap_center", label = "Like current reel"))
             text.matches(Regex("(?i)^double\\s+tap(?:\\s+(?:this|the|current))?\\s+(?:reel|video)[.!? ]*$")) -> return sequence(ActionStep("double_tap_center", label = "Double tap current reel"))
             text.matches(Regex("(?i)^open\\s+instagram(?:\\s+(?:reel|reels|video|videos))[.!? ]*$")) -> return ParsedCommand(
@@ -30,23 +32,18 @@ object CommandParser {
                     ActionStep("click_text", mapOf("text" to "Reels"), "Open Reels")
                 ))
             )
-            text.matches(Regex("(?i)^(open\\s+)?recent\\s+apps[.!? ]*$")) -> return sequence(ActionStep("recents"))
-            text.matches(Regex("(?i)^open\\s+notifications[.!? ]*$")) -> return sequence(ActionStep("notifications"))
-            text.matches(Regex("(?i)^close\\s+.+$")) -> {
-                val app = cleanArg(text.replaceFirst(Regex("(?i)^close\\s+"), ""))
-                return sequence(ActionStep("close_app", mapOf("app" to app)))
-            }
             text.matches(Regex("(?i)^(?:scroll|swipe)\\s+(up|down)(?:\\s+(one|two|three|four|five|\\d+)\\s+times?)?[.!? ]*$")) -> {
                 val match = Regex("(?i)^(?:scroll|swipe)\\s+(up|down)(?:\\s+(one|two|three|four|five|\\d+)\\s+times?)?[.!? ]*$").find(text)!!
                 val direction = match.groupValues[1].lowercase()
                 val count = wordNumber(match.groupValues.getOrElse(2) { "" }).coerceIn(1, 10)
-                return ParsedCommand(
-                    "android_sequence",
-                    plan = ActionPlan(steps = List(count) { ActionStep(if (direction == "up") "scroll_up" else "scroll_down") })
-                )
+                return ParsedCommand("android_sequence", plan = ActionPlan(steps = List(count) { ActionStep(if (direction == "up") "scroll_up" else "scroll_down") }))
             }
-            text.matches(Regex("(?i)^(tap|click)\\s+.+$")) -> {
-                val label = cleanArg(text.substringAfter(" "))
+            text.matches(Regex("(?i)^(?:swipe|scroll)\\s+left[.!? ]*$")) -> return sequence(ActionStep("swipe_left"))
+            text.matches(Regex("(?i)^(?:swipe|scroll)\\s+right[.!? ]*$")) -> return sequence(ActionStep("swipe_right"))
+            text.matches(Regex("(?i)^(?:click|tap|press)\\s+(?:the\\s+)?x(?:\\s+button)?[.!? ]*$")) -> return sequence(ActionStep("click_text", mapOf("text" to "Close"), "Close current control"))
+            text.matches(Regex("(?i)^close\\s+(?:this\\s+)?(?:popup|dialog|ad)[.!? ]*$")) -> return sequence(ActionStep("click_text", mapOf("text" to "Close"), "Close current popup"))
+            text.matches(Regex("(?i)^(tap|click|press)\\s+.+$")) -> {
+                val label = cleanArg(text.substringAfter(" ").replaceFirst(Regex("(?i)^the\\s+"), ""))
                 return sequence(ActionStep("click_text", mapOf("text" to label)))
             }
             text.matches(Regex("(?i)^long\\s+press\\s+.+$")) -> {
@@ -62,6 +59,10 @@ object CommandParser {
                 return sequence(ActionStep("search_ui", mapOf("text" to value)))
             }
             text.matches(Regex("(?i)^clear\\s+text[.!? ]*$")) -> return sequence(ActionStep("clear_text"))
+            text.matches(Regex("(?i)^close\\s+.+$")) -> {
+                val app = cleanArg(text.replaceFirst(Regex("(?i)^close\\s+"), ""))
+                return sequence(ActionStep("close_app", mapOf("app" to app)))
+            }
         }
 
         parseOpenSequence(text)?.let { return it }
@@ -71,18 +72,30 @@ object CommandParser {
     private fun parseWhatsApp(text: String): ParsedCommand? {
         val normalized = text.replace(Regex("(?i)^open\\s+whats\\s*app[,;]\\s*"), "Open WhatsApp and ")
 
+        val sendQuoted = Regex("(?i)^send\\s+(.+?)\\s+[\"'](.+?)[\"']$").find(normalized)
+        if (sendQuoted != null) {
+            val contact = cleanArg(sendQuoted.groupValues[1])
+            val message = sendQuoted.groupValues[2]
+            return ParsedCommand("whatsapp_message", mapOf("contact" to contact, "message" to message, "send" to true))
+        }
+
+        val colonMessage = Regex("(?i)^(?:send|message|text)\\s+(.+?)\\s*:\\s*(.+)$").find(normalized)
+        if (colonMessage != null) {
+            return ParsedCommand(
+                "whatsapp_message",
+                mapOf("contact" to cleanArg(colonMessage.groupValues[1]), "message" to colonMessage.groupValues[2].trim(), "send" to true)
+            )
+        }
+
         val typedOnly = Regex("(?i)^open\\s+whats\\s*app\\s+and\\s+search(?:\\s+for)?\\s+(.+?)\\s+and\\s+type\\s+(.+)$").find(normalized)
         if (typedOnly != null) {
             val contact = cleanArg(typedOnly.groupValues[1])
             val value = cleanArg(typedOnly.groupValues[2], preserveSentencePunctuation = true).trim('"', '\'')
-            return ParsedCommand(
-                "android_sequence",
-                plan = ActionPlan(steps = listOf(
-                    ActionStep("open_app", mapOf("app" to "WhatsApp")),
-                    ActionStep("whatsapp_search", mapOf("contact" to contact)),
-                    ActionStep("set_text", mapOf("text" to value))
-                ))
-            )
+            return ParsedCommand("android_sequence", plan = ActionPlan(steps = listOf(
+                ActionStep("open_app", mapOf("app" to "WhatsApp")),
+                ActionStep("whatsapp_search", mapOf("contact" to contact)),
+                ActionStep("set_text", mapOf("text" to value))
+            )))
         }
 
         val messagePatterns = listOf(
@@ -102,17 +115,12 @@ object CommandParser {
                 contact = cleanArg(match.groupValues[1])
                 message = cleanArg(match.groupValues[2], preserveSentencePunctuation = true).trim('"', '\'')
             }
-            if (contact.isNotBlank() && message.isNotBlank()) {
-                return ParsedCommand("whatsapp_message", mapOf("contact" to contact, "message" to message, "send" to true))
-            }
+            if (contact.isNotBlank() && message.isNotBlank()) return ParsedCommand("whatsapp_message", mapOf("contact" to contact, "message" to message, "send" to true))
         }
 
         val search = Regex("(?i)^(?:open\\s+)?whats\\s*app(?:\\s+and)?\\s+(?:search|search\\s+for)\\s+(.+)$").find(normalized)
             ?: Regex("(?i)^search\\s+(.+?)\\s+on\\s+whats\\s*app$").find(normalized)
-        if (search != null) {
-            val contact = cleanArg(search.groupValues[1])
-            return ParsedCommand("whatsapp_search", mapOf("contact" to contact, "send" to false))
-        }
+        if (search != null) return ParsedCommand("whatsapp_search", mapOf("contact" to cleanArg(search.groupValues[1]), "send" to false))
         return null
     }
 
@@ -147,7 +155,7 @@ object CommandParser {
             return ParsedCommand("android_sequence", plan = ActionPlan(steps = steps))
         }
 
-        val click = Regex("(?i)^(?:open|tap|click)\\s+(.+?)[.!? ]*$").find(tail)
+        val click = Regex("(?i)^(?:open|tap|click|press)\\s+(.+?)[.!? ]*$").find(tail)
         if (click != null) {
             steps += ActionStep("click_text", mapOf("text" to cleanArg(click.groupValues[1])))
             return ParsedCommand("android_sequence", plan = ActionPlan(steps = steps))
