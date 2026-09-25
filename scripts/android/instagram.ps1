@@ -57,22 +57,21 @@ function Start-Instagram {
         Invoke-Adb @("shell", "monkey", "-p", "com.instagram.android", "-c", "android.intent.category.LAUNCHER", "1") | Out-Null
     }
 
-    Start-Sleep -Milliseconds 1600
+    Start-Sleep -Milliseconds 1400
 }
 
-Start-Instagram
-if (-not (Test-InstagramForeground)) {
+function Open-InstagramReels {
+    try {
+        Invoke-Adb @("shell", "am", "start", "-W", "-a", "android.intent.action.VIEW", "-d", "instagram://reels", "-p", "com.instagram.android") | Out-Null
+        Start-Sleep -Milliseconds 1600
+        if (Test-InstagramForeground) { return $true }
+    } catch {}
+
     Start-Instagram
+    return (Test-InstagramForeground)
 }
 
-if (-not (Test-InstagramForeground)) {
-    throw "Instagram launch was requested, but com.instagram.android did not become the foreground app."
-}
-
-$swipeUp = $request -match '(?i)\b(?:scroll\s+up|swipe\s+up|next\s+reel|next\s+video)\b'
-$swipeDown = $request -match '(?i)\b(?:scroll\s+down|swipe\s+down|previous\s+reel|previous\s+video)\b'
-
-if ($swipeUp -or $swipeDown) {
+function Get-ScreenSize {
     $sizeText = Invoke-Adb @("shell", "wm", "size")
     $matches = [regex]::Matches($sizeText, '(\d+)x(\d+)')
     $width = 1080
@@ -82,29 +81,73 @@ if ($swipeUp -or $swipeDown) {
         $width = [int]$last.Groups[1].Value
         $height = [int]$last.Groups[2].Value
     }
-
-    $x = [int]($width * 0.5)
-    $top = [int]($height * 0.28)
-    $bottom = [int]($height * 0.78)
-
-    if ($swipeUp) {
-        Invoke-Adb @("shell", "input", "swipe", "$x", "$bottom", "$x", "$top", "420") | Out-Null
-    } elseif ($swipeDown) {
-        Invoke-Adb @("shell", "input", "swipe", "$x", "$top", "$x", "$bottom", "420") | Out-Null
-    }
-
-    Start-Sleep -Milliseconds 650
-    if (-not (Test-InstagramForeground)) {
-        throw "Instagram stopped being the foreground app before the swipe workflow completed."
-    }
+    return @{ Width = $width; Height = $height }
 }
 
-$message = if ($swipeUp) {
-    "instagram.ps1 executed. Instagram opened and swiped up."
-} elseif ($swipeDown) {
-    "instagram.ps1 executed. Instagram opened and swiped down."
+$wantsReels = $request -match '(?i)\b(?:reel|reels|video|videos)\b'
+$swipeUp = $request -match '(?i)\b(?:scroll\s+up|swipe\s+up|next\s+reel|next\s+video)\b'
+$swipeDown = $request -match '(?i)\b(?:scroll\s+down|swipe\s+down|previous\s+reel|previous\s+video)\b'
+$likeCurrent = $request -match '(?i)^(?:\s*(?:hey\s+)?jazz[,\s:-]*)?(?:like|heart)(?:\s+(?:this|the|current))?\s+(?:reel|video)[.!? ]*$' -or
+               $request -match '(?i)^(?:\s*(?:hey\s+)?jazz[,\s:-]*)?double\s+tap(?:\s+(?:this|the|current))?\s+(?:reel|video)[.!? ]*$'
+
+# For a like command, preserve the reel the user is already watching. For an explicit
+# open-reel command, use Instagram's reels deep link first and fall back to normal launch.
+if ($likeCurrent -and (Test-InstagramForeground)) {
+    # Keep current foreground reel/video exactly where it is.
+} elseif ($wantsReels) {
+    if (-not (Open-InstagramReels)) {
+        throw "Instagram Reels could not be opened."
+    }
 } else {
-    "instagram.ps1 executed. Instagram opened."
+    Start-Instagram
+    if (-not (Test-InstagramForeground)) { Start-Instagram }
+}
+
+if (-not (Test-InstagramForeground)) {
+    throw "Instagram launch was requested, but com.instagram.android did not become the foreground app."
+}
+
+$size = Get-ScreenSize
+$width = [int]$size.Width
+$height = [int]$size.Height
+$x = [int]($width * 0.5)
+$top = [int]($height * 0.28)
+$bottom = [int]($height * 0.78)
+$centerY = [int]($height * 0.48)
+
+if ($swipeUp) {
+    Invoke-Adb @("shell", "input", "swipe", "$x", "$bottom", "$x", "$top", "360") | Out-Null
+    Start-Sleep -Milliseconds 520
+} elseif ($swipeDown) {
+    Invoke-Adb @("shell", "input", "swipe", "$x", "$top", "$x", "$bottom", "360") | Out-Null
+    Start-Sleep -Milliseconds 520
+}
+
+if ($likeCurrent) {
+    Invoke-Adb @("shell", "input", "tap", "$x", "$centerY") | Out-Null
+    Start-Sleep -Milliseconds 110
+    Invoke-Adb @("shell", "input", "tap", "$x", "$centerY") | Out-Null
+    Start-Sleep -Milliseconds 300
+}
+
+if (-not (Test-InstagramForeground)) {
+    throw "Instagram stopped being the foreground app before the requested reel action completed."
+}
+
+$message = if ($likeCurrent) {
+    "Liked the current Instagram reel/video with a double tap."
+} elseif ($swipeUp -and $wantsReels) {
+    "Instagram Reels opened and scrolled up."
+} elseif ($swipeDown -and $wantsReels) {
+    "Instagram Reels opened and scrolled down."
+} elseif ($wantsReels) {
+    "Instagram Reels opened."
+} elseif ($swipeUp) {
+    "Instagram opened and scrolled up."
+} elseif ($swipeDown) {
+    "Instagram opened and scrolled down."
+} else {
+    "Instagram opened."
 }
 
 [pscustomobject]@{
@@ -114,6 +157,8 @@ $message = if ($swipeUp) {
     script             = "instagram.ps1"
     executedScript     = $true
     foregroundVerified = $true
+    reelsRequested     = $wantsReels
     swipedUp           = $swipeUp
     swipedDown         = $swipeDown
+    likedCurrent       = $likeCurrent
 } | ConvertTo-Json -Compress
