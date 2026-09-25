@@ -60,6 +60,16 @@ class AccessibilityActions(private val service: AccessibilityService) {
         return gestureScroll(forward = false)
     }
 
+    /**
+     * Voice commands "scroll up" / "swipe up" must always be a physical vertical
+     * finger swipe. Do not delegate these to ACTION_SCROLL_FORWARD because apps like
+     * Instagram may expose a horizontal carousel as the first scrollable node.
+     */
+    fun swipeUp(): Boolean = gestureScroll(forward = true)
+
+    /** Voice command "scroll down" / "swipe down": physical vertical finger swipe down. */
+    fun swipeDown(): Boolean = gestureScroll(forward = false)
+
     private fun gestureScroll(forward: Boolean): Boolean {
         val metrics: DisplayMetrics = service.resources.displayMetrics
         val x = metrics.widthPixels * 0.5f
