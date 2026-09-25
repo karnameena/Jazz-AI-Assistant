@@ -66,7 +66,7 @@ class AndroidAutomationEngine(private val service: AccessibilityService) {
 
     fun executeIntent(intent: String, args: Map<String, Any?>): Map<String, Any?> = when (intent) {
         "whatsapp_message" -> whatsApp.sendMessage(args["contact"]?.toString().orEmpty(), args["message"]?.toString().orEmpty()).toMap()
-        "whatsapp_search" -> whatsApp.searchContact(args["contact"]?.toString().orEmpty(), ).toMap()
+        "whatsapp_search" -> whatsApp.searchContact(args["contact"]?.toString().orEmpty()).toMap()
         else -> execute(intent, args)
     }
 
