@@ -37,10 +37,11 @@ class AndroidAutomationEngine(private val service: AccessibilityService) {
         "double_tap_center" -> simple(actions.doubleTapCenter(), "DOUBLE_TAP_SUCCESS", "Double-tapped the reel to like it.")
         "set_text", "type" -> simple(actions.setText(args["text"]?.toString().orEmpty()), "TEXT_ENTERED", "Text entered.")
         "clear_text" -> simple(actions.clearText(), "TEXT_CLEARED", "Text cleared.")
-        "scroll_forward" -> simple(actions.scrollForward(), "SCROLL_SUCCESS", "Scrolled forward.")
-        "scroll_backward" -> simple(actions.scrollBackward(), "SCROLL_SUCCESS", "Scrolled backward.")
-        "scroll_up" -> simple(actions.swipeUp(), "SCROLL_SUCCESS", "Scrolled up.")
-        "scroll_down" -> simple(actions.swipeDown(), "SCROLL_SUCCESS", "Scrolled down.")
+        // Keep every generic scroll action vertical. Some apps expose horizontal
+        // carousels as the first accessibility-scrollable node, so semantic
+        // ACTION_SCROLL_FORWARD/BACKWARD can move left/right unexpectedly.
+        "scroll_forward", "scroll_up" -> simple(actions.swipeUp(), "SCROLL_SUCCESS", "Scrolled up.")
+        "scroll_backward", "scroll_down" -> simple(actions.swipeDown(), "SCROLL_SUCCESS", "Scrolled down.")
         "search_ui" -> searchUi(args["text"]?.toString().orEmpty())
         "read_screen", "dump_ui_tree" -> readUiTree()
         "current_app" -> currentApp()
