@@ -1,7 +1,6 @@
 package com.gunakarna.jazzassistant.system
 
 import android.Manifest
-import android.app.NotificationManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -28,6 +27,7 @@ class SystemControlManager(private val context: Context) {
 
     private fun adjustVolume(direction: Int, message: String): Map<String, Any?> = try {
         audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, direction, AudioManager.FLAG_SHOW_UI)
+        android.util.Log.i("JAZZ-MEDIA", message)
         ok(message)
     } catch (e: Exception) {
         fail("AUDIO_FAILED", e.message ?: "Audio control failed.")
@@ -45,6 +45,7 @@ class SystemControlManager(private val context: Context) {
         val controller = controllers.firstOrNull()
             ?: return fail("NO_ACTIVE_MEDIA", "No active media session is available. Grant Notification Access if media control is not working.")
         block(controller)
+        android.util.Log.i("JAZZ-MEDIA", "[JAZZ-MEDIA] action=$label package=${controller.packageName}")
         ok("Media $label command sent.", mapOf("packageName" to controller.packageName))
     } catch (e: SecurityException) {
         fail("NOTIFICATION_ACCESS_REQUIRED", "Media control requires Notification Access for Jazz Android Companion.")
@@ -100,6 +101,9 @@ class SystemControlManager(private val context: Context) {
     }
 
     fun endCall(): Map<String, Any?> {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+            return fail("DEFAULT_DIALER_OR_OS_RESTRICTION", "Ending calls directly is not available to Jazz on this Android version. Use the active call UI instead.")
+        }
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.ANSWER_PHONE_CALLS) != PackageManager.PERMISSION_GRANTED) {
             return fail("ANSWER_PHONE_CALLS_REQUIRED", "Phone permission is required before Jazz can request call termination.")
         }
@@ -128,7 +132,7 @@ class SystemControlManager(private val context: Context) {
         )?.use { cursor ->
             val numberIndex = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
             while (cursor.moveToNext()) {
-                cursor.getString(numberIndex)?.takeIf { it.isNotBlank() }?.let(results::add)
+                if (numberIndex >= 0) cursor.getString(numberIndex)?.takeIf { it.isNotBlank() }?.let(results::add)
             }
         }
         return results.distinct()
