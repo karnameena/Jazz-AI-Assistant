@@ -153,7 +153,16 @@ function App() {
         setVoiceTranscript(value);
         if (value) { voice.stop(); setInput(value); void sendMessage(value, voice); }
       },
-      onError: message => addJazzMessage(message)
+      onError: message => {
+        // Local Whisper intentionally ends an empty capture window after prolonged
+        // silence. In hands-free mode that should be a quiet restart, not a message
+        // telling Mama to tap the microphone again.
+        if (/didn't hear speech|did not detect clear speech/i.test(message)) {
+          window.setTimeout(() => { if (voiceRef.current === voice) void voice.start(); }, 250);
+          return;
+        }
+        addJazzMessage(message);
+      }
     });
     voiceRef.current = voice;
     return () => {
@@ -244,6 +253,19 @@ function App() {
       }
     } finally {
       sendInFlightRef.current = false;
+      if (voice) {
+        // A voice turn is a conversation session, not a one-shot microphone press.
+        // Wait for queued TTS (including browser speechSynthesis fallback) to finish,
+        // then resume listening automatically so the next command needs no mic tap.
+        const resumeWhenSpeechEnds = () => {
+          if (window.speechSynthesis?.speaking) {
+            window.setTimeout(resumeWhenSpeechEnds, 220);
+            return;
+          }
+          if (voiceRef.current === voice) void voice.start();
+        };
+        void speechQueueRef.current.finally(() => window.setTimeout(resumeWhenSpeechEnds, 180));
+      }
     }
   };
 
@@ -347,7 +369,7 @@ function App() {
           <DashboardCard icon={<Sparkles />} title="Quick Actions" action="Edit"><div className="quick-actions-grid">{quickActionList.map(action => <QuickAction key={action.label} {...action} />)}</div></DashboardCard>
           <DashboardCard icon={<Smartphone />} title="Devices" action={showAllDevices ? "Collapse" : "See all"} actionClick={() => setShowAllDevices(v => !v)}><div className="device-list">{(visibleDevices.length ? visibleDevices : [{ id: "android-phone", name: "Android Phone", kind: "android", status: "not-configured", bridge: false, connected: false }]).map(device => <DeviceRow key={device.id} device={device} onClick={() => setShowAllDevices(true)} />)}</div></DashboardCard>
           <DashboardCard icon={<Bell />} title="Upcoming Reminders" action="See all"><div className="reminder-list">{reminders.length ? reminders.slice(0, 3).map(item => <ReminderRow key={item.id} item={item} />) : <div className="empty-row">No reminders yet. Use Set Reminder.</div>}</div></DashboardCard>
-          <div className="status-card"><div className="status-top"><div><div className="status-heading"><span className="status-icon"><Zap size={16} /></span><strong>Jazz Status</strong></div><p>Voice assistant ready • {voiceState === "listening" ? "listening..." : voiceState === "speaking" ? "speaking..." : "online"}</p></div><span className="online-badge">Online</span></div><div className="status-wave">{Array.from({ length: 22 }, (_, i) => <i key={i} style={{ height: `${6 + ((i * 11) % 27)}px` }} />)}</div></div>
+          <div className="status-card"><div className="status-top"><div><div className="status-heading"><span className="status-icon"><Zap size={16} /></span><strong>Jazz Status</strong></div><p>Voice assistant ready • {voiceState === "listening" ? "listening..." : voiceState === "speaking" ? "speaking..." : "online"}</p></div><span className="online-badge">Online</span></div><div className="status-wave">{Array.from({ length: 22 }, (_, i) => <i key={i} style={{ height: `${6 + ((i * 11) % 27)}px` }} />}</div></div>
         </aside>
       </div>
       <section className="analytics-row"><div className="activity-card"><div className="analytics-heading"><div><span className="heading-icon blue"><Activity size={16} /></span><strong>Activity Overview</strong></div><button>This Week <ChevronDown size={14} /></button></div><div className="activity-content"><div className="productivity-ring"><span>68%</span><small>Productivity Score</small></div><div className="activity-legend"><Legend dot="purple" label="Chats" value="42%" /><Legend dot="cyan" label="Tasks" value="28%" /><Legend dot="green" label="Automations" value="18%" /><Legend dot="blue" label="Learning" value="12%" /></div></div></div></section></div>
