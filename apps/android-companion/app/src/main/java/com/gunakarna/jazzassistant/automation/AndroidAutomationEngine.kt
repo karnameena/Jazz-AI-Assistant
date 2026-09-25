@@ -14,6 +14,7 @@ import com.gunakarna.jazzassistant.apps.AppLauncher
 import com.gunakarna.jazzassistant.apps.InstalledAppResolver
 import com.gunakarna.jazzassistant.apps.WhatsAppAutomation
 import com.gunakarna.jazzassistant.intents.CommandParser
+import com.gunakarna.jazzassistant.system.SystemControlManager
 
 class AndroidAutomationEngine(private val service: AccessibilityService) {
     private val resolver = InstalledAppResolver(service)
@@ -22,6 +23,7 @@ class AndroidAutomationEngine(private val service: AccessibilityService) {
     private val waiter = UiWaiter { service.rootInActiveWindow }
     private val treeReader = UiTreeReader()
     private val observer = ScreenObserver(service)
+    private val system = SystemControlManager(service)
     private val whatsApp = WhatsAppAutomation(service, launcher, actions, waiter)
 
     fun listApps(): List<Map<String, String>> = launcher.listApps()
@@ -50,6 +52,19 @@ class AndroidAutomationEngine(private val service: AccessibilityService) {
         "current_app" -> currentApp()
         "open_url" -> openUrl(args["url"]?.toString().orEmpty())
         "dial_number" -> dialNumber(args["number"]?.toString().orEmpty())
+        "media_play" -> system.mediaPlay()
+        "media_pause" -> system.mediaPause()
+        "media_next" -> system.mediaNext()
+        "media_previous" -> system.mediaPrevious()
+        "volume_up" -> system.volumeUp()
+        "volume_down" -> system.volumeDown()
+        "mute" -> system.mute()
+        "unmute" -> system.unmute()
+        "flashlight_on" -> system.flashlight(true)
+        "flashlight_off" -> system.flashlight(false)
+        "call_contact" -> system.callContact(args["contact"]?.toString().orEmpty())
+        "answer_call" -> system.answerCall()
+        "end_call" -> system.endCall()
         "whatsapp_search" -> whatsApp.searchContact(args["contact"]?.toString().orEmpty()).toMap()
         "whatsapp_message" -> whatsApp.sendMessage(args["contact"]?.toString().orEmpty(), args["message"]?.toString().orEmpty()).toMap()
         "execute_command" -> executeNaturalCommand(args["command"]?.toString() ?: args["text"]?.toString().orEmpty())
