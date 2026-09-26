@@ -28,13 +28,24 @@ function Invoke-Adb {
 
 function Test-InstagramForeground {
     try {
-        $activity = Invoke-Adb @("shell", "dumpsys", "activity", "activities")
-        if ($activity -match '(?im)(?:mResumedActivity|topResumedActivity).*com\.instagram\.android') { return $true }
-    } catch {}
-    try {
         $window = Invoke-Adb @("shell", "dumpsys", "window", "windows")
         if ($window -match '(?im)mCurrentFocus.*com\.instagram\.android') { return $true }
     } catch {}
+    try {
+        $activity = Invoke-Adb @("shell", "dumpsys", "activity", "activities")
+        if ($activity -match '(?im)(?:mResumedActivity|topResumedActivity).*com\.instagram\.android') { return $true }
+    } catch {}
+    return $false
+}
+
+function Wait-InstagramForeground {
+    param([int]$TimeoutMs = 2200)
+    $elapsed = 0
+    while ($elapsed -lt $TimeoutMs) {
+        if (Test-InstagramForeground) { return $true }
+        Start-Sleep -Milliseconds 180
+        $elapsed += 180
+    }
     return $false
 }
 
@@ -45,11 +56,11 @@ function Start-Instagram {
         $component = ($resolved -split "`r?`n" | Where-Object { $_ -match '^com\.instagram\.android/' } | Select-Object -Last 1)
     } catch {}
     if (-not [string]::IsNullOrWhiteSpace($component)) {
-        Invoke-Adb @("shell", "am", "start", "-W", "-n", $component.Trim()) | Out-Null
+        Invoke-Adb @("shell", "am", "start", "-n", $component.Trim()) | Out-Null
     } else {
         Invoke-Adb @("shell", "monkey", "-p", "com.instagram.android", "-c", "android.intent.category.LAUNCHER", "1") | Out-Null
     }
-    Start-Sleep -Milliseconds 1400
+    [void](Wait-InstagramForeground 2200)
 }
 
 function Get-ScreenSize {
@@ -149,20 +160,19 @@ function Invoke-LikeCurrentReel {
     return @{ Ok = $false; Status = "LIKE_NOT_VERIFIED"; Message = "I tapped Instagram's Like control, but I could not verify that the reel became liked. I am not reporting success." }
 }
 
-function Tap-ReelsTabFromUi {
-    for ($attempt = 0; $attempt -lt 4; $attempt++) {
-        $xml = Get-InstagramUiXml
-        if (-not [string]::IsNullOrWhiteSpace($xml)) {
-            $node = Get-NodeBoundsByAccessibleLabel -Xml $xml -Labels @("Reels")
-            if ($null -ne $node) {
-                $x = [int](($node.Left + $node.Right) / 2)
-                $y = [int](($node.Top + $node.Bottom) / 2)
-                Invoke-Adb @("shell", "input", "tap", "$x", "$y") | Out-Null
-                Start-Sleep -Milliseconds 1300
-                return $true
-            }
+function Tap-ReelsTabFast {
+    # One semantic pass only. uiautomator dump is comparatively expensive, so do not
+    # loop it several times for a simple open-Reels request.
+    $xml = Get-InstagramUiXml
+    if (-not [string]::IsNullOrWhiteSpace($xml)) {
+        $node = Get-NodeBoundsByAccessibleLabel -Xml $xml -Labels @("Reels")
+        if ($null -ne $node) {
+            $x = [int](($node.Left + $node.Right) / 2)
+            $y = [int](($node.Top + $node.Bottom) / 2)
+            Invoke-Adb @("shell", "input", "tap", "$x", "$y") | Out-Null
+            Start-Sleep -Milliseconds 420
+            return $true
         }
-        Start-Sleep -Milliseconds 350
     }
     return $false
 }
@@ -172,21 +182,31 @@ function Tap-ReelsTabFallback {
     $x = [int]([int]$size.Width * 0.70)
     $y = [int]([int]$size.Height * 0.92)
     Invoke-Adb @("shell", "input", "tap", "$x", "$y") | Out-Null
-    Start-Sleep -Milliseconds 1400
+    Start-Sleep -Milliseconds 450
 }
 
 function Open-InstagramReels {
+    $deepLinkStarted = $false
     try {
-        Invoke-Adb @("shell", "am", "start", "-W", "-a", "android.intent.action.VIEW", "-d", "instagram://reels", "-p", "com.instagram.android") | Out-Null
-        Start-Sleep -Milliseconds 1300
-    } catch {
-        Start-Instagram
+        Invoke-Adb @("shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", "instagram://reels", "-p", "com.instagram.android") | Out-Null
+        $deepLinkStarted = $true
+    } catch {}
+
+    if ($deepLinkStarted -and (Wait-InstagramForeground 1800)) {
+        # The deep link is the fastest path. Give Instagram a short render window,
+        # then do one semantic Reels-tab check instead of four full UI dumps.
+        Start-Sleep -Milliseconds 220
+        if (Tap-ReelsTabFast) { return (Test-InstagramForeground) }
+        # If the deep link already landed on Reels, there may be no exposed tab label.
+        # Keep Instagram in foreground and treat the accepted deep-link launch as the
+        # primary successful path instead of adding several seconds of probing.
+        return (Test-InstagramForeground)
     }
 
-    if (-not (Test-InstagramForeground)) { Start-Instagram }
-    if (-not (Test-InstagramForeground)) { return $false }
+    Start-Instagram
+    if (-not (Wait-InstagramForeground 1800)) { return $false }
 
-    if (-not (Tap-ReelsTabFromUi)) { Tap-ReelsTabFallback }
+    if (-not (Tap-ReelsTabFast)) { Tap-ReelsTabFallback }
     return (Test-InstagramForeground)
 }
 
@@ -218,10 +238,10 @@ $bottom = [int]($height * 0.78)
 
 if ($swipeUp) {
     Invoke-Adb @("shell", "input", "swipe", "$x", "$bottom", "$x", "$top", "360") | Out-Null
-    Start-Sleep -Milliseconds 520
+    Start-Sleep -Milliseconds 420
 } elseif ($swipeDown) {
     Invoke-Adb @("shell", "input", "swipe", "$x", "$top", "$x", "$bottom", "360") | Out-Null
-    Start-Sleep -Milliseconds 520
+    Start-Sleep -Milliseconds 420
 }
 
 $likeResult = $null
