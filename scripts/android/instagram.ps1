@@ -83,11 +83,9 @@ function Get-NodeBoundsByAccessibleLabel {
 
     foreach ($label in $Labels) {
         $escaped = [regex]::Escape($label)
-        $patterns = @(
-            "<node[^>]*(?:text|content-desc)=\"$escaped\"[^>]*bounds=\"\[(\d+),(\d+)\]\[(\d+),(\d+)\]\"",
-            "<node[^>]*bounds=\"\[(\d+),(\d+)\]\[(\d+),(\d+)\]\"[^>]*(?:text|content-desc)=\"$escaped\""
-        )
-        foreach ($pattern in $patterns) {
+        $pattern1 = '<node[^>]*(?:text|content-desc)="' + $escaped + '"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"'
+        $pattern2 = '<node[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"[^>]*(?:text|content-desc)="' + $escaped + '"'
+        foreach ($pattern in @($pattern1, $pattern2)) {
             $match = [regex]::Match($Xml, $pattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
             if ($match.Success) {
                 return @{
@@ -107,8 +105,6 @@ function Test-LikeState {
     param([string]$Xml)
     if ([string]::IsNullOrWhiteSpace($Xml)) { return "unknown" }
 
-    # Instagram exposes a liked control as Unlike on many builds. Also accept common
-    # accessibility-state variants without depending on a fixed resource ID.
     if ($Xml -match '(?i)(?:text|content-desc)="(?:Unlike|Remove like|Liked)"') { return "liked" }
     if ($Xml -match '(?i)(?:text|content-desc)="Like"') { return "not_liked" }
     return "unknown"
@@ -129,7 +125,7 @@ function Invoke-LikeCurrentReel {
         return @{ Ok = $true; Status = "ALREADY_LIKED"; Message = "This Instagram reel/video is already liked." }
     }
 
-    $likeNode = Get-NodeBoundsByAccessibleLabel -Xml $xmlBefore -Labels @("Like", "like")
+    $likeNode = Get-NodeBoundsByAccessibleLabel -Xml $xmlBefore -Labels @("Like")
     if ($null -eq $likeNode) {
         return @{ Ok = $false; Status = "LIKE_CONTROL_NOT_FOUND"; Message = "I could not find a visible Instagram Like control on the current screen, so I stopped without guessing." }
     }
