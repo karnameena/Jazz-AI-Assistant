@@ -72,20 +72,20 @@ export async function refreshBridgeDevices() {
   return refreshInFlight;
 }
 
-async function bridgePost(path, payload) {
+async function bridgePost(path, payload, timeoutMs = 15000) {
   let response;
   try {
     response = await fetch(`${windowsBridgeUrl}${path}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(15000)
+      signal: AbortSignal.timeout(timeoutMs)
     });
   } catch {
     setBridgeOffline();
     // Do not automatically replay POST actions here. Some commands (especially
-    // payment workflows) are not safe to execute twice if the response was lost
-    // after Windows already started the script. Reconnect is handled separately.
+    // payment or toggle workflows) are not safe to execute twice if the response
+    // was lost after Windows already started execution.
     throw new Error("Mobile connection is temporarily unavailable. Jazz could not confirm the Android action, so it was not retried automatically.");
   }
 
@@ -119,12 +119,15 @@ function requireBridgeManagedAndroid(deviceId) {
 
 export async function sendAndroidCommand(deviceId, action, args = {}) {
   requireBridgeManagedAndroid(deviceId);
-  return bridgePost("/command", { deviceId, action, args });
+  return bridgePost("/command", { deviceId, action, args }, 20000);
 }
 
 export async function sendAndroidScript(deviceId, scriptName, args = {}) {
   requireBridgeManagedAndroid(deviceId);
-  return bridgePost("/script", { deviceId, scriptName, args });
+  // Registered workflows can legitimately take longer than a normal command.
+  // instagram.ps1 observes/validates UI state and the bridge itself allows scripts
+  // up to 120 seconds, so a 15-second API timeout created false connection errors.
+  return bridgePost("/script", { deviceId, scriptName, args }, 90000);
 }
 
 // Keep the exported device objects live so the existing /api/devices endpoint can
