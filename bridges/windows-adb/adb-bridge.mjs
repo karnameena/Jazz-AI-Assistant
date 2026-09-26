@@ -44,7 +44,12 @@ const allowedActions = new Set([
   "scroll_down", "scroll_up", "scroll_forward", "scroll_backward",
   "click_text", "long_click_text", "set_text", "type", "clear_text", "search_ui",
   "open_instagram_reels", "read_screen", "dump_ui_tree", "current_app",
+  "speaker_on", "speaker_off",
   "whatsapp_search", "whatsapp_message", "execute_command"
+]);
+
+const safeCompanionRetryActions = new Set([
+  "speaker_on", "speaker_off", "current_app", "read_screen", "dump_ui_tree"
 ]);
 
 let identityState = {};
@@ -304,11 +309,71 @@ async function screenSize(serial) {
   return { width: 1080, height: 2400 };
 }
 
+async function uiXml(serial) {
+  await run(["-s", serial, "shell", "uiautomator", "dump", "/sdcard/jazz_bridge_ui.xml"], 8000);
+  return run(["-s", serial, "shell", "cat", "/sdcard/jazz_bridge_ui.xml"], 8000);
+}
+
+function attr(tag, name) {
+  return tag.match(new RegExp(`${name}="([^"]*)"`, "i"))?.[1] || "";
+}
+
+function speakerNodeFromXml(xml) {
+  const tags = String(xml || "").match(/<node\b[^>]*>/gi) || [];
+  const candidates = tags.map(tag => {
+    const text = attr(tag, "text");
+    const desc = attr(tag, "content-desc");
+    const id = attr(tag, "resource-id");
+    const label = `${desc} ${text}`.trim().toLowerCase();
+    const speakerLike = /^(?:speaker|speakerphone|handsfree)(?:\b|[, ])/i.test(label)
+      || /(?:speaker|speakerphone)/i.test(id);
+    if (!speakerLike) return null;
+    const bounds = attr(tag, "bounds").match(/\[(\d+),(\d+)\]\[(\d+),(\d+)\]/);
+    if (!bounds) return null;
+    let state = null;
+    if (/\b(?:speaker|speakerphone|handsfree)[, ]+(?:on|selected)\b/i.test(label)) state = true;
+    else if (/\b(?:speaker|speakerphone|handsfree)[, ]+off\b/i.test(label)) state = false;
+    else if (attr(tag, "checkable") === "true") state = attr(tag, "checked") === "true";
+    else if (attr(tag, "selected") === "true") state = true;
+    return {
+      label,
+      left: Number(bounds[1]), top: Number(bounds[2]), right: Number(bounds[3]), bottom: Number(bounds[4]),
+      state
+    };
+  }).filter(Boolean);
+  if (candidates.length === 1) return candidates[0];
+  const exact = candidates.filter(item => /^(?:speaker|speakerphone|handsfree)(?:\s|$)/i.test(item.label));
+  return exact.length === 1 ? exact[0] : null;
+}
+
+async function directSpeaker(deviceId, target, enabled) {
+  const serial = await ensureConnected(deviceId, target);
+  const before = speakerNodeFromXml(await uiXml(serial));
+  if (!before) throw new Error("Speaker control is not visible on the current call screen.");
+  if (before.state === enabled) {
+    return { ok: true, status: enabled ? "SPEAKER_ALREADY_ON" : "SPEAKER_ALREADY_OFF", message: enabled ? "Mama, speaker is on." : "Mama, speaker is off.", deviceId };
+  }
+  const x = Math.round((before.left + before.right) / 2);
+  const y = Math.round((before.top + before.bottom) / 2);
+  await run(["-s", serial, "shell", "input", "tap", String(x), String(y)], 5000);
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    await sleep(250);
+    const after = speakerNodeFromXml(await uiXml(serial).catch(() => ""));
+    if (after?.state === enabled) {
+      return { ok: true, status: enabled ? "SPEAKER_ON" : "SPEAKER_OFF", message: enabled ? "Mama, speaker is on." : "Mama, speaker is off.", deviceId };
+    }
+  }
+  throw new Error("Speaker was tapped, but Jazz could not verify the new speaker state.");
+}
+
 async function sendViaDirectAdb(deviceId, target, payload) {
   const serial = await ensureConnected(deviceId, target);
   const action = String(payload?.action || "");
   const args = payload?.args || {};
   const ok = (message, extra = {}) => ({ ok: true, message, transport: "adb-direct-fallback", deviceId, ...extra });
+
+  if (action === "speaker_on") return directSpeaker(deviceId, target, true);
+  if (action === "speaker_off") return directSpeaker(deviceId, target, false);
 
   if (action === "launch_app") {
     const pkg = String(args.packageName || "");
@@ -340,8 +405,6 @@ async function sendViaDirectAdb(deviceId, target, payload) {
   }
   if (["scroll_down", "scroll_up", "scroll_forward", "scroll_backward"].includes(action)) {
     const { width, height } = await screenSize(serial);
-    // "scroll up" means the user's finger swipes upward, which advances a Reel.
-    // Keep the gesture vertical and preserve forward/backward aliases for compatibility.
     const forward = action === "scroll_up" || action === "scroll_forward";
     const x = Math.round(width * 0.5);
     const fromY = Math.round(height * (forward ? 0.78 : 0.28));
@@ -372,23 +435,44 @@ async function sendViaDirectAdb(deviceId, target, payload) {
   throw new Error(`Android companion is unavailable and ${action} requires Jazz Accessibility Service.`);
 }
 
+async function companionRequest(deviceId, target, payload) {
+  await ensureForward(deviceId, target);
+  const response = await fetch(`http://127.0.0.1:${target.localPort}/command`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${target.token}` },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(10000)
+  });
+  const text = await response.text();
+  let data;
+  try { data = JSON.parse(text); } catch { data = { ok: false, message: text }; }
+  if (response.status === 401) {
+    const error = new Error(data?.error || "Android Companion rejected bridge authentication.");
+    error.noFallback = true;
+    throw error;
+  }
+  if (typeof data === "object" && data !== null && Object.hasOwn(data, "ok")) return data;
+  if (!response.ok) return { ok: false, error: data?.error || data?.message || `Android companion request failed (${response.status})` };
+  return data;
+}
+
 async function sendToAndroid(deviceId, target, payload) {
+  const retryable = safeCompanionRetryActions.has(String(payload?.action || ""));
   let companionError = null;
-  try {
-    await ensureForward(deviceId, target);
-    const response = await fetch(`http://127.0.0.1:${target.localPort}/command`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${target.token}` },
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(10000)
-    });
-    const text = await response.text();
-    let data;
-    try { data = JSON.parse(text); } catch { data = { message: text }; }
-    if (response.ok && data?.ok !== false) return data;
-    companionError = new Error(data?.error || data?.message || `Android companion request failed (${response.status})`);
-  } catch (error) {
-    companionError = error instanceof Error ? error : new Error(String(error));
+  const attempts = retryable ? 3 : 1;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      const data = await companionRequest(deviceId, target, payload);
+      return data;
+    } catch (error) {
+      companionError = error instanceof Error ? error : new Error(String(error));
+      if (companionError.noFallback) throw companionError;
+      if (attempt + 1 < attempts) {
+        await sleep(300 + attempt * 250);
+        continue;
+      }
+    }
   }
 
   try {
