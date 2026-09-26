@@ -10,7 +10,13 @@ const cases = [
   ["serch guna", "search guna", "SEARCH_UI"],
   ["opn swigy", "open Swiggy", "OPEN_APP"],
   ["hey jazz what is my mobile status", "hey jazz what is my mobile status", "MOBILE_STATUS"],
-  ["Hey Jazz, pay ₹1 to Mom. She asked me to buy Clinic Plus.", "hey jazz pay ₹1 to Mom. She asked me to buy Clinic Plus.", "PAY_MOM"]
+  ["Hey Jazz, pay ₹1 to Mom. She asked me to buy Clinic Plus.", "hey jazz pay ₹1 to Mom. She asked me to buy Clinic Plus.", "PAY_MOM"],
+  ["Hey Jazz, cut the call", "hey jazz end the call", "END_CALL"],
+  ["disconnect the call", "end the call", "END_CALL"],
+  ["disconect the call", "end the call", "END_CALL"],
+  ["close the call", "end the call", "END_CALL"],
+  ["cut the cal", "end the call", "END_CALL"],
+  ["hang up", "end the call", "END_CALL"]
 ];
 
 for (const [raw, expected, intent] of cases) {
