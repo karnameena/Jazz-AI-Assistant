@@ -29,18 +29,12 @@ function Invoke-Adb {
 function Test-InstagramForeground {
     try {
         $activity = Invoke-Adb @("shell", "dumpsys", "activity", "activities")
-        if ($activity -match '(?im)(?:mResumedActivity|topResumedActivity).*com\.instagram\.android') {
-            return $true
-        }
+        if ($activity -match '(?im)(?:mResumedActivity|topResumedActivity).*com\.instagram\.android') { return $true }
     } catch {}
-
     try {
         $window = Invoke-Adb @("shell", "dumpsys", "window", "windows")
-        if ($window -match '(?im)mCurrentFocus.*com\.instagram\.android') {
-            return $true
-        }
+        if ($window -match '(?im)mCurrentFocus.*com\.instagram\.android') { return $true }
     } catch {}
-
     return $false
 }
 
@@ -50,13 +44,11 @@ function Start-Instagram {
         $resolved = Invoke-Adb @("shell", "cmd", "package", "resolve-activity", "--brief", "com.instagram.android")
         $component = ($resolved -split "`r?`n" | Where-Object { $_ -match '^com\.instagram\.android/' } | Select-Object -Last 1)
     } catch {}
-
     if (-not [string]::IsNullOrWhiteSpace($component)) {
         Invoke-Adb @("shell", "am", "start", "-W", "-n", $component.Trim()) | Out-Null
     } else {
         Invoke-Adb @("shell", "monkey", "-p", "com.instagram.android", "-c", "android.intent.category.LAUNCHER", "1") | Out-Null
     }
-
     Start-Sleep -Milliseconds 1400
 }
 
@@ -82,23 +74,96 @@ function Get-InstagramUiXml {
     }
 }
 
+function Get-NodeBoundsByAccessibleLabel {
+    param(
+        [string]$Xml,
+        [string[]]$Labels
+    )
+    if ([string]::IsNullOrWhiteSpace($Xml)) { return $null }
+
+    foreach ($label in $Labels) {
+        $escaped = [regex]::Escape($label)
+        $patterns = @(
+            "<node[^>]*(?:text|content-desc)=\"$escaped\"[^>]*bounds=\"\[(\d+),(\d+)\]\[(\d+),(\d+)\]\"",
+            "<node[^>]*bounds=\"\[(\d+),(\d+)\]\[(\d+),(\d+)\]\"[^>]*(?:text|content-desc)=\"$escaped\""
+        )
+        foreach ($pattern in $patterns) {
+            $match = [regex]::Match($Xml, $pattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+            if ($match.Success) {
+                return @{
+                    Label = $label
+                    Left = [int]$match.Groups[1].Value
+                    Top = [int]$match.Groups[2].Value
+                    Right = [int]$match.Groups[3].Value
+                    Bottom = [int]$match.Groups[4].Value
+                }
+            }
+        }
+    }
+    return $null
+}
+
+function Test-LikeState {
+    param([string]$Xml)
+    if ([string]::IsNullOrWhiteSpace($Xml)) { return "unknown" }
+
+    # Instagram exposes a liked control as Unlike on many builds. Also accept common
+    # accessibility-state variants without depending on a fixed resource ID.
+    if ($Xml -match '(?i)(?:text|content-desc)="(?:Unlike|Remove like|Liked)"') { return "liked" }
+    if ($Xml -match '(?i)(?:text|content-desc)="Like"') { return "not_liked" }
+    return "unknown"
+}
+
+function Invoke-LikeCurrentReel {
+    if (-not (Test-InstagramForeground)) {
+        return @{ Ok = $false; Status = "WRONG_SCREEN"; Message = "Instagram is not the current foreground app." }
+    }
+
+    $xmlBefore = Get-InstagramUiXml
+    if ([string]::IsNullOrWhiteSpace($xmlBefore)) {
+        return @{ Ok = $false; Status = "UI_UNAVAILABLE"; Message = "I could not inspect the current Instagram screen, so I did not claim the reel was liked." }
+    }
+
+    $beforeState = Test-LikeState $xmlBefore
+    if ($beforeState -eq "liked") {
+        return @{ Ok = $true; Status = "ALREADY_LIKED"; Message = "This Instagram reel/video is already liked." }
+    }
+
+    $likeNode = Get-NodeBoundsByAccessibleLabel -Xml $xmlBefore -Labels @("Like", "like")
+    if ($null -eq $likeNode) {
+        return @{ Ok = $false; Status = "LIKE_CONTROL_NOT_FOUND"; Message = "I could not find a visible Instagram Like control on the current screen, so I stopped without guessing." }
+    }
+
+    $tapX = [int](($likeNode.Left + $likeNode.Right) / 2)
+    $tapY = [int](($likeNode.Top + $likeNode.Bottom) / 2)
+    Invoke-Adb @("shell", "input", "tap", "$tapX", "$tapY") | Out-Null
+
+    for ($attempt = 0; $attempt -lt 8; $attempt++) {
+        Start-Sleep -Milliseconds 300
+        if (-not (Test-InstagramForeground)) {
+            return @{ Ok = $false; Status = "WRONG_SCREEN"; Message = "Instagram left the foreground before I could verify the Like action." }
+        }
+        $xmlAfter = Get-InstagramUiXml
+        $afterState = Test-LikeState $xmlAfter
+        if ($afterState -eq "liked") {
+            return @{ Ok = $true; Status = "LIKE_VERIFIED"; Message = "Liked the current Instagram reel/video and verified the Like state on screen." }
+        }
+    }
+
+    return @{ Ok = $false; Status = "LIKE_NOT_VERIFIED"; Message = "I tapped Instagram's Like control, but I could not verify that the reel became liked. I am not reporting success." }
+}
+
 function Tap-ReelsTabFromUi {
     for ($attempt = 0; $attempt -lt 4; $attempt++) {
         $xml = Get-InstagramUiXml
         if (-not [string]::IsNullOrWhiteSpace($xml)) {
-            $nodePatterns = @(
-                '<node[^>]*(?:text|content-desc)="Reels"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
-                '<node[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"[^>]*(?:text|content-desc)="Reels"'
-            )
-            foreach ($pattern in $nodePatterns) {
-                $match = [regex]::Match($xml, $pattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
-                if ($match.Success) {
-                    $x = [int](([int]$match.Groups[1].Value + [int]$match.Groups[3].Value) / 2)
-                    $y = [int](([int]$match.Groups[2].Value + [int]$match.Groups[4].Value) / 2)
-                    Invoke-Adb @("shell", "input", "tap", "$x", "$y") | Out-Null
-                    Start-Sleep -Milliseconds 1300
-                    return $true
-                }
+            $node = Get-NodeBoundsByAccessibleLabel -Xml $xml -Labels @("Reels")
+            if ($null -ne $node) {
+                $x = [int](($node.Left + $node.Right) / 2)
+                $y = [int](($node.Top + $node.Bottom) / 2)
+                Invoke-Adb @("shell", "input", "tap", "$x", "$y") | Out-Null
+                Start-Sleep -Milliseconds 1300
+                return $true
             }
         }
         Start-Sleep -Milliseconds 350
@@ -108,8 +173,6 @@ function Tap-ReelsTabFromUi {
 
 function Tap-ReelsTabFallback {
     $size = Get-ScreenSize
-    # Instagram's five-item bottom navigation normally places Reels around 70% width.
-    # Keep this proportional so it works across phone resolutions and navigation-bar sizes.
     $x = [int]([int]$size.Width * 0.70)
     $y = [int]([int]$size.Height * 0.92)
     Invoke-Adb @("shell", "input", "tap", "$x", "$y") | Out-Null
@@ -117,8 +180,6 @@ function Tap-ReelsTabFallback {
 }
 
 function Open-InstagramReels {
-    # Try Instagram's own deep link first. Some Instagram versions only bring the app
-    # foreground without selecting Reels, so always follow it with an actual Reels-tab tap.
     try {
         Invoke-Adb @("shell", "am", "start", "-W", "-a", "android.intent.action.VIEW", "-d", "instagram://reels", "-p", "com.instagram.android") | Out-Null
         Start-Sleep -Milliseconds 1300
@@ -126,15 +187,10 @@ function Open-InstagramReels {
         Start-Instagram
     }
 
-    if (-not (Test-InstagramForeground)) {
-        Start-Instagram
-    }
+    if (-not (Test-InstagramForeground)) { Start-Instagram }
     if (-not (Test-InstagramForeground)) { return $false }
 
-    if (-not (Tap-ReelsTabFromUi)) {
-        Tap-ReelsTabFallback
-    }
-
+    if (-not (Tap-ReelsTabFromUi)) { Tap-ReelsTabFallback }
     return (Test-InstagramForeground)
 }
 
@@ -144,14 +200,10 @@ $swipeDown = $request -match '(?i)\b(?:scroll\s+down|swipe\s+down|previous\s+ree
 $likeCurrent = $request -match '(?i)^(?:\s*(?:hey\s+)?jazz[,\s:-]*)?(?:like|heart)(?:\s+(?:this|the|current))?\s+(?:reel|video)[.!? ]*$' -or
                $request -match '(?i)^(?:\s*(?:hey\s+)?jazz[,\s:-]*)?double\s+tap(?:\s+(?:this|the|current))?\s+(?:reel|video)[.!? ]*$'
 
-# For a like command, preserve the reel the user is already watching. For an explicit
-# open-reel command, select the actual Reels tab instead of merely opening Instagram.
 if ($likeCurrent -and (Test-InstagramForeground)) {
-    # Keep current foreground reel/video exactly where it is.
+    # Preserve the reel the user is already viewing.
 } elseif ($wantsReels) {
-    if (-not (Open-InstagramReels)) {
-        throw "Instagram Reels could not be opened."
-    }
+    if (-not (Open-InstagramReels)) { throw "Instagram Reels could not be opened." }
 } else {
     Start-Instagram
     if (-not (Test-InstagramForeground)) { Start-Instagram }
@@ -167,10 +219,7 @@ $height = [int]$size.Height
 $x = [int]($width * 0.5)
 $top = [int]($height * 0.28)
 $bottom = [int]($height * 0.78)
-$centerY = [int]($height * 0.43)
 
-# These are explicit vertical ADB gestures. No Accessibility scrollable-node action is
-# used here, so Instagram cannot reinterpret "scroll up" as a horizontal carousel swipe.
 if ($swipeUp) {
     Invoke-Adb @("shell", "input", "swipe", "$x", "$bottom", "$x", "$top", "360") | Out-Null
     Start-Sleep -Milliseconds 520
@@ -179,11 +228,25 @@ if ($swipeUp) {
     Start-Sleep -Milliseconds 520
 }
 
+$likeResult = $null
 if ($likeCurrent) {
-    Invoke-Adb @("shell", "input", "tap", "$x", "$centerY") | Out-Null
-    Start-Sleep -Milliseconds 120
-    Invoke-Adb @("shell", "input", "tap", "$x", "$centerY") | Out-Null
-    Start-Sleep -Milliseconds 320
+    $likeResult = Invoke-LikeCurrentReel
+    if (-not $likeResult.Ok) {
+        [pscustomobject]@{
+            ok                 = $false
+            status             = $likeResult.Status
+            message            = $likeResult.Message
+            script             = "instagram.ps1"
+            executedScript     = $true
+            foregroundVerified = (Test-InstagramForeground)
+            reelsRequested     = $wantsReels
+            swipedUp           = $swipeUp
+            swipedDown         = $swipeDown
+            likedCurrent       = $false
+            likeVerified       = $false
+        } | ConvertTo-Json -Compress
+        exit 0
+    }
 }
 
 if (-not (Test-InstagramForeground)) {
@@ -191,7 +254,7 @@ if (-not (Test-InstagramForeground)) {
 }
 
 $message = if ($likeCurrent) {
-    "Liked the current Instagram reel/video with a double tap."
+    $likeResult.Message
 } elseif ($swipeUp -and $wantsReels) {
     "Instagram Reels opened and scrolled up."
 } elseif ($swipeDown -and $wantsReels) {
@@ -208,7 +271,7 @@ $message = if ($likeCurrent) {
 
 [pscustomobject]@{
     ok                 = $true
-    status             = "completed"
+    status             = if ($likeCurrent) { $likeResult.Status } else { "completed" }
     message            = $message
     script             = "instagram.ps1"
     executedScript     = $true
@@ -216,5 +279,6 @@ $message = if ($likeCurrent) {
     reelsRequested     = $wantsReels
     swipedUp           = $swipeUp
     swipedDown         = $swipeDown
-    likedCurrent       = $likeCurrent
+    likedCurrent       = ($likeCurrent -and $likeResult.Ok)
+    likeVerified       = ($likeCurrent -and $likeResult.Ok)
 } | ConvertTo-Json -Compress
