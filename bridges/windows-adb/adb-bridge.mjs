@@ -44,7 +44,7 @@ const allowedActions = new Set([
   "scroll_down", "scroll_up", "scroll_forward", "scroll_backward",
   "click_text", "long_click_text", "set_text", "type", "clear_text", "search_ui",
   "open_instagram_reels", "read_screen", "dump_ui_tree", "current_app",
-  "speaker_on", "speaker_off",
+  "speaker_on", "speaker_off", "call_contact", "answer_call", "end_call",
   "whatsapp_search", "whatsapp_message", "execute_command"
 ]);
 
@@ -130,14 +130,12 @@ async function directReconnect(deviceId, target) {
 async function adoptExistingTransport(deviceId, target) {
   const devices = await connectedDevices();
   if (!devices.length) return false;
-
   const configured = devices.find(item => item.serial === target.configuredSerial);
   if (configured) {
     target.serial = configured.serial;
     await rememberIdentity(deviceId, configured.serial);
     return true;
   }
-
   const knownIdentity = identityState[deviceId] || "";
   if (knownIdentity) {
     for (const device of devices) {
@@ -147,7 +145,6 @@ async function adoptExistingTransport(deviceId, target) {
       }
     }
   }
-
   if (devices.length === 1) {
     target.serial = devices[0].serial;
     await rememberIdentity(deviceId, target.serial);
@@ -168,13 +165,9 @@ async function discoverAndReconnect(deviceId, target) {
   let output;
   try { output = await run(["mdns", "services"], 5000); }
   catch { return false; }
-
   const entries = output.split(/\r?\n/).map(parseMdnsEndpoint).filter(Boolean);
   const known = identityState[deviceId] || "";
-  const candidates = known
-    ? [...entries.filter(entry => entry.serviceName.includes(known)), ...entries]
-    : entries;
-
+  const candidates = known ? [...entries.filter(entry => entry.serviceName.includes(known)), ...entries] : entries;
   for (const entry of candidates) {
     try {
       await run(["connect", entry.endpoint], 8000).catch(() => "");
@@ -218,12 +211,7 @@ async function ensureForward(deviceId, target) {
 async function wakeDevice(deviceId, target) {
   const serial = await ensureConnected(deviceId, target);
   await run(["-s", serial, "shell", "input", "keyevent", "KEYCODE_WAKEUP"]);
-  return {
-    ok: true,
-    status: "authentication_required",
-    message: `${deviceId === "android-tablet" ? "Tablet" : "Mobile"} is awake. Authenticate on the device, then Jazz can continue.`,
-    deviceId
-  };
+  return { ok: true, status: "authentication_required", message: `${deviceId === "android-tablet" ? "Tablet" : "Mobile"} is awake. Authenticate on the device, then Jazz can continue.`, deviceId };
 }
 
 function resolveRegisteredScriptFile(scriptName) {
@@ -259,13 +247,10 @@ function buildScriptLaunch(file, target, args = {}) {
     JAZZ_SCRIPT_ARGS: JSON.stringify({ ...args, amount })
   };
   if (amount !== null) env.JAZZ_PAYMENT_AMOUNT = String(amount);
-
   const extension = extname(file).toLowerCase();
   return {
     command: extension === ".ps1" ? powershellPath : bashPath,
-    commandArgs: extension === ".ps1"
-      ? ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", file]
-      : [file],
+    commandArgs: extension === ".ps1" ? ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", file] : [file],
     env,
     amount
   };
@@ -276,9 +261,7 @@ function normalizeScriptResult(file, stdout) {
   const lastLine = output.split(/\r?\n/).filter(Boolean).pop() || "";
   try {
     const parsed = JSON.parse(lastLine);
-    if (parsed && typeof parsed === "object") {
-      return { ...parsed, ok: parsed.ok !== false, stdout: output, script: parsed.script || basename(file), executedScript: true };
-    }
+    if (parsed && typeof parsed === "object") return { ...parsed, ok: parsed.ok !== false, stdout: output, script: parsed.script || basename(file), executedScript: true };
   } catch {}
   return { ok: true, message: output || `${basename(file)} completed.`, stdout: output, script: basename(file), executedScript: true };
 }
@@ -325,8 +308,7 @@ function speakerNodeFromXml(xml) {
     const desc = attr(tag, "content-desc");
     const id = attr(tag, "resource-id");
     const label = `${desc} ${text}`.trim().toLowerCase();
-    const speakerLike = /^(?:speaker|speakerphone|handsfree)(?:\b|[, ])/i.test(label)
-      || /(?:speaker|speakerphone)/i.test(id);
+    const speakerLike = /^(?:speaker|speakerphone|handsfree)(?:\b|[, ])/i.test(label) || /(?:speaker|speakerphone)/i.test(id);
     if (!speakerLike) return null;
     const bounds = attr(tag, "bounds").match(/\[(\d+),(\d+)\]\[(\d+),(\d+)\]/);
     if (!bounds) return null;
@@ -335,11 +317,7 @@ function speakerNodeFromXml(xml) {
     else if (/\b(?:speaker|speakerphone|handsfree)[, ]+off\b/i.test(label)) state = false;
     else if (attr(tag, "checkable") === "true") state = attr(tag, "checked") === "true";
     else if (attr(tag, "selected") === "true") state = true;
-    return {
-      label,
-      left: Number(bounds[1]), top: Number(bounds[2]), right: Number(bounds[3]), bottom: Number(bounds[4]),
-      state
-    };
+    return { label, left: Number(bounds[1]), top: Number(bounds[2]), right: Number(bounds[3]), bottom: Number(bounds[4]), state };
   }).filter(Boolean);
   if (candidates.length === 1) return candidates[0];
   const exact = candidates.filter(item => /^(?:speaker|speakerphone|handsfree)(?:\s|$)/i.test(item.label));
@@ -350,20 +328,54 @@ async function directSpeaker(deviceId, target, enabled) {
   const serial = await ensureConnected(deviceId, target);
   const before = speakerNodeFromXml(await uiXml(serial));
   if (!before) throw new Error("Speaker control is not visible on the current call screen.");
-  if (before.state === enabled) {
-    return { ok: true, status: enabled ? "SPEAKER_ALREADY_ON" : "SPEAKER_ALREADY_OFF", message: enabled ? "Mama, speaker is on." : "Mama, speaker is off.", deviceId };
-  }
+  if (before.state === enabled) return { ok: true, status: enabled ? "SPEAKER_ALREADY_ON" : "SPEAKER_ALREADY_OFF", message: enabled ? "Mama, speaker is on." : "Mama, speaker is off.", deviceId };
   const x = Math.round((before.left + before.right) / 2);
   const y = Math.round((before.top + before.bottom) / 2);
   await run(["-s", serial, "shell", "input", "tap", String(x), String(y)], 5000);
   for (let attempt = 0; attempt < 8; attempt += 1) {
     await sleep(250);
     const after = speakerNodeFromXml(await uiXml(serial).catch(() => ""));
-    if (after?.state === enabled) {
-      return { ok: true, status: enabled ? "SPEAKER_ON" : "SPEAKER_OFF", message: enabled ? "Mama, speaker is on." : "Mama, speaker is off.", deviceId };
-    }
+    if (after?.state === enabled) return { ok: true, status: enabled ? "SPEAKER_ON" : "SPEAKER_OFF", message: enabled ? "Mama, speaker is on." : "Mama, speaker is off.", deviceId };
   }
   throw new Error("Speaker was tapped, but Jazz could not verify the new speaker state.");
+}
+
+function normalizeContact(value) {
+  return String(value || "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function parseContactQuery(output, requestedName) {
+  const requested = normalizeContact(requestedName);
+  const matches = [];
+  for (const line of String(output || "").split(/\r?\n/)) {
+    const name = line.match(/(?:^|,\s*)display_name=([^,]*)/i)?.[1]?.trim();
+    const number = line.match(/(?:^|,\s*)number=([^,]*)(?:,|$)/i)?.[1]?.trim();
+    if (!name || !number || normalizeContact(name) !== requested) continue;
+    const cleanNumber = number.replace(/[^0-9+]/g, "");
+    if (cleanNumber.length >= 3) matches.push(cleanNumber);
+  }
+  return [...new Set(matches)];
+}
+
+async function directCallContact(deviceId, target, contact) {
+  const name = String(contact || "").trim();
+  if (!name) throw new Error("A contact name is required.");
+  if (name.length > 120 || /[\r\n\0]/.test(name)) throw new Error("Invalid contact name.");
+  const serial = await ensureConnected(deviceId, target);
+  const sqlName = name.replace(/'/g, "''");
+  const query = await run([
+    "-s", serial, "shell", "content", "query",
+    "--uri", "content://com.android.contacts/data/phones",
+    "--projection", "display_name:number",
+    "--where", `display_name='${sqlName}' COLLATE NOCASE`
+  ], 10000);
+  const numbers = parseContactQuery(query, name);
+  if (numbers.length === 0) throw new Error(`No saved contact exactly matched '${name}'.`);
+  if (numbers.length > 1) throw new Error(`Multiple phone numbers match '${name}'. Please choose the specific number before calling.`);
+  const number = numbers[0];
+  const output = await run(["-s", serial, "shell", "am", "start", "-W", "-a", "android.intent.action.CALL", "-d", `tel:${number}`], 15000);
+  if (/exception|error|permission denial/i.test(output)) throw new Error(`Android did not allow Jazz to place the call to ${name}.`);
+  return { ok: true, status: "CALL_STARTED", message: `Calling ${name}.`, contact: name, deviceId, transport: "adb-contact-fallback" };
 }
 
 async function sendViaDirectAdb(deviceId, target, payload) {
@@ -374,6 +386,7 @@ async function sendViaDirectAdb(deviceId, target, payload) {
 
   if (action === "speaker_on") return directSpeaker(deviceId, target, true);
   if (action === "speaker_off") return directSpeaker(deviceId, target, false);
+  if (action === "call_contact") return directCallContact(deviceId, target, args.contact);
 
   if (action === "launch_app") {
     const pkg = String(args.packageName || "");
@@ -382,12 +395,7 @@ async function sendViaDirectAdb(deviceId, target, payload) {
     return ok("App launched through direct ADB", { packageName: pkg });
   }
   if (action === "home" || action === "back" || action === "recents" || action === "notifications") {
-    const key = {
-      home: "KEYCODE_HOME",
-      back: "KEYCODE_BACK",
-      recents: "KEYCODE_APP_SWITCH",
-      notifications: "KEYCODE_NOTIFICATION"
-    }[action];
+    const key = { home: "KEYCODE_HOME", back: "KEYCODE_BACK", recents: "KEYCODE_APP_SWITCH", notifications: "KEYCODE_NOTIFICATION" }[action];
     await run(["-s", serial, "shell", "input", "keyevent", key]);
     return ok(`${action} sent through direct ADB`);
   }
@@ -460,7 +468,6 @@ async function sendToAndroid(deviceId, target, payload) {
   const retryable = safeCompanionRetryActions.has(String(payload?.action || ""));
   let companionError = null;
   const attempts = retryable ? 3 : 1;
-
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
       const data = await companionRequest(deviceId, target, payload);
@@ -474,7 +481,6 @@ async function sendToAndroid(deviceId, target, payload) {
       }
     }
   }
-
   try {
     return await sendViaDirectAdb(deviceId, target, payload);
   } catch (fallbackError) {
@@ -485,8 +491,7 @@ async function sendToAndroid(deviceId, target, payload) {
 
 async function reconnectLoop() {
   for (const [deviceId, target] of Object.entries(targets)) {
-    try { await ensureConnected(deviceId, target); }
-    catch {}
+    try { await ensureConnected(deviceId, target); } catch {}
   }
 }
 
@@ -543,9 +548,7 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  if (req.method !== "POST" || !["/command", "/script"].includes(req.url)) {
-    return json(res, 404, { ok: false, error: "Not found" });
-  }
+  if (req.method !== "POST" || !["/command", "/script"].includes(req.url)) return json(res, 404, { ok: false, error: "Not found" });
 
   try {
     const input = await readBody(req);
@@ -560,9 +563,7 @@ const server = http.createServer(async (req, res) => {
       if (!/^[a-z0-9_-]+$/.test(scriptName)) return json(res, 400, { ok: false, error: "Invalid script name" });
       if (!Object.hasOwn(registeredScriptFiles, scriptName)) return json(res, 403, { ok: false, error: "Script is not registered" });
       const scriptFile = resolveRegisteredScriptFile(scriptName);
-      if (!scriptFile) {
-        return json(res, 404, { ok: false, error: `Registered script is not installed for ${scriptName}. Checked: ${registeredScriptFiles[scriptName].join(", ")}` });
-      }
+      if (!scriptFile) return json(res, 404, { ok: false, error: `Registered script is not installed for ${scriptName}. Checked: ${registeredScriptFiles[scriptName].join(", ")}` });
       const result = await runScript(scriptFile, target, input.args || {});
       return json(res, result.ok === false ? 400 : 200, result);
     }
@@ -571,11 +572,7 @@ const server = http.createServer(async (req, res) => {
     if (action === "wake_screen") return json(res, 200, await wakeDevice(input.deviceId, target));
     if (!allowedActions.has(action)) return json(res, 400, { ok: false, error: "Action not allowed" });
 
-    const data = await sendToAndroid(input.deviceId, target, {
-      deviceId: input.deviceId,
-      action,
-      args: input.args || {}
-    });
+    const data = await sendToAndroid(input.deviceId, target, { deviceId: input.deviceId, action, args: input.args || {} });
     return json(res, data.ok === false ? 400 : 200, data);
   } catch (error) {
     return json(res, 503, { ok: false, error: error instanceof Error ? error.message : String(error) });
