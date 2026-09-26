@@ -1,7 +1,7 @@
 import { getDevice, sendAndroidCommand, sendAndroidScript } from "./device-bridge.mjs";
 import { debugUnderstanding, normalizeUtterance } from "./utterance-normalizer.mjs";
 
-export const ANDROID_INTENTS_VERSION = "generic-companion-v27-whatsapp-exact";
+export const ANDROID_INTENTS_VERSION = "generic-companion-v28-speaker-direct";
 
 function deviceFor(text) {
   return /\btablet\b/i.test(text) ? "android-tablet" : "android-phone";
@@ -54,8 +54,15 @@ function extractExactWhatsAppDirective(rawMessage) {
 
 function friendlyAndroidError(error) {
   const raw = error instanceof Error ? error.message : String(error || "");
+  const companionOnly = raw.split(/\.\s*Direct ADB fallback also failed:/i)[0]?.trim();
+  if (companionOnly && companionOnly !== raw && !/aborted due to timeout|automatic adb reconnect failed/i.test(companionOnly)) {
+    return companionOnly.startsWith("Mama,") ? companionOnly : `Mama, ${companionOnly}`;
+  }
   if (/temporarily unavailable|aborted due to timeout|automatic adb reconnect failed/i.test(raw)) {
     return "Mama, I couldn't reach your mobile right now. Please make sure the phone is connected and Jazz Accessibility Service is enabled.";
+  }
+  if (/unauthorized/i.test(raw)) {
+    return "Mama, Jazz reached the Android Companion, but the bridge pairing token does not match. Open the Companion and re-pair the Windows bridge token.";
   }
   if (/direct adb|android companion is unavailable/i.test(raw)) {
     return "Mama, I couldn't complete that phone action because the Android control connection is unavailable.";
@@ -97,6 +104,12 @@ function isInstagramLikeCommand(text) {
     || /^double\s+tap(?:\s+(?:this|the|current))?\s+(?:reel|video)[.!? ]*$/i.test(text);
 }
 
+function speakerAction(text) {
+  if (/^(?:(?:put|turn|switch)(?:\s+the)?\s+)?speaker(?:phone)?\s+on[.!? ]*$/i.test(text)) return "speaker_on";
+  if (/^(?:(?:put|turn|switch)(?:\s+the)?\s+)?speaker(?:phone)?\s+off[.!? ]*$/i.test(text)) return "speaker_off";
+  return null;
+}
+
 function directNavigationAction(text) {
   if (/^(?:go\s+)?home(?:\s+screen)?[.!? ]*$/i.test(text)) return "home";
   if (/^(?:go\s+)?back(?:\s+one\s+step)?[.!? ]*$/i.test(text)) return "back";
@@ -114,8 +127,6 @@ function navigationReply(action) {
 }
 
 function directSystemAction(text) {
-  if (/^(?:put|turn|switch)(?:\s+the)?\s+speaker(?:phone)?\s+(?:on|off)[.!? ]*$/i.test(text)) return true;
-  if (/^(?:speaker|speakerphone)\s+(?:on|off)[.!? ]*$/i.test(text)) return true;
   if (/^(?:pause|pause\s+(?:it|music|media|this))[.!? ]*$/i.test(text)) return true;
   if (/^(?:play|resume|play\s+(?:it|music|media|again))[.!? ]*$/i.test(text)) return true;
   if (/^(?:next\s+(?:song|track)|skip\s+(?:song|track))[.!? ]*$/i.test(text)) return true;
@@ -152,8 +163,7 @@ function looksLikeAndroidCommand(text) {
     /^type\s+.+/i,
     /^clear\s+text/i,
     /^search\s+.+/i,
-    /^(?:put|turn|switch)(?:\s+the)?\s+speaker(?:phone)?\s+(?:on|off)/i,
-    /^(?:speaker|speakerphone)\s+(?:on|off)/i,
+    /^(?:(?:put|turn|switch)(?:\s+the)?\s+)?speaker(?:phone)?\s+(?:on|off)/i,
     /^(?:pause|play|resume|next\s+(?:song|track)|previous\s+(?:song|track)|increase\s+volume|decrease\s+volume|mute|unmute)/i,
     /^(?:turn\s+)?(?:the\s+)?flash(?:light)?\s+(?:on|off)/i,
     /^(?:call\s+.+|answer(?:\s+the\s+call)?|end(?:\s+the\s+call)?|hang\s+up)/i,
@@ -162,8 +172,6 @@ function looksLikeAndroidCommand(text) {
 }
 
 export async function handleAndroidIntent(message) {
-  // Parse exact WhatsApp directives from the raw utterance before normalization so
-  // Jazz never paraphrases or "improves" the user's dictated message.
   const exactWhatsApp = extractExactWhatsAppDirective(message);
 
   const understanding = normalizeUtterance(message, { source: "typed" });
@@ -284,6 +292,20 @@ export async function handleAndroidIntent(message) {
         executed: result?.ok !== false,
         tool: "android.script",
         scriptName: "instagram",
+        intentVersion: ANDROID_INTENTS_VERSION,
+        result
+      };
+    }
+
+    const speaker = speakerAction(text) || speakerAction(rawText);
+    if (speaker) {
+      const result = await sendAndroidCommand(deviceId, speaker, {});
+      return {
+        assistant: result?.ok === false
+          ? (result?.message || `Mama, I couldn't verify that the speaker is ${speaker === "speaker_on" ? "on" : "off"}.`)
+          : (result?.message || (speaker === "speaker_on" ? "Mama, speaker is on." : "Mama, speaker is off.")),
+        executed: result?.ok !== false,
+        tool: "android.call",
         intentVersion: ANDROID_INTENTS_VERSION,
         result
       };
