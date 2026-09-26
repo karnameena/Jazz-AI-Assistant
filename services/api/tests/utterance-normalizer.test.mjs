@@ -16,7 +16,11 @@ const cases = [
   ["disconect the call", "end the call", "END_CALL"],
   ["close the call", "end the call", "END_CALL"],
   ["cut the cal", "end the call", "END_CALL"],
-  ["hang up", "end the call", "END_CALL"]
+  ["hang up", "end the call", "END_CALL"],
+  ["Hey Jazz, put speaker on", "hey jazz speaker on", "SPEAKER_ON"],
+  ["turn speaker on", "speaker on", "SPEAKER_ON"],
+  ["speaker off", "speaker off", "SPEAKER_OFF"],
+  ["put speker on", "speaker on", "SPEAKER_ON"]
 ];
 
 for (const [raw, expected, intent] of cases) {
