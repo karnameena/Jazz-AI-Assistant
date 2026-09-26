@@ -1,7 +1,7 @@
 import { getDevice, sendAndroidCommand, sendAndroidScript } from "./device-bridge.mjs";
 import { debugUnderstanding, normalizeUtterance } from "./utterance-normalizer.mjs";
 
-export const ANDROID_INTENTS_VERSION = "generic-companion-v24-screen-aware";
+export const ANDROID_INTENTS_VERSION = "generic-companion-v25-verified-instagram";
 
 function deviceFor(text) {
   return /\btablet\b/i.test(text) ? "android-tablet" : "android-phone";
@@ -11,6 +11,17 @@ function stripWakePhrase(value) {
   return String(value || "")
     .replace(/^\s*(?:hey\s+)?jazz[,\s:-]*/i, "")
     .trim();
+}
+
+function friendlyAndroidError(error) {
+  const raw = error instanceof Error ? error.message : String(error || "");
+  if (/temporarily unavailable|aborted due to timeout|automatic adb reconnect failed/i.test(raw)) {
+    return "Mama, I couldn't reach your mobile right now. Please make sure the phone is connected and Jazz Accessibility Service is enabled.";
+  }
+  if (/direct adb|android companion is unavailable/i.test(raw)) {
+    return "Mama, I couldn't complete that phone action because the Android control connection is unavailable.";
+  }
+  return raw ? `Mama, I couldn't complete that Android action: ${raw}` : "Mama, I couldn't complete that Android action.";
 }
 
 function extractAmount(text) {
@@ -51,6 +62,14 @@ function directNavigationAction(text) {
   if (/^(?:scroll|swipe)\s+up[.!? ]*$/i.test(text)) return "scroll_up";
   if (/^(?:scroll|swipe)\s+down[.!? ]*$/i.test(text)) return "scroll_down";
   return null;
+}
+
+function navigationReply(action) {
+  if (action === "scroll_up") return "Mama, scrolled up.";
+  if (action === "scroll_down") return "Mama, scrolled down.";
+  if (action === "home") return "Mama, opened the home screen.";
+  if (action === "back") return "Mama, went back.";
+  return "Mama, done.";
 }
 
 function directSystemAction(text) {
@@ -169,33 +188,59 @@ export async function handleAndroidIntent(message) {
       return { assistant: result?.message || `YouTube workflow started for ${youtubeQuery}.`, executed: result?.ok !== false, tool: "android.script", scriptName: "youtube", intentVersion: ANDROID_INTENTS_VERSION, result };
     }
 
-    if (isInstagramReelCommand(text) || isInstagramLikeCommand(text)) {
+    // A Like must be executed and verified by the live Accessibility tree. A raw
+    // double tap or script completion is not proof that Instagram changed state.
+    if (isInstagramLikeCommand(text)) {
+      const result = await sendAndroidCommand(deviceId, "execute_command", { command: text });
+      return {
+        assistant: result?.ok === false ? (result?.message || "Mama, I couldn't verify the reel was liked.") : (result?.message || "Mama, liked this reel."),
+        executed: result?.ok !== false,
+        tool: "android.automation",
+        intentVersion: ANDROID_INTENTS_VERSION,
+        result
+      };
+    }
+
+    if (isInstagramReelCommand(text)) {
       const result = await sendAndroidScript(deviceId, "instagram", { request: text });
-      return { assistant: result?.message || (isInstagramLikeCommand(text) ? "Liked the current reel." : "Instagram Reels opened."), executed: result?.ok !== false, tool: "android.script", scriptName: "instagram", intentVersion: ANDROID_INTENTS_VERSION, result };
+      return {
+        assistant: result?.ok === false ? (result?.message || "Mama, I couldn't open Instagram Reels.") : "Mama, opened Instagram Reels.",
+        executed: result?.ok !== false,
+        tool: "android.script",
+        scriptName: "instagram",
+        intentVersion: ANDROID_INTENTS_VERSION,
+        result
+      };
     }
 
     const navigation = directNavigationAction(text);
     if (navigation) {
       const result = await sendAndroidCommand(deviceId, navigation, {});
-      return { assistant: result?.message || "Android navigation completed.", executed: result?.ok !== false, tool: "android.automation", intentVersion: ANDROID_INTENTS_VERSION, result };
+      return {
+        assistant: result?.ok === false ? (result?.message || "Mama, I couldn't complete that navigation action.") : navigationReply(navigation),
+        executed: result?.ok !== false,
+        tool: "android.automation",
+        intentVersion: ANDROID_INTENTS_VERSION,
+        result
+      };
     }
 
     if (directSystemAction(text)) {
       const result = await sendAndroidCommand(deviceId, "execute_command", { command: text });
-      return { assistant: result?.message || "Android system action completed.", executed: result?.ok !== false, tool: "android.system", intentVersion: ANDROID_INTENTS_VERSION, result };
+      return { assistant: result?.message || "Mama, done.", executed: result?.ok !== false, tool: "android.system", intentVersion: ANDROID_INTENTS_VERSION, result };
     }
 
     if (!looksLikeAndroidCommand(text)) return null;
 
     const result = await sendAndroidCommand(deviceId, "execute_command", { command: text });
     if (result?.ok === false) {
-      return { assistant: result?.message || result?.error || "I couldn't complete that Android command.", executed: false, tool: "android.automation", intentVersion: ANDROID_INTENTS_VERSION, result };
+      return { assistant: result?.message || result?.error || "Mama, I couldn't complete that Android command.", executed: false, tool: "android.automation", intentVersion: ANDROID_INTENTS_VERSION, result };
     }
 
     return { assistant: result?.message || "Done, Mama.", executed: true, tool: "android.automation", intentVersion: ANDROID_INTENTS_VERSION, result };
   } catch (error) {
     return {
-      assistant: `I couldn't complete that Android action: ${error instanceof Error ? error.message : String(error)}`,
+      assistant: friendlyAndroidError(error),
       executed: false,
       tool: "android.automation",
       intentVersion: ANDROID_INTENTS_VERSION
