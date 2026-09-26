@@ -24,8 +24,8 @@ object CommandParser {
             text.matches(Regex("(?i)^(go\\s+)?home(\\s+screen)?[.!? ]*$")) -> return sequence(ActionStep("home"))
             text.matches(Regex("(?i)^(open\\s+)?recent\\s+apps[.!? ]*$")) -> return sequence(ActionStep("recents"))
             text.matches(Regex("(?i)^open\\s+notifications[.!? ]*$")) -> return sequence(ActionStep("notifications"))
-            text.matches(Regex("(?i)^(?:like|heart)(?:\\s+(?:this|the|current))?\\s+(?:reel|video)[.!? ]*$")) -> return sequence(ActionStep("double_tap_center", label = "Like current reel"))
-            text.matches(Regex("(?i)^double\\s+tap(?:\\s+(?:this|the|current))?\\s+(?:reel|video)[.!? ]*$")) -> return sequence(ActionStep("double_tap_center", label = "Double tap current reel"))
+            text.matches(Regex("(?i)^(?:like|heart)(?:\\s+(?:this|the|current))?\\s+(?:reel|video)[.!? ]*$")) -> return ParsedCommand("instagram_like")
+            text.matches(Regex("(?i)^double\\s+tap(?:\\s+(?:this|the|current))?\\s+(?:reel|video)[.!? ]*$")) -> return ParsedCommand("instagram_like")
             text.matches(Regex("(?i)^open\\s+instagram(?:\\s+(?:reel|reels|video|videos))[.!? ]*$")) -> return ParsedCommand(
                 "android_sequence",
                 plan = ActionPlan(steps = listOf(
