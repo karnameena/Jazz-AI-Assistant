@@ -11,6 +11,7 @@ import com.gunakarna.jazzassistant.accessibility.ScreenObserver
 import com.gunakarna.jazzassistant.accessibility.UiTreeReader
 import com.gunakarna.jazzassistant.accessibility.UiWaiter
 import com.gunakarna.jazzassistant.apps.AppLauncher
+import com.gunakarna.jazzassistant.apps.CallAutomation
 import com.gunakarna.jazzassistant.apps.InstagramAutomation
 import com.gunakarna.jazzassistant.apps.InstalledAppResolver
 import com.gunakarna.jazzassistant.apps.WhatsAppAutomation
@@ -27,6 +28,7 @@ class AndroidAutomationEngine(private val service: AccessibilityService) {
     private val system = SystemControlManager(service)
     private val whatsApp = WhatsAppAutomation(service, launcher, actions, waiter)
     private val instagram = InstagramAutomation(service, actions, waiter)
+    private val calls = CallAutomation(service, actions, waiter)
 
     fun listApps(): List<Map<String, String>> = launcher.listApps()
 
@@ -43,6 +45,8 @@ class AndroidAutomationEngine(private val service: AccessibilityService) {
         "long_click_text", "long_click" -> simple(actions.longClickText(args["text"]?.toString().orEmpty()), "CLICK_SUCCESS", "Long press completed.")
         "double_tap_center" -> simple(actions.doubleTapCenter(), "DOUBLE_TAP_SUCCESS", "Double-tapped the current content.")
         "instagram_like" -> instagram.likeCurrentReel().toMap()
+        "speaker_on" -> calls.setSpeaker(true).toMap()
+        "speaker_off" -> calls.setSpeaker(false).toMap()
         "set_text", "type" -> simple(actions.setText(args["text"]?.toString().orEmpty()), "TEXT_ENTERED", "Text entered.")
         "clear_text" -> simple(actions.clearText(), "TEXT_CLEARED", "Text cleared.")
         "scroll_forward", "scroll_up" -> simple(actions.swipeUp(), "SCROLL_SUCCESS", "Scrolled up.")
