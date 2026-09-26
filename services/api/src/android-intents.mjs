@@ -1,7 +1,7 @@
 import { getDevice, sendAndroidCommand, sendAndroidScript } from "./device-bridge.mjs";
 import { debugUnderstanding, normalizeUtterance } from "./utterance-normalizer.mjs";
 
-export const ANDROID_INTENTS_VERSION = "generic-companion-v26-call-speaker";
+export const ANDROID_INTENTS_VERSION = "generic-companion-v27-whatsapp-exact";
 
 function deviceFor(text) {
   return /\btablet\b/i.test(text) ? "android-tablet" : "android-phone";
@@ -11,6 +11,45 @@ function stripWakePhrase(value) {
   return String(value || "")
     .replace(/^\s*(?:hey\s+)?jazz[,\s:-]*/i, "")
     .trim();
+}
+
+function stripOuterQuotePair(value) {
+  const text = String(value || "").trim();
+  if (text.length < 2) return text;
+  const first = text[0];
+  const last = text[text.length - 1];
+  const paired = (first === '"' && last === '"')
+    || (first === "'" && last === "'")
+    || (first === "“" && last === "”")
+    || (first === "‘" && last === "’");
+  return paired ? text.slice(1, -1) : text;
+}
+
+function extractExactWhatsAppDirective(rawMessage) {
+  const text = stripWakePhrase(rawMessage);
+
+  let match = text.match(/^send\s+(.+?)\s+this\s+message\s*:\s*([\s\S]+)$/i);
+  if (match) {
+    return { type: "message", contact: match[1].trim(), message: stripOuterQuotePair(match[2]) };
+  }
+
+  match = text.match(/^send\s+(.+?)\s+this\s+message\s+on\s+whats\s*app\s*:\s*([\s\S]+)$/i);
+  if (match) {
+    return { type: "message", contact: match[1].trim(), message: stripOuterQuotePair(match[2]) };
+  }
+
+  match = text.match(/^(?:send|message|text)\s+(.+?)\s*:\s*([\s\S]+)$/i);
+  if (match) {
+    return { type: "message", contact: match[1].trim(), message: stripOuterQuotePair(match[2]) };
+  }
+
+  match = text.match(/^(?:open\s+)?whats\s*app(?:\s+and)?\s+search(?:\s+for)?\s+(.+?)[.!? ]*$/i)
+    || text.match(/^search\s+(.+?)\s+on\s+whats\s*app[.!? ]*$/i);
+  if (match) {
+    return { type: "search", contact: match[1].trim().replace(/[.!?]+$/, "").trim() };
+  }
+
+  return null;
 }
 
 function friendlyAndroidError(error) {
@@ -36,7 +75,9 @@ function isUnlockCommand(text) {
 }
 
 function isMomPaymentCommand(text) {
-  return /\b(?:pay|send)\b[^,;\n]{0,90}?\b(?:my\s+)?(?:mom|momma|mummy)\b/i.test(text);
+  const amount = extractAmount(text);
+  if (amount === null) return false;
+  return /\b(?:pay|send|transfer)\b[^,;\n]{0,90}?\b(?:my\s+)?(?:mom|momma|mummy)\b/i.test(text);
 }
 
 function isScreenshotCommand(text) {
@@ -116,14 +157,18 @@ function looksLikeAndroidCommand(text) {
     /^(?:pause|play|resume|next\s+(?:song|track)|previous\s+(?:song|track)|increase\s+volume|decrease\s+volume|mute|unmute)/i,
     /^(?:turn\s+)?(?:the\s+)?flash(?:light)?\s+(?:on|off)/i,
     /^(?:call\s+.+|answer(?:\s+the\s+call)?|end(?:\s+the\s+call)?|hang\s+up)/i,
-    /^(?:message|whatsapp|whats\s*app|send\s+.+\s+to\s+.+\s+on\s+whats\s*app).*/i
+    /^(?:message|whatsapp|whats\s*app|send\s+.+\s+this\s+message|send\s+.+\s+to\s+.+\s+on\s+whats\s*app).*/i
   ].some(pattern => pattern.test(text));
 }
 
 export async function handleAndroidIntent(message) {
+  // Parse exact WhatsApp directives from the raw utterance before normalization so
+  // Jazz never paraphrases or "improves" the user's dictated message.
+  const exactWhatsApp = extractExactWhatsAppDirective(message);
+
   const understanding = normalizeUtterance(message, { source: "typed" });
   debugUnderstanding(understanding);
-  if (understanding.requiresClarification) {
+  if (understanding.requiresClarification && !exactWhatsApp) {
     return {
       assistant: understanding.suggestion || "I’m not confident enough to execute that Android command. Please rephrase it.",
       executed: false,
@@ -132,7 +177,8 @@ export async function handleAndroidIntent(message) {
     };
   }
 
-  const hadWakeWord = /^\s*(?:hey\s+)?jazz\b/i.test(understanding.normalized);
+  const rawText = stripWakePhrase(message);
+  const hadWakeWord = /^\s*(?:hey\s+)?jazz\b/i.test(String(message || ""));
   const text = stripWakePhrase(understanding.normalized);
   if (!text && hadWakeWord) {
     return {
@@ -152,13 +198,41 @@ export async function handleAndroidIntent(message) {
       intentVersion: ANDROID_INTENTS_VERSION
     };
   }
-  if (!text) return null;
+  if (!text && !exactWhatsApp) return null;
 
-  const deviceId = deviceFor(text);
+  const deviceId = deviceFor(text || rawText);
   const device = getDevice(deviceId);
   if (!device) return { assistant: "I don't know that Android device yet." };
 
   try {
+    if (exactWhatsApp?.type === "message") {
+      if (!exactWhatsApp.contact || !exactWhatsApp.message) {
+        return { assistant: "Mama, I need both the WhatsApp contact and the exact message.", executed: false, tool: "android.whatsapp", intentVersion: ANDROID_INTENTS_VERSION };
+      }
+      const result = await sendAndroidCommand(deviceId, "whatsapp_message", {
+        contact: exactWhatsApp.contact,
+        message: exactWhatsApp.message
+      });
+      return {
+        assistant: result?.ok === false ? (result?.message || "Mama, I couldn't send that WhatsApp message.") : (result?.message || `Mama, sent your exact message to ${exactWhatsApp.contact}.`),
+        executed: result?.ok !== false,
+        tool: "android.whatsapp",
+        intentVersion: ANDROID_INTENTS_VERSION,
+        result
+      };
+    }
+
+    if (exactWhatsApp?.type === "search") {
+      const result = await sendAndroidCommand(deviceId, "whatsapp_search", { contact: exactWhatsApp.contact });
+      return {
+        assistant: result?.ok === false ? (result?.message || "Mama, I couldn't find that WhatsApp contact.") : (result?.message || `Mama, opened WhatsApp chat with ${exactWhatsApp.contact}.`),
+        executed: result?.ok !== false,
+        tool: "android.whatsapp",
+        intentVersion: ANDROID_INTENTS_VERSION,
+        result
+      };
+    }
+
     if (isUnlockCommand(text)) {
       const result = await sendAndroidScript(deviceId, "unlockmobile", { request: text });
       return { assistant: result?.message || "unlockmobile.ps1 executed.", executed: result?.ok !== false, tool: "android.script", scriptName: "unlockmobile", intentVersion: ANDROID_INTENTS_VERSION, result };
@@ -234,7 +308,7 @@ export async function handleAndroidIntent(message) {
 
     if (!looksLikeAndroidCommand(text)) return null;
 
-    const result = await sendAndroidCommand(deviceId, "execute_command", { command: text });
+    const result = await sendAndroidCommand(deviceId, "execute_command", { command: rawText || text });
     if (result?.ok === false) {
       return { assistant: result?.message || result?.error || "Mama, I couldn't complete that Android command.", executed: false, tool: "android.automation", intentVersion: ANDROID_INTENTS_VERSION, result };
     }
