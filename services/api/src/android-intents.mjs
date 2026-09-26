@@ -1,7 +1,7 @@
 import { getDevice, sendAndroidCommand, sendAndroidScript } from "./device-bridge.mjs";
 import { debugUnderstanding, normalizeUtterance } from "./utterance-normalizer.mjs";
 
-export const ANDROID_INTENTS_VERSION = "generic-companion-v25-verified-instagram";
+export const ANDROID_INTENTS_VERSION = "generic-companion-v26-call-speaker";
 
 function deviceFor(text) {
   return /\btablet\b/i.test(text) ? "android-tablet" : "android-phone";
@@ -73,6 +73,8 @@ function navigationReply(action) {
 }
 
 function directSystemAction(text) {
+  if (/^(?:put|turn|switch)(?:\s+the)?\s+speaker(?:phone)?\s+(?:on|off)[.!? ]*$/i.test(text)) return true;
+  if (/^(?:speaker|speakerphone)\s+(?:on|off)[.!? ]*$/i.test(text)) return true;
   if (/^(?:pause|pause\s+(?:it|music|media|this))[.!? ]*$/i.test(text)) return true;
   if (/^(?:play|resume|play\s+(?:it|music|media|again))[.!? ]*$/i.test(text)) return true;
   if (/^(?:next\s+(?:song|track)|skip\s+(?:song|track))[.!? ]*$/i.test(text)) return true;
@@ -109,6 +111,8 @@ function looksLikeAndroidCommand(text) {
     /^type\s+.+/i,
     /^clear\s+text/i,
     /^search\s+.+/i,
+    /^(?:put|turn|switch)(?:\s+the)?\s+speaker(?:phone)?\s+(?:on|off)/i,
+    /^(?:speaker|speakerphone)\s+(?:on|off)/i,
     /^(?:pause|play|resume|next\s+(?:song|track)|previous\s+(?:song|track)|increase\s+volume|decrease\s+volume|mute|unmute)/i,
     /^(?:turn\s+)?(?:the\s+)?flash(?:light)?\s+(?:on|off)/i,
     /^(?:call\s+.+|answer(?:\s+the\s+call)?|end(?:\s+the\s+call)?|hang\s+up)/i,
@@ -188,8 +192,6 @@ export async function handleAndroidIntent(message) {
       return { assistant: result?.message || `YouTube workflow started for ${youtubeQuery}.`, executed: result?.ok !== false, tool: "android.script", scriptName: "youtube", intentVersion: ANDROID_INTENTS_VERSION, result };
     }
 
-    // A Like must be executed and verified by the live Accessibility tree. A raw
-    // double tap or script completion is not proof that Instagram changed state.
     if (isInstagramLikeCommand(text)) {
       const result = await sendAndroidCommand(deviceId, "execute_command", { command: text });
       return {
