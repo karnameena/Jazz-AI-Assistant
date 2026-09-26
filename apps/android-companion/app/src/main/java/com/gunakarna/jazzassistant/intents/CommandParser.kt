@@ -72,6 +72,10 @@ object CommandParser {
 
     private fun parseSystemCommand(text: String): ParsedCommand? {
         return when {
+            text.matches(Regex("(?i)^(?:put|turn|switch)(?:\\s+the)?\\s+speaker(?:phone)?\\s+on[.!? ]*$")) -> ParsedCommand("speaker_on")
+            text.matches(Regex("(?i)^(?:speaker|speakerphone)\\s+on[.!? ]*$")) -> ParsedCommand("speaker_on")
+            text.matches(Regex("(?i)^(?:put|turn|switch)(?:\\s+the)?\\s+speaker(?:phone)?\\s+off[.!? ]*$")) -> ParsedCommand("speaker_off")
+            text.matches(Regex("(?i)^(?:speaker|speakerphone)\\s+off[.!? ]*$")) -> ParsedCommand("speaker_off")
             text.matches(Regex("(?i)^(?:pause|pause\\s+(?:it|music|media|this))[.!? ]*$")) -> ParsedCommand("media_pause")
             text.matches(Regex("(?i)^(?:play|resume|play\\s+(?:it|music|media|again))[.!? ]*$")) -> ParsedCommand("media_play")
             text.matches(Regex("(?i)^(?:next\\s+(?:song|track)|skip\\s+(?:song|track))[.!? ]*$")) -> ParsedCommand("media_next")
