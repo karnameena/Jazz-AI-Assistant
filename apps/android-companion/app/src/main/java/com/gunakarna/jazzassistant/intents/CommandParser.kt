@@ -99,25 +99,49 @@ object CommandParser {
     private fun parseWhatsApp(text: String): ParsedCommand? {
         val normalized = text.replace(Regex("(?i)^open\\s+whats\\s*app[,;]\\s*"), "Open WhatsApp and ")
 
-        val sendQuoted = Regex("(?i)^send\\s+(.+?)\\s+[\"'](.+?)[\"']$").find(normalized)
+        // Preserve the dictated body exactly. These patterns run before generic message
+        // parsing so phrases such as "this message" never become part of the contact name.
+        val explicitMessage = Regex("(?is)^send\\s+(.+?)\\s+this\\s+message\\s*:\\s*(.+)$").find(normalized)
+        if (explicitMessage != null) {
+            val contact = cleanArg(explicitMessage.groupValues[1])
+            val message = stripOuterQuotePair(explicitMessage.groupValues[2].trim())
+            if (contact.isNotBlank() && message.isNotEmpty()) {
+                return ParsedCommand("whatsapp_message", mapOf("contact" to contact, "message" to message, "send" to true))
+            }
+        }
+
+        val explicitWhatsAppMessage = Regex("(?is)^send\\s+(.+?)\\s+this\\s+message\\s+on\\s+whats\\s*app\\s*:\\s*(.+)$").find(normalized)
+        if (explicitWhatsAppMessage != null) {
+            val contact = cleanArg(explicitWhatsAppMessage.groupValues[1])
+            val message = stripOuterQuotePair(explicitWhatsAppMessage.groupValues[2].trim())
+            if (contact.isNotBlank() && message.isNotEmpty()) {
+                return ParsedCommand("whatsapp_message", mapOf("contact" to contact, "message" to message, "send" to true))
+            }
+        }
+
+        val sendQuoted = Regex("(?is)^send\\s+(.+?)\\s+[\"“”'](.+?)[\"“”']$").find(normalized)
         if (sendQuoted != null) {
             val contact = cleanArg(sendQuoted.groupValues[1])
             val message = sendQuoted.groupValues[2]
             return ParsedCommand("whatsapp_message", mapOf("contact" to contact, "message" to message, "send" to true))
         }
 
-        val colonMessage = Regex("(?i)^(?:send|message|text)\\s+(.+?)\\s*:\\s*(.+)$").find(normalized)
+        val colonMessage = Regex("(?is)^(?:send|message|text)\\s+(.+?)\\s*:\\s*(.+)$").find(normalized)
         if (colonMessage != null) {
             return ParsedCommand(
                 "whatsapp_message",
-                mapOf("contact" to cleanArg(colonMessage.groupValues[1]), "message" to colonMessage.groupValues[2].trim(), "send" to true)
+                mapOf(
+                    "contact" to cleanArg(colonMessage.groupValues[1]),
+                    "message" to stripOuterQuotePair(colonMessage.groupValues[2].trim()),
+                    "send" to true
+                )
             )
         }
 
-        val typedOnly = Regex("(?i)^open\\s+whats\\s*app\\s+and\\s+search(?:\\s+for)?\\s+(.+?)\\s+and\\s+type\\s+(.+)$").find(normalized)
+        val typedOnly = Regex("(?is)^open\\s+whats\\s*app\\s+and\\s+search(?:\\s+for)?\\s+(.+?)\\s+and\\s+type\\s+(.+)$").find(normalized)
         if (typedOnly != null) {
             val contact = cleanArg(typedOnly.groupValues[1])
-            val value = cleanArg(typedOnly.groupValues[2], preserveSentencePunctuation = true).trim('"', '\'')
+            val value = stripOuterQuotePair(typedOnly.groupValues[2].trim())
             return ParsedCommand("android_sequence", plan = ActionPlan(steps = listOf(
                 ActionStep("open_app", mapOf("app" to "WhatsApp")),
                 ActionStep("whatsapp_search", mapOf("contact" to contact)),
@@ -126,23 +150,23 @@ object CommandParser {
         }
 
         val messagePatterns = listOf(
-            Regex("(?i)^(?:open\\s+)?whats\\s*app(?:\\s+and)?\\s+(?:message|text)\\s+(.+?)\\s+(?:saying|say|that|tell(?:\\s+him|\\s+her)?)\\s+(.+)$"),
-            Regex("(?i)^message\\s+(.+?)\\s+(.+)$"),
-            Regex("(?i)^whats\\s*app\\s+(.+?)\\s+and\\s+tell(?:\\s+him|\\s+her)?\\s+(.+)$"),
-            Regex("(?i)^send\\s+[\"'](.+?)[\"']\\s+to\\s+(.+?)\\s+on\\s+whats\\s*app$")
+            Regex("(?is)^(?:open\\s+)?whats\\s*app(?:\\s+and)?\\s+(?:message|text)\\s+(.+?)\\s+(?:saying|say|that|tell(?:\\s+him|\\s+her)?)\\s+(.+)$"),
+            Regex("(?is)^message\\s+(.+?)\\s+(.+)$"),
+            Regex("(?is)^whats\\s*app\\s+(.+?)\\s+and\\s+tell(?:\\s+him|\\s+her)?\\s+(.+)$"),
+            Regex("(?is)^send\\s+[\"“”'](.+?)[\"“”']\\s+to\\s+(.+?)\\s+on\\s+whats\\s*app$")
         )
         messagePatterns.forEachIndexed { index, pattern ->
             val match = pattern.find(normalized) ?: return@forEachIndexed
             val contact: String
             val message: String
             if (index == 3) {
-                message = cleanArg(match.groupValues[1], preserveSentencePunctuation = true)
+                message = match.groupValues[1]
                 contact = cleanArg(match.groupValues[2])
             } else {
                 contact = cleanArg(match.groupValues[1])
-                message = cleanArg(match.groupValues[2], preserveSentencePunctuation = true).trim('"', '\'')
+                message = stripOuterQuotePair(match.groupValues[2].trim())
             }
-            if (contact.isNotBlank() && message.isNotBlank()) return ParsedCommand("whatsapp_message", mapOf("contact" to contact, "message" to message, "send" to true))
+            if (contact.isNotBlank() && message.isNotEmpty()) return ParsedCommand("whatsapp_message", mapOf("contact" to contact, "message" to message, "send" to true))
         }
 
         val search = Regex("(?i)^(?:open\\s+)?whats\\s*app(?:\\s+and)?\\s+(?:search|search\\s+for)\\s+(.+)$").find(normalized)
@@ -196,6 +220,17 @@ object CommandParser {
     private fun cleanArg(value: String, preserveSentencePunctuation: Boolean = false): String {
         val trimmed = value.trim()
         return if (preserveSentencePunctuation) trimmed else trimmed.trimEnd(' ', '.', ',', '!', '?', ';', ':')
+    }
+
+    private fun stripOuterQuotePair(value: String): String {
+        if (value.length < 2) return value
+        val first = value.first()
+        val last = value.last()
+        val paired = (first == '"' && last == '"') ||
+            (first == '\'' && last == '\'') ||
+            (first == '“' && last == '”') ||
+            (first == '‘' && last == '’')
+        return if (paired) value.substring(1, value.length - 1) else value
     }
 
     private fun wordNumber(value: String): Int = when (value.lowercase()) {
