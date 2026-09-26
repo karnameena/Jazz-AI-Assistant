@@ -1,7 +1,7 @@
 import { getDevice, sendAndroidCommand, sendAndroidScript } from "./device-bridge.mjs";
 import { debugUnderstanding, normalizeUtterance } from "./utterance-normalizer.mjs";
 
-export const ANDROID_INTENTS_VERSION = "generic-companion-v28-speaker-direct";
+export const ANDROID_INTENTS_VERSION = "generic-companion-v29-call-direct";
 
 function deviceFor(text) {
   return /\btablet\b/i.test(text) ? "android-tablet" : "android-phone";
@@ -29,26 +29,17 @@ function extractExactWhatsAppDirective(rawMessage) {
   const text = stripWakePhrase(rawMessage);
 
   let match = text.match(/^send\s+(.+?)\s+this\s+message\s*:\s*([\s\S]+)$/i);
-  if (match) {
-    return { type: "message", contact: match[1].trim(), message: stripOuterQuotePair(match[2]) };
-  }
+  if (match) return { type: "message", contact: match[1].trim(), message: stripOuterQuotePair(match[2]) };
 
   match = text.match(/^send\s+(.+?)\s+this\s+message\s+on\s+whats\s*app\s*:\s*([\s\S]+)$/i);
-  if (match) {
-    return { type: "message", contact: match[1].trim(), message: stripOuterQuotePair(match[2]) };
-  }
+  if (match) return { type: "message", contact: match[1].trim(), message: stripOuterQuotePair(match[2]) };
 
   match = text.match(/^(?:send|message|text)\s+(.+?)\s*:\s*([\s\S]+)$/i);
-  if (match) {
-    return { type: "message", contact: match[1].trim(), message: stripOuterQuotePair(match[2]) };
-  }
+  if (match) return { type: "message", contact: match[1].trim(), message: stripOuterQuotePair(match[2]) };
 
   match = text.match(/^(?:open\s+)?whats\s*app(?:\s+and)?\s+search(?:\s+for)?\s+(.+?)[.!? ]*$/i)
     || text.match(/^search\s+(.+?)\s+on\s+whats\s*app[.!? ]*$/i);
-  if (match) {
-    return { type: "search", contact: match[1].trim().replace(/[.!?]+$/, "").trim() };
-  }
-
+  if (match) return { type: "search", contact: match[1].trim().replace(/[.!?]+$/, "").trim() };
   return null;
 }
 
@@ -110,6 +101,13 @@ function speakerAction(text) {
   return null;
 }
 
+function callContactName(text) {
+  const match = String(text || "").match(/^call\s+(.+?)[.!? ]*$/i);
+  if (!match) return null;
+  const contact = match[1].trim().replace(/[.!?]+$/, "").trim();
+  return contact || null;
+}
+
 function directNavigationAction(text) {
   if (/^(?:go\s+)?home(?:\s+screen)?[.!? ]*$/i.test(text)) return "home";
   if (/^(?:go\s+)?back(?:\s+one\s+step)?[.!? ]*$/i.test(text)) return "back";
@@ -136,8 +134,7 @@ function directSystemAction(text) {
   if (/^mute(?:\s+(?:the\s+)?(?:phone|media|volume))?[.!? ]*$/i.test(text)) return true;
   if (/^unmute(?:\s+(?:the\s+)?(?:phone|media|volume))?[.!? ]*$/i.test(text)) return true;
   if (/^(?:turn\s+)?(?:the\s+)?flash(?:light)?\s+(?:on|off)[.!? ]*$/i.test(text)) return true;
-  if (/^(?:answer|answer\s+the\s+call|end|hang\s+up|end\s+the\s+call)[.!? ]*$/i.test(text)) return true;
-  return /^call\s+.+[.!? ]*$/i.test(text);
+  return /^(?:answer|answer\s+the\s+call|end|hang\s+up|end\s+the\s+call)[.!? ]*$/i.test(text);
 }
 
 function youtubePlayQuery(text) {
@@ -173,7 +170,6 @@ function looksLikeAndroidCommand(text) {
 
 export async function handleAndroidIntent(message) {
   const exactWhatsApp = extractExactWhatsAppDirective(message);
-
   const understanding = normalizeUtterance(message, { source: "typed" });
   debugUnderstanding(understanding);
   if (understanding.requiresClarification && !exactWhatsApp) {
@@ -189,22 +185,10 @@ export async function handleAndroidIntent(message) {
   const hadWakeWord = /^\s*(?:hey\s+)?jazz\b/i.test(String(message || ""));
   const text = stripWakePhrase(understanding.normalized);
   if (!text && hadWakeWord) {
-    return {
-      assistant: "Hey Mama 👋 I'm here and listening. What do you want me to do?",
-      executed: false,
-      mode: "local-wake",
-      tool: "understanding.wake",
-      intentVersion: ANDROID_INTENTS_VERSION
-    };
+    return { assistant: "Hey Mama 👋 I'm here and listening. What do you want me to do?", executed: false, mode: "local-wake", tool: "understanding.wake", intentVersion: ANDROID_INTENTS_VERSION };
   }
   if (hadWakeWord && /^(?:can you hear me|are you there|you there)[?.! ]*$/i.test(text)) {
-    return {
-      assistant: "Yes, Mama. I can hear you. I'm ready.",
-      executed: false,
-      mode: "local-wake",
-      tool: "understanding.wake",
-      intentVersion: ANDROID_INTENTS_VERSION
-    };
+    return { assistant: "Yes, Mama. I can hear you. I'm ready.", executed: false, mode: "local-wake", tool: "understanding.wake", intentVersion: ANDROID_INTENTS_VERSION };
   }
   if (!text && !exactWhatsApp) return null;
 
@@ -214,31 +198,14 @@ export async function handleAndroidIntent(message) {
 
   try {
     if (exactWhatsApp?.type === "message") {
-      if (!exactWhatsApp.contact || !exactWhatsApp.message) {
-        return { assistant: "Mama, I need both the WhatsApp contact and the exact message.", executed: false, tool: "android.whatsapp", intentVersion: ANDROID_INTENTS_VERSION };
-      }
-      const result = await sendAndroidCommand(deviceId, "whatsapp_message", {
-        contact: exactWhatsApp.contact,
-        message: exactWhatsApp.message
-      });
-      return {
-        assistant: result?.ok === false ? (result?.message || "Mama, I couldn't send that WhatsApp message.") : (result?.message || `Mama, sent your exact message to ${exactWhatsApp.contact}.`),
-        executed: result?.ok !== false,
-        tool: "android.whatsapp",
-        intentVersion: ANDROID_INTENTS_VERSION,
-        result
-      };
+      if (!exactWhatsApp.contact || !exactWhatsApp.message) return { assistant: "Mama, I need both the WhatsApp contact and the exact message.", executed: false, tool: "android.whatsapp", intentVersion: ANDROID_INTENTS_VERSION };
+      const result = await sendAndroidCommand(deviceId, "whatsapp_message", { contact: exactWhatsApp.contact, message: exactWhatsApp.message });
+      return { assistant: result?.ok === false ? (result?.message || "Mama, I couldn't send that WhatsApp message.") : (result?.message || `Mama, sent your exact message to ${exactWhatsApp.contact}.`), executed: result?.ok !== false, tool: "android.whatsapp", intentVersion: ANDROID_INTENTS_VERSION, result };
     }
 
     if (exactWhatsApp?.type === "search") {
       const result = await sendAndroidCommand(deviceId, "whatsapp_search", { contact: exactWhatsApp.contact });
-      return {
-        assistant: result?.ok === false ? (result?.message || "Mama, I couldn't find that WhatsApp contact.") : (result?.message || `Mama, opened WhatsApp chat with ${exactWhatsApp.contact}.`),
-        executed: result?.ok !== false,
-        tool: "android.whatsapp",
-        intentVersion: ANDROID_INTENTS_VERSION,
-        result
-      };
+      return { assistant: result?.ok === false ? (result?.message || "Mama, I couldn't find that WhatsApp contact.") : (result?.message || `Mama, opened WhatsApp chat with ${exactWhatsApp.contact}.`), executed: result?.ok !== false, tool: "android.whatsapp", intentVersion: ANDROID_INTENTS_VERSION, result };
     }
 
     if (isUnlockCommand(text)) {
@@ -258,10 +225,7 @@ export async function handleAndroidIntent(message) {
     }
 
     if (isMobileStatusCommand(text)) {
-      const [info, screen] = await Promise.all([
-        sendAndroidCommand(deviceId, "device_info", {}),
-        sendAndroidCommand(deviceId, "screen_state", {})
-      ]);
+      const [info, screen] = await Promise.all([sendAndroidCommand(deviceId, "device_info", {}), sendAndroidCommand(deviceId, "screen_state", {})]);
       const interactive = screen?.interactive === true ? "screen on" : "screen off";
       const locked = screen?.locked === true ? "locked" : "unlocked";
       const model = info?.model || device.name;
@@ -276,34 +240,25 @@ export async function handleAndroidIntent(message) {
 
     if (isInstagramLikeCommand(text)) {
       const result = await sendAndroidCommand(deviceId, "execute_command", { command: text });
-      return {
-        assistant: result?.ok === false ? (result?.message || "Mama, I couldn't verify the reel was liked.") : (result?.message || "Mama, liked this reel."),
-        executed: result?.ok !== false,
-        tool: "android.automation",
-        intentVersion: ANDROID_INTENTS_VERSION,
-        result
-      };
+      return { assistant: result?.ok === false ? (result?.message || "Mama, I couldn't verify the reel was liked.") : (result?.message || "Mama, liked this reel."), executed: result?.ok !== false, tool: "android.automation", intentVersion: ANDROID_INTENTS_VERSION, result };
     }
 
     if (isInstagramReelCommand(text)) {
       const result = await sendAndroidScript(deviceId, "instagram", { request: text });
-      return {
-        assistant: result?.ok === false ? (result?.message || "Mama, I couldn't open Instagram Reels.") : "Mama, opened Instagram Reels.",
-        executed: result?.ok !== false,
-        tool: "android.script",
-        scriptName: "instagram",
-        intentVersion: ANDROID_INTENTS_VERSION,
-        result
-      };
+      return { assistant: result?.ok === false ? (result?.message || "Mama, I couldn't open Instagram Reels.") : "Mama, opened Instagram Reels.", executed: result?.ok !== false, tool: "android.script", scriptName: "instagram", intentVersion: ANDROID_INTENTS_VERSION, result };
     }
 
     const speaker = speakerAction(text) || speakerAction(rawText);
     if (speaker) {
       const result = await sendAndroidCommand(deviceId, speaker, {});
+      return { assistant: result?.ok === false ? (result?.message || `Mama, I couldn't verify that the speaker is ${speaker === "speaker_on" ? "on" : "off"}.`) : (result?.message || (speaker === "speaker_on" ? "Mama, speaker is on." : "Mama, speaker is off.")), executed: result?.ok !== false, tool: "android.call", intentVersion: ANDROID_INTENTS_VERSION, result };
+    }
+
+    const requestedContact = callContactName(rawText) || callContactName(text);
+    if (requestedContact) {
+      const result = await sendAndroidCommand(deviceId, "call_contact", { contact: requestedContact });
       return {
-        assistant: result?.ok === false
-          ? (result?.message || `Mama, I couldn't verify that the speaker is ${speaker === "speaker_on" ? "on" : "off"}.`)
-          : (result?.message || (speaker === "speaker_on" ? "Mama, speaker is on." : "Mama, speaker is off.")),
+        assistant: result?.ok === false ? (result?.message || `Mama, I couldn't call ${requestedContact}.`) : (result?.message || `Calling ${requestedContact}.`),
         executed: result?.ok !== false,
         tool: "android.call",
         intentVersion: ANDROID_INTENTS_VERSION,
@@ -314,13 +269,7 @@ export async function handleAndroidIntent(message) {
     const navigation = directNavigationAction(text);
     if (navigation) {
       const result = await sendAndroidCommand(deviceId, navigation, {});
-      return {
-        assistant: result?.ok === false ? (result?.message || "Mama, I couldn't complete that navigation action.") : navigationReply(navigation),
-        executed: result?.ok !== false,
-        tool: "android.automation",
-        intentVersion: ANDROID_INTENTS_VERSION,
-        result
-      };
+      return { assistant: result?.ok === false ? (result?.message || "Mama, I couldn't complete that navigation action.") : navigationReply(navigation), executed: result?.ok !== false, tool: "android.automation", intentVersion: ANDROID_INTENTS_VERSION, result };
     }
 
     if (directSystemAction(text)) {
@@ -329,19 +278,10 @@ export async function handleAndroidIntent(message) {
     }
 
     if (!looksLikeAndroidCommand(text)) return null;
-
     const result = await sendAndroidCommand(deviceId, "execute_command", { command: rawText || text });
-    if (result?.ok === false) {
-      return { assistant: result?.message || result?.error || "Mama, I couldn't complete that Android command.", executed: false, tool: "android.automation", intentVersion: ANDROID_INTENTS_VERSION, result };
-    }
-
+    if (result?.ok === false) return { assistant: result?.message || result?.error || "Mama, I couldn't complete that Android command.", executed: false, tool: "android.automation", intentVersion: ANDROID_INTENTS_VERSION, result };
     return { assistant: result?.message || "Done, Mama.", executed: true, tool: "android.automation", intentVersion: ANDROID_INTENTS_VERSION, result };
   } catch (error) {
-    return {
-      assistant: friendlyAndroidError(error),
-      executed: false,
-      tool: "android.automation",
-      intentVersion: ANDROID_INTENTS_VERSION
-    };
+    return { assistant: friendlyAndroidError(error), executed: false, tool: "android.automation", intentVersion: ANDROID_INTENTS_VERSION };
   }
 }
