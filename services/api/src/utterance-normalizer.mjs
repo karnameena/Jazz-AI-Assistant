@@ -1,7 +1,7 @@
 const COMMAND_WORDS = [
   "open", "launch", "start", "close", "scroll", "swipe", "search", "play",
   "tap", "click", "type", "read", "show", "check", "pay", "send", "unlock",
-  "end", "cut", "disconnect", "hang"
+  "end", "cut", "disconnect", "hang", "put", "turn", "switch", "speaker", "speakerphone"
 ];
 
 const COMMAND_ALIASES = new Map([
@@ -9,7 +9,8 @@ const COMMAND_ALIASES = new Map([
   ["scrol", "scroll"],
   ["serch", "search"], ["seach", "search"], ["srch", "search"],
   ["ply", "play"], ["plaay", "play"],
-  ["disconect", "disconnect"], ["disconnct", "disconnect"], ["discconnect", "disconnect"]
+  ["disconect", "disconnect"], ["disconnct", "disconnect"], ["discconnect", "disconnect"],
+  ["speker", "speaker"], ["spaker", "speaker"], ["speeker", "speaker"], ["speakar", "speaker"]
 ]);
 
 const APP_SLOT_WORDS = new Set(["open", "launch", "start", "in", "on", "using", "from"]);
@@ -137,7 +138,7 @@ function normalizeCommandWords(text, corrections) {
 }
 
 function normalizeConversationTypos(text, corrections) {
-  if (/^(?:hey\s+jazz\s+|jazz\s+)?(?:open|launch|start|close|scroll|swipe|search|play|tap|click|type|message|send|end|cut|disconnect|hang)\b/i.test(text)) {
+  if (/^(?:hey\s+jazz\s+|jazz\s+)?(?:open|launch|start|close|scroll|swipe|search|play|tap|click|type|message|send|end|cut|disconnect|hang|put|turn|switch|speaker|speakerphone)\b/i.test(text)) {
     return text;
   }
   let output = text;
@@ -174,6 +175,20 @@ function normalizeCallEndPhrase(text, corrections) {
   return normalized;
 }
 
+function normalizeSpeakerPhrase(text, corrections) {
+  const wake = text.match(/^\s*(?:hey\s+jazz\s+|jazz\s+)?/i)?.[0] || "";
+  const body = text.slice(wake.length).trim();
+  const match = body.match(/^(?:(put|turn|switch)\s+(?:the\s+)?)?([a-z]+)\s+(on|off)[.!? ]*$/i);
+  if (!match) return text;
+  const speakerWord = match[2].toLowerCase();
+  if (levenshtein(speakerWord, "speaker") > 2 && levenshtein(speakerWord, "speakerphone") > 3) return text;
+  const normalized = `${wake}speaker ${match[3].toLowerCase()}`.trim();
+  if (normalizeSpaces(text).toLowerCase() !== normalized.toLowerCase()) {
+    corrections.push({ from: body, to: `speaker ${match[3].toLowerCase()}`, kind: "speaker", penalty: 0.025 });
+  }
+  return normalized;
+}
+
 function normalizeCommandPhrases(text, corrections) {
   let output = text;
   output = replaceTracked(output, /\bscrollup\b/gi, "scroll up", corrections, "phrase", 0.01);
@@ -181,6 +196,7 @@ function normalizeCommandPhrases(text, corrections) {
   output = replaceTracked(output, /\b(scroll|swipe)\s+ap\b/gi, (_, verb) => `${verb} up`, corrections, "direction", 0.04);
   output = replaceTracked(output, /\b(scroll|swipe)\s+dwn\b/gi, (_, verb) => `${verb} down`, corrections, "direction", 0.04);
   output = normalizeCallEndPhrase(output, corrections);
+  output = normalizeSpeakerPhrase(output, corrections);
   return output;
 }
 
@@ -241,6 +257,8 @@ function detectIntents(text) {
   if (/\b(?:scroll|swipe)\s+up\b/i.test(text)) intents.push({ intent: "SCROLL_UP", target: null });
   if (/\b(?:scroll|swipe)\s+down\b/i.test(text)) intents.push({ intent: "SCROLL_DOWN", target: null });
   if (/\bend\s+(?:the\s+)?call\b/i.test(text)) intents.push({ intent: "END_CALL", target: "Phone" });
+  if (/\bspeaker\s+on\b/i.test(text)) intents.push({ intent: "SPEAKER_ON", target: "Phone" });
+  if (/\bspeaker\s+off\b/i.test(text)) intents.push({ intent: "SPEAKER_OFF", target: "Phone" });
   if (/\b(?:what is|what's|check|show)\s+(?:my\s+)?mobile\s+status\b/i.test(text)) intents.push({ intent: "MOBILE_STATUS", target: "Mobile" });
   if (/^\s*(?:hey\s+jazz\s+|jazz\s+)?unlock(?:\s+(?:my\s+)?(?:mobile|phone))?(?:\s+jazz)?[!. ]*$/i.test(text)) intents.push({ intent: "UNLOCK_MOBILE", target: "Mobile", sensitive: true });
   if (/\b(?:pay|send)\b[^,;\n]{0,90}?\b(?:my\s+)?(?:mom|momma|mummy)\b/i.test(text)) intents.push({ intent: "PAY_MOM", target: "Mom", sensitive: true });
@@ -251,7 +269,7 @@ function detectIntents(text) {
 }
 
 function actionableShape(text) {
-  return /^(?:hey\s+jazz\s+|jazz\s+)?(?:open|launch|start|close|scroll|swipe|search|play|tap|click|type|read|show|check|unlock|pay|send|end|cut|disconnect|hang)\b/i.test(text);
+  return /^(?:hey\s+jazz\s+|jazz\s+)?(?:open|launch|start|close|scroll|swipe|search|play|tap|click|type|read|show|check|unlock|pay|send|end|cut|disconnect|hang|put|turn|switch|speaker|speakerphone)\b/i.test(text);
 }
 
 function sensitiveNearMiss(text) {
