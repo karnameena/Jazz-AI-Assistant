@@ -6,11 +6,19 @@ import { callOllama, ensureOllamaReady, getOllamaStatus, streamOllama } from "./
 import { getTtsStatus, streamPiperRaw, synthesizeWithPiper } from "./tts.mjs";
 import { debugUnderstanding, normalizeUtterance } from "./utterance-normalizer.mjs";
 import { jazzSystemPrompt, localPersonalityReply } from "./jazz-personality.mjs";
+import {
+  callReminderNow,
+  createVoipReminder,
+  getReminderAudio,
+  getVoipHealth,
+  handleVoipReminderCommand,
+  initVoipReminders,
+  listVoipReminders
+} from "./voip-reminders.mjs";
 
-const VERSION = "0.10.2-personality";
+const VERSION = "0.10.3-local";
 const port = Number(process.env.PORT || 8787);
 const memories = [];
-const reminders = [];
 let pendingSensitiveAction = null;
 
 const tools = [
@@ -20,6 +28,7 @@ const tools = [
   { name: "scripts", description: "Execute explicitly registered Mama-owned Android scripts", requiresConfirmation: false },
   { name: "pc", description: "Execute an explicitly authorized PC action", requiresConfirmation: true },
   { name: "tts", description: "Speak Jazz replies with Piper or the browser fallback", requiresConfirmation: false },
+  { name: "voip", description: "Schedule and deliver reminder calls through the configured local Asterisk SIP system", requiresConfirmation: false },
   { name: "ollama", description: "Run Jazz's local LLM brain through Ollama", requiresConfirmation: false },
   { name: "web", description: "Search the live web when an approved online provider is configured", requiresConfirmation: false }
 ];
@@ -327,6 +336,9 @@ async function localAssistantReply(message) {
   const personality = localPersonalityReply(text, tools);
   if (personality) return personality;
 
+  const reminder = await handleVoipReminderCommand(text);
+  if (reminder) return reminder;
+
   const androidIntent = await handleAndroidIntent(text);
   if (androidIntent) return androidIntent;
 
@@ -336,7 +348,7 @@ async function localAssistantReply(message) {
   if (/^(?:what(?:'s| is)\s+)?(?:the\s+)?(?:current\s+)?time(?:\s+is\s+it)?(?:\s+in\s+india)?[?.! ]*$/i.test(text)) return { assistant: `Mama ⏰ the current time in India is ${getCurrentTime()}.` };
   if (/\b(where are you|where r u|where are u|where're you)\b/i.test(text)) return { assistant: "Right here with you, Mama 👋😎 Jazz is online and ready." };
   if (lower.includes("remember") || lower.includes("memory")) return { assistant: "Absolutely, Mama 🧠 Tell me what you want Jazz to remember." };
-  if (lower.includes("remind") || lower.includes("reminder")) return { assistant: "Sure, Mama ⏰ Tell me what I should remind you about and when." };
+  if (lower.includes("remind") || lower.includes("reminder")) return { assistant: "Sure, Mama ⏰ Tell me what I should remind you about and the exact time, for example: **remind me at 7 PM to take medicine**." };
   return null;
 }
 
@@ -454,6 +466,22 @@ async function streamTtsReply(text, res) {
 const server = http.createServer(async (req, res) => {
   if (req.method === "OPTIONS") return sendJson(res, 204, {});
   try {
+    const requestUrl = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+    const pathname = requestUrl.pathname;
+
+    const audioMatch = pathname.match(/^\/api\/reminders\/([^/]+)\/audio\.wav$/);
+    if (req.method === "GET" && audioMatch) {
+      const buffer = getReminderAudio(decodeURIComponent(audioMatch[1]), requestUrl.searchParams.get("token"));
+      if (!buffer) return sendJson(res, 404, { ok: false, error: "Reminder audio is unavailable or the token is invalid." });
+      return sendAudio(res, 200, buffer);
+    }
+
+    const callNowMatch = pathname.match(/^\/api\/reminders\/([^/]+)\/call-now$/);
+    if (req.method === "POST" && callNowMatch) {
+      const item = await callReminderNow(decodeURIComponent(callNowMatch[1]));
+      return sendJson(res, 200, { ok: true, item });
+    }
+
     if (req.method === "GET" && req.url === "/health") {
       const [ollama, tts] = await Promise.all([getOllamaStatus(), getTtsStatus()]);
       return sendJson(res, 200, {
@@ -469,12 +497,13 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === "GET" && req.url === "/api/brain-health") return sendJson(res, 200, { ok: true, version: VERSION, provider: process.env.JAZZ_LLM_PROVIDER || "ollama", ollama: await getOllamaStatus() });
     if (req.method === "GET" && req.url === "/api/tts-health") return sendJson(res, 200, { ok: true, version: VERSION, tts: await getTtsStatus() });
+    if (req.method === "GET" && req.url === "/api/voip/health") return sendJson(res, 200, { ok: true, voip: await getVoipHealth() });
     if (req.method === "GET" && req.url === "/api/tools") return sendJson(res, 200, { ok: true, tools });
     if (req.method === "GET" && req.url === "/api/scripts") return sendJson(res, 200, { ok: true, items: listScripts() });
     if (req.method === "GET" && req.url === "/api/devices") return sendJson(res, 200, { ok: true, items: devices });
     if (req.method === "GET" && req.url === "/api/time") return sendJson(res, 200, { ok: true, time: getCurrentTime(), timeZone: "Asia/Kolkata" });
     if (req.method === "GET" && req.url === "/api/memory") return sendJson(res, 200, { ok: true, items: memories });
-    if (req.method === "GET" && req.url === "/api/reminders") return sendJson(res, 200, { ok: true, items: reminders });
+    if (req.method === "GET" && req.url === "/api/reminders") return sendJson(res, 200, { ok: true, items: listVoipReminders() });
 
     if (req.method === "POST" && req.url === "/api/tts") {
       const input = await parseJson(req);
@@ -505,10 +534,9 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && req.url === "/api/reminders") {
       const input = await parseJson(req);
       const title = typeof input.title === "string" ? input.title.trim() : "";
-      const time = typeof input.time === "string" ? input.time.trim() : "";
-      if (!title || !time) return sendJson(res, 400, { ok: false, error: "title and time are required" });
-      const item = { id: crypto.randomUUID(), title, time, createdAt: new Date().toISOString() };
-      reminders.push(item);
+      const scheduledAt = typeof input.scheduledAt === "string" ? input.scheduledAt.trim() : (typeof input.time === "string" ? input.time.trim() : "");
+      if (!title || !scheduledAt) return sendJson(res, 400, { ok: false, error: "title and scheduledAt/time are required" });
+      const item = await createVoipReminder({ title, scheduledAt, delivery: "voip" });
       return sendJson(res, 201, { ok: true, item });
     }
 
@@ -559,6 +587,7 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(port, "0.0.0.0", () => {
   console.log(`[Jazz] API ${VERSION} listening on :${port}`);
+  void initVoipReminders({ synthesize: synthesizeWithPiper }).catch(error => console.warn(`[Jazz VoIP] scheduler startup failed: ${error instanceof Error ? error.message : String(error)}`));
   void ensureOllamaReady().then(status => {
     if (status.ok) console.log(`[Jazz] Ollama ready at ${status.url}; models: ${status.models.join(", ") || "none installed"}`);
     else console.warn(`[Jazz] Ollama unavailable at ${status.url}: ${status.error || "not reachable"}`);
