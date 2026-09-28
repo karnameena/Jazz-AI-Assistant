@@ -1,10 +1,24 @@
 import http from "node:http";
 
 const port = Number(process.env.JAZZ_RECOVERY_LOCAL_PORT || 8799);
-const relayUrl = String(process.env.JAZZ_RECOVERY_RELAY_URL || "").trim().replace(/\/$/, "");
+const relayUrl = normalizeRelayUrl(process.env.JAZZ_RECOVERY_RELAY_URL || "");
 const localRelayUrl = String(process.env.JAZZ_RECOVERY_LOCAL_RELAY_URL || "http://127.0.0.1:8788").trim().replace(/\/$/, "");
 const ownerToken = String(process.env.JAZZ_RECOVERY_OWNER_TOKEN || "").trim();
 const allowedOrigins = new Set(["http://localhost:5173", "http://127.0.0.1:5173"]);
+
+function normalizeRelayUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    const url = new URL(raw);
+    url.pathname = url.pathname.replace(/\/+$/, "");
+    url.search = "";
+    url.hash = "";
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return raw.replace(/\/$/, "");
+  }
+}
 
 function sendJson(req, res, status, payload) {
   const origin = String(req.headers.origin || "");
@@ -51,6 +65,12 @@ function relayCandidates() {
   return [...new Set([relayUrl, localRelayUrl].filter(Boolean))];
 }
 
+function relayErrorDetail(error) {
+  if (!(error instanceof Error)) return String(error);
+  const causeCode = error.cause && typeof error.cause === "object" && "code" in error.cause ? String(error.cause.code) : "";
+  return causeCode ? `${error.message} (${causeCode})` : error.message;
+}
+
 async function relayRequest(baseUrl, path, method = "GET", body = null) {
   const response = await fetch(`${baseUrl}${path}`, {
     method,
@@ -73,21 +93,33 @@ async function relay(path, method = "GET", body = null) {
   ensureConfigured();
   const candidates = relayCandidates();
   let lastError = null;
+
   for (let index = 0; index < candidates.length; index += 1) {
     const baseUrl = candidates[index];
     try {
       const { response, data } = await relayRequest(baseUrl, path, method, body);
       if (response.ok) return data;
+
       const message = data.error || data.message || `Recovery relay returned ${response.status}`;
-      lastError = new Error(message);
-      if (response.status === 401 || response.status === 403) throw lastError;
+      if (response.status === 401 || response.status === 403) {
+        throw Object.assign(new Error(`Recovery relay owner authorization failed at ${baseUrl}. Verify JAZZ_RECOVERY_OWNER_TOKEN matches the hosted relay.`), {
+          code: "RECOVERY_OWNER_AUTH_FAILED",
+          terminal: true
+        });
+      }
+
+      lastError = new Error(`${baseUrl}${path} returned ${response.status}: ${message}`);
       if (index === candidates.length - 1) throw lastError;
     } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
+      const normalized = error instanceof Error ? error : new Error(String(error));
+      if (normalized.terminal === true || normalized.code === "RECOVERY_OWNER_AUTH_FAILED") throw normalized;
+
+      lastError = new Error(`${baseUrl}${path} failed: ${relayErrorDetail(normalized)}`);
       if (index === candidates.length - 1) break;
-      console.warn(`[Jazz Recovery Local] ${baseUrl} unavailable (${lastError.message}); trying ${candidates[index + 1]}.`);
+      console.warn(`[Jazz Recovery Local] ${lastError.message}; trying ${candidates[index + 1]}.`);
     }
   }
+
   throw new Error(lastError?.message || "Recovery relay is unavailable.");
 }
 
@@ -285,7 +317,9 @@ const server = http.createServer(async (req, res) => {
     }
     return sendJson(req, res, 404, { ok: false, error: "Not found" });
   } catch (error) {
-    return sendJson(req, res, 503, { ok: false, error: error instanceof Error ? error.message : String(error) });
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[Jazz Recovery Local] request failed ${req.method} ${path}: ${message}`);
+    return sendJson(req, res, 503, { ok: false, error: message });
   }
 });
 
