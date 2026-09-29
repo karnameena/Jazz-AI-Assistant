@@ -17,6 +17,32 @@ function approvalIntent(message) {
     || /^(?:hey\s+jazz[, ]*)?approve\s+coding\s+dependencies[!. ]*$/i.test(text);
 }
 
+function languageForFile(filename) {
+  const ext = String(filename || "").split(".").pop()?.toLowerCase();
+  return ({
+    js: "javascript", jsx: "jsx", ts: "typescript", tsx: "tsx",
+    html: "html", css: "css", scss: "scss", json: "json",
+    py: "python", java: "java", kt: "kotlin", sql: "sql",
+    sh: "bash", ps1: "powershell", yml: "yaml", yaml: "yaml",
+    xml: "xml", md: "markdown"
+  })[ext] || "text";
+}
+
+function projectTree(fileNames) {
+  const sorted = [...fileNames].sort((a, b) => a.localeCompare(b));
+  return sorted.map(name => `├── ${name}`).join("\n").replace(/├── ([^\n]+)$/m, "└── $1");
+}
+
+function formatProjectResponse(files) {
+  const entries = Object.entries(files);
+  const tree = projectTree(entries.map(([name]) => name));
+  const cards = entries.map(([filename, content]) => {
+    const language = languageForFile(filename);
+    return `### \`${filename}\`\n\n\`\`\`${language} ${filename}\n${content}\n\`\`\``;
+  }).join("\n\n");
+  return `### Project Structure\n\n\`\`\`text\n${tree}\n\`\`\`\n\n${cards}`;
+}
+
 async function createReactTodoTask(requestText) {
   const workspace = await createWorkspace("react-todo");
   const files = reactTodoFiles();
@@ -46,8 +72,9 @@ async function createReactTodoTask(requestText) {
       "Keep the working Jazz repository unchanged."
     ]
   });
+  const formattedProject = formatProjectResponse(files);
   return {
-    assistant: `Mama 💻 I created the React Todo application in an isolated Jazz coding workspace. I did not modify the working Jazz project. Created ${createdFiles.length} files. Dependency installation is blocked until you approve it. Say **“Jazz, approve coding dependencies”** and I’ll install them inside this workspace and run the build.`,
+    assistant: `Mama 💻 I created the React Todo application in an isolated Jazz coding workspace. I did not modify the working Jazz project.\n\n${formattedProject}\n\nDependency installation is blocked until you approve it. Say **“Jazz, approve coding dependencies”** and I’ll install them inside this workspace and run the build.`,
     mode: "coding-agent",
     coding: {
       taskId: session.id,
@@ -80,7 +107,7 @@ async function createGenericPlanningTask(intent) {
 
   try {
     const result = await askCodingModel({
-      system: "You are Jazz Coding Agent planner. Produce a concise implementation plan only. Never request secrets. Never assume unrestricted shell access. All code changes must remain inside the provided isolated workspace until the user approves integration.",
+      system: "You are Jazz Coding Agent planner. Produce a concise implementation plan only. Never request secrets. Never assume unrestricted shell access. All code changes must remain inside the provided isolated workspace until the user approves integration. When code is eventually shown in chat, use Markdown headings with exact file paths followed by fenced code blocks so the Jazz developer-card renderer can display one file per card.",
       user: `Task: ${intent.text}\nReturn a numbered plan with likely files, validation steps, and any dependency-install approval needed.`
     });
     const updated = await updateSession(session.id, { status: "planned", model: result.model, planText: result.text });
