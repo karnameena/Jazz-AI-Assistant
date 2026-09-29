@@ -40,6 +40,11 @@
         </activity>
 
         <activity
+            android:name=".lostmode.LostModeSetupActivity"
+            android:exported="false"
+            android:label="Jazz Lost Mode Setup" />
+
+        <activity
             android:name=".recovery.RecoveryCaptureActivity"
             android:exported="false"
             android:excludeFromRecents="true"
