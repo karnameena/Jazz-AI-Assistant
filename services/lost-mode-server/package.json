@@ -1,0 +1,14 @@
+{
+  "name": "@jazz/lost-mode-server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.mjs",
+    "migrate": "node src/db/migrate.mjs",
+    "create-owner": "node src/scripts/create-owner.mjs",
+    "create-device": "node src/scripts/create-device.mjs"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}
