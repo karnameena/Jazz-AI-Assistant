@@ -1,5 +1,7 @@
 package com.gunakarna.jazzassistant.recovery
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Build
@@ -22,6 +24,17 @@ class RecoveryCaptureActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        val camera = intent.getStringExtra("camera") ?: "front"
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            RecoveryCameraManager.completeCapture(
+                null,
+                camera,
+                "Camera permission is not granted. Open Jazz Android Companion and allow Camera permission."
+            )
+            finishAndRemoveTask()
+            return
+        }
+
         // Recovery capture may be requested while the device is locked. This does not
         // unlock the phone; it only permits this owner-authorized activity to appear
         // over the keyguard when the OS/OEM allows it.
@@ -41,15 +54,41 @@ class RecoveryCaptureActivity : ComponentActivity() {
             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
         }
         setContentView(previewView)
-        startCapture(intent.getStringExtra("camera") ?: "front")
+        startCapture(camera)
     }
 
     private fun startCapture(camera: String) {
-        val providerFuture = ProcessCameraProvider.getInstance(this)
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            RecoveryCameraManager.completeCapture(null, camera, "Camera permission was revoked before capture started.")
+            finishAndRemoveTask()
+            return
+        }
+
+        val providerFuture = try {
+            ProcessCameraProvider.getInstance(this)
+        } catch (e: Exception) {
+            RecoveryCameraManager.completeCapture(null, camera, e.message ?: "Camera provider is unavailable.")
+            finishAndRemoveTask()
+            return
+        }
+
         providerFuture.addListener({
             try {
+                if (isFinishing || isDestroyed) return@addListener
+                if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+                    RecoveryCameraManager.completeCapture(null, camera, "Camera permission is unavailable.")
+                    finishAndRemoveTask()
+                    return@addListener
+                }
+
                 val provider = providerFuture.get()
                 val selector = if (camera == "rear") CameraSelector.DEFAULT_BACK_CAMERA else CameraSelector.DEFAULT_FRONT_CAMERA
+                if (!provider.hasCamera(selector)) {
+                    RecoveryCameraManager.completeCapture(null, camera, "Requested $camera camera is not available on this device.")
+                    finishAndRemoveTask()
+                    return@addListener
+                }
+
                 val preview = Preview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
                 val imageCapture = ImageCapture.Builder()
                     .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
@@ -66,20 +105,23 @@ class RecoveryCaptureActivity : ComponentActivity() {
                     ContextCompat.getMainExecutor(this),
                     object : ImageCapture.OnImageSavedCallback {
                         override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
-                            compressIfNeeded(file)
+                            try { compressIfNeeded(file) } catch (_: Exception) {}
                             RecoveryCameraManager.completeCapture(file, camera)
-                            finishAndRemoveTask()
+                            if (!isFinishing) finishAndRemoveTask()
                         }
 
                         override fun onError(exception: ImageCaptureException) {
-                            RecoveryCameraManager.completeCapture(null, camera, exception.message)
-                            finishAndRemoveTask()
+                            RecoveryCameraManager.completeCapture(null, camera, exception.message ?: "Camera capture failed.")
+                            if (!isFinishing) finishAndRemoveTask()
                         }
                     }
                 )
+            } catch (e: SecurityException) {
+                RecoveryCameraManager.completeCapture(null, camera, "Camera permission/security policy blocked recovery capture: ${e.message}")
+                if (!isFinishing) finishAndRemoveTask()
             } catch (e: Exception) {
-                RecoveryCameraManager.completeCapture(null, camera, e.message)
-                finishAndRemoveTask()
+                RecoveryCameraManager.completeCapture(null, camera, e.message ?: "Camera initialization failed.")
+                if (!isFinishing) finishAndRemoveTask()
             }
         }, ContextCompat.getMainExecutor(this))
     }
