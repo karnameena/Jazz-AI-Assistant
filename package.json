@@ -13,6 +13,11 @@
     "dev": "pnpm --recursive --if-present dev",
     "build": "pnpm --recursive --if-present build",
     "test": "pnpm --recursive --if-present test",
-    "lint": "pnpm --recursive --if-present lint"
+    "lint": "pnpm --recursive --if-present lint",
+    "lost-mode:migrate": "pnpm --filter @jazz/lost-mode-server migrate",
+    "lost-mode:create-owner": "pnpm --filter @jazz/lost-mode-server create-owner",
+    "lost-mode:create-device": "pnpm --filter @jazz/lost-mode-server create-device",
+    "lost-mode:server": "pnpm --filter @jazz/lost-mode-server start",
+    "lost-mode:web": "pnpm --filter @jazz/lost-mode-web dev"
   }
 }
