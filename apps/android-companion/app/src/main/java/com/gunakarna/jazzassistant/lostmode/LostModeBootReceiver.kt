@@ -9,6 +9,7 @@ class LostModeBootReceiver : BroadcastReceiver() {
         if (LostModeSecurityManager(context).isConfigured()) {
             LostModeHeartbeatWorker.schedule(context)
             LostModeHeartbeatWorker.syncNow(context)
+            LostModeForegroundService.start(context)
         }
     }
 }
