@@ -30,10 +30,20 @@ export async function getCodingModelStatus() {
       model: cfg.model,
       installed,
       models,
-      error: installed ? null : `Coding model '${cfg.model}' is not installed. Install it explicitly or set JAZZ_CODING_MODEL to a smaller installed coding model.`
+      recommendation: installed ? null : cfg.smallerModelRecommendation,
+      error: installed ? null : `Coding model '${cfg.model}' is not installed. Install it explicitly or set JAZZ_CODING_MODEL to an installed smaller coding model. Suggested lighter fallback: '${cfg.smallerModelRecommendation}'. Jazz will not silently switch to a paid API.`
     };
   } catch (error) {
-    return { ok: false, provider: "ollama", url: cfg.ollamaUrl, model: cfg.model, installed: false, models: [], error: error instanceof Error ? error.message : String(error) };
+    return {
+      ok: false,
+      provider: "ollama",
+      url: cfg.ollamaUrl,
+      model: cfg.model,
+      installed: false,
+      models: [],
+      recommendation: cfg.smallerModelRecommendation,
+      error: error instanceof Error ? error.message : String(error)
+    };
   }
 }
 
