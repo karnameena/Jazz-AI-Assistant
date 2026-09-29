@@ -20,14 +20,15 @@ Environment variables:
 
 ```text
 JAZZ_CODING_PROVIDER=ollama
-JAZZ_CODING_MODEL=qwen2.5-coder:7b
+JAZZ_CODING_MODEL=qwen3-coder:30b
+JAZZ_CODING_SMALLER_MODEL=qwen2.5-coder:7b
 JAZZ_CODING_OLLAMA_URL=http://127.0.0.1:11434
 JAZZ_CODING_CONTEXT=32768
 JAZZ_CODING_MAX_TOKENS=8192
 JAZZ_CODING_MAX_REPAIR_ATTEMPTS=3
 ```
 
-The provider is intentionally replaceable. If the selected local model is not installed, the coding agent reports that condition rather than silently switching to a paid API.
+Qwen3-Coder is the preferred local coding model in this configuration. If the selected model is not installed or is too large for the machine, set `JAZZ_CODING_MODEL` to a smaller installed coding-focused model. Jazz reports the condition instead of silently switching to a paid API.
 
 ## First acceptance task
 
