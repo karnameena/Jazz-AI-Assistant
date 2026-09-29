@@ -43,6 +43,12 @@ function executable(name) {
 
 function runExact(command, args, cwd, timeoutMs = 180000) {
   return new Promise(resolve => {
+    let settled = false;
+    const finish = result => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
     const child = spawn(executable(command), args, {
       cwd,
       windowsHide: true,
@@ -59,11 +65,11 @@ function runExact(command, args, cwd, timeoutMs = 180000) {
     child.stderr?.on("data", chunk => { stderr += chunk.toString(); });
     child.on("error", error => {
       clearTimeout(timer);
-      resolve({ ok: false, code: null, command: [command, ...args].join(" "), stdout, stderr: `${stderr}\n${error.message}`.trim() });
+      finish({ ok: false, code: null, command: [command, ...args].join(" "), stdout: stdout.trim(), stderr: `${stderr}\n${error.message}`.trim() });
     });
     child.on("close", code => {
       clearTimeout(timer);
-      resolve({ ok: code === 0, code, command: [command, ...args].join(" "), stdout: stdout.trim(), stderr: stderr.trim() });
+      finish({ ok: code === 0, code, command: [command, ...args].join(" "), stdout: stdout.trim(), stderr: stderr.trim() });
     });
   });
 }
@@ -72,7 +78,7 @@ export async function installDependencies(workspaceRoot, approved = false) {
   if (!approved) throw new Error("APPROVAL_REQUIRED: dependency installation");
   const pkg = await packageJson(workspaceRoot);
   if (!pkg) throw new Error("package.json not found in workspace");
-  return runExact("pnpm", ["install", "--ignore-workspace"], workspaceRoot, 300000);
+  return runExact("pnpm", ["install"], workspaceRoot, 300000);
 }
 
 export async function runPackageScript(workspaceRoot, scriptName) {
