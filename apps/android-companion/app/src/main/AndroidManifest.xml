@@ -8,7 +8,6 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.READ_CONTACTS" />
@@ -25,6 +24,8 @@
 
     <application
         android:allowBackup="true"
+        android:icon="@drawable/jazz_icon"
+        android:roundIcon="@drawable/jazz_icon"
         android:label="Jazz Android Companion"
         android:supportsRtl="true"
         android:usesCleartextTraffic="false"
@@ -79,7 +80,7 @@
         <service
             android:name=".recovery.RecoveryForegroundService"
             android:exported="false"
-            android:foregroundServiceType="dataSync|location" />
+            android:foregroundServiceType="dataSync" />
 
         <service
             android:name=".lostmode.LostModeForegroundService"
