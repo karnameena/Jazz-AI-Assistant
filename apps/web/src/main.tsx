@@ -9,6 +9,7 @@ import {
 import { createRoot } from "react-dom/client";
 import { JazzVoice } from "./voice";
 import { TelegramPanel } from "./TelegramPanel";
+import { MessageContent } from "./components/chat/MessageContent";
 import "./styles.css";
 import "./chat-overrides.css";
 
@@ -373,7 +374,7 @@ function App() {
 }
 
 function NavItem({ icon, text, active, badge, dropdown, onClick }: { icon: React.ReactNode; text: string; active?: boolean; badge?: string; dropdown?: boolean; onClick?: () => void }) { return <button className={`nav-item ${active ? "active" : ""}`} onClick={onClick}>{React.cloneElement(icon as React.ReactElement, { size: 18 })}<span>{text}</span>{badge && <em>{badge}</em>}{dropdown && <ChevronDown size={15} className="nav-chevron" />}</button>; }
-function ChatMessage({ message }: { message: Message }) { return message.sender === "user" ? <div className="message-row user-row"><div className="user-bubble"><div>{message.text}</div><small>{message.time}<Check size={12} /><Check size={12} className="check-overlap" /></small></div></div> : <div className="message-row jazz-row"><div className="jazz-avatar"><Wave /></div><div className="jazz-bubble"><div>{message.text || <span className="streaming-cursor">▌</span>}</div><small>{message.time}</small></div></div>; }
+function ChatMessage({ message }: { message: Message }) { return message.sender === "user" ? <div className="message-row user-row"><div className="user-bubble"><div>{message.text}</div><small>{message.time}<Check size={12} /><Check size={12} className="check-overlap" /></small></div></div> : <div className="message-row jazz-row"><div className="jazz-avatar"><Wave /></div><div className="jazz-bubble"><MessageContent text={message.text} /><small>{message.time}</small></div></div>; }
 
 function VoiceListeningBubble({ transcript }: { transcript: string }) {
   return (
