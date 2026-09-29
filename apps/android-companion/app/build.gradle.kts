@@ -1,6 +1,7 @@
+import java.util.Base64
+
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
 }
 
 android {
@@ -11,14 +12,31 @@ android {
         applicationId = "com.gunakarna.jazzassistant"
         minSdk = 26
         targetSdk = 34
-        versionCode = 3
-        versionName = "0.3.0"
+        versionCode = 4
+        versionName = "0.4.0"
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 }
 
-kotlin {
-    jvmToolchain(21)
+val jazzIconSource = layout.projectDirectory.file("src/main/jazz-icon.base64")
+val generatedJazzIconRes = layout.buildDirectory.dir("generated/jazzIcon/res")
+val generateJazzIcon by tasks.registering {
+    inputs.file(jazzIconSource)
+    outputs.dir(generatedJazzIconRes)
+    doLast {
+        val drawableDir = generatedJazzIconRes.get().dir("drawable-nodpi").asFile
+        drawableDir.mkdirs()
+        val encoded = jazzIconSource.asFile.readText().filterNot(Char::isWhitespace)
+        drawableDir.resolve("jazz_icon.jpg").writeBytes(Base64.getDecoder().decode(encoded))
+    }
 }
+
+android.sourceSets.getByName("main").res.srcDir(generatedJazzIconRes)
+tasks.named("preBuild").configure { dependsOn(generateJazzIcon) }
 
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
