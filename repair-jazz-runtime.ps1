@@ -1,8 +1,29 @@
+param(
+  [string]$SourceRef = $env:JAZZ_RUNTIME_REF
+)
+
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $root
 
-Write-Host "Repairing Jazz runtime from origin/main..." -ForegroundColor Cyan
+if (-not $SourceRef) {
+  $currentBranch = (& git branch --show-current 2>$null).Trim()
+  if ($currentBranch) {
+    $SourceRef = "origin/$currentBranch"
+  } else {
+    # This project is sometimes run from a detached HEAD. In that state, prefer
+    # the feature branch that contains the current Jazz voice/coding work instead
+    # of silently reverting the runtime to origin/main.
+    $SourceRef = "origin/feature/pro-coding-agent"
+  }
+}
+
+if ($SourceRef -notmatch '^origin/[A-Za-z0-9._/-]+$') {
+  throw "Invalid Jazz runtime source ref '$SourceRef'. Expected an origin/<branch> ref."
+}
+$sourceBranch = $SourceRef.Substring(7)
+
+Write-Host "Repairing Jazz runtime from $SourceRef..." -ForegroundColor Cyan
 
 # Keep private/local config and user-owned Android automation scripts untouched.
 # Only core source + generated dependency folders are refreshed.
@@ -54,11 +75,11 @@ $runtimeFiles = @(
   "start-jazz.ps1"
 )
 
-git fetch origin main
-if ($LASTEXITCODE -ne 0) { throw "git fetch origin main failed." }
+git fetch origin $sourceBranch
+if ($LASTEXITCODE -ne 0) { throw "git fetch origin $sourceBranch failed." }
 
-git checkout origin/main -- $runtimeFiles
-if ($LASTEXITCODE -ne 0) { throw "Could not refresh Jazz runtime files from origin/main." }
+git checkout $SourceRef -- $runtimeFiles
+if ($LASTEXITCODE -ne 0) { throw "Could not refresh Jazz runtime files from $SourceRef." }
 
 # Validate the current API version from source instead of pinning repair to one release.
 # A hard-coded 0.10.0 check previously rejected the newer 0.10.1 API.
@@ -68,7 +89,7 @@ if (-not $versionMatch.Success) {
   throw "Repair failed: Jazz API VERSION declaration is missing or invalid."
 }
 $currentApiVersion = $versionMatch.Groups['version'].Value
-Write-Host "Jazz API source version from origin/main: $currentApiVersion" -ForegroundColor Green
+Write-Host "Jazz API source version from ${SourceRef}: $currentApiVersion" -ForegroundColor Green
 if ($server -match 'I tried the configured model and resilient fallbacks') {
   throw "Repair failed: legacy Gemini fallback text still exists."
 }
@@ -110,6 +131,17 @@ if (-not (Test-Path ".\apps\web\public\local-stt-bootstrap.js")) {
 $mainTsx = Get-Content ".\apps\web\src\main.tsx" -Raw
 if ($mainTsx -notmatch 'label:\s*"Telegram"' -or $mainTsx -match 'label:\s*"Translate"') {
   throw "Repair failed: Quick Actions is not using Telegram instead of Translate."
+}
+# Voice reply safety is a runtime invariant: text may always render, but TTS must
+# never auto-play unless the user explicitly enabled voice mode with the mic toggle.
+if ($mainTsx -notmatch 'voiceModeRef' -or
+    $mainTsx -notmatch 'shouldSpeakReply\s*=\s*voiceModeRef\.current' -or
+    $mainTsx -notmatch 'if\s*\(!voiceModeRef\.current\)\s*return\s+false' -or
+    $mainTsx -notmatch 'setVoiceModeEnabled\(false\)') {
+  throw "Repair failed: mic-controlled voice reply gate is missing from apps/web/src/main.tsx. Refusing to restore an always-speaking runtime."
+}
+if ($mainTsx -match 'const\s+speak\s*=\s*\(text:\s*string\)\s*=>\s*voiceRef\.current\?\.speak') {
+  throw "Repair failed: legacy unconditional TTS helper detected in apps/web/src/main.tsx."
 }
 
 $vite = Get-Content ".\apps\web\vite.config.ts" -Raw
@@ -271,11 +303,12 @@ Remove-Item (Join-Path $root "apps\web\node_modules\.vite-jazz") -Recurse -Force
 Remove-Item (Join-Path $root "node_modules\.vite") -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item (Join-Path $root "node_modules\.vite-jazz") -Recurse -Force -ErrorAction SilentlyContinue
 
-Write-Host "Runtime source repaired successfully." -ForegroundColor Green
+Write-Host "Runtime source repaired successfully from $SourceRef." -ForegroundColor Green
 Write-Host "Jazz API source verified: $currentApiVersion (version-aware startup)." -ForegroundColor Green
 Write-Host "React runtime verified: one pinned React 18.3.1 + ReactDOM 18.3.1 installation." -ForegroundColor Green
 Write-Host "Jazz understanding verified: typo/STT normalization + confidence/safety tests passed." -ForegroundColor Green
 Write-Host "Jazz web production build verified: TSX/JSX + Vite transform passed." -ForegroundColor Green
+Write-Host "Jazz mic-controlled voice reply gate verified: mic OFF is text-only." -ForegroundColor Green
 Write-Host "Jazz local voice verified: Whisper service + Vite proxy + browser microphone pipeline are wired." -ForegroundColor Green
 Write-Host "Jazz rich-code renderer verified." -ForegroundColor Green
 Write-Host "Jazz Telegram quick action verified: Translate removed; Telegram loaded." -ForegroundColor Green
