@@ -28,6 +28,7 @@ interface DeviceItem {
 }
 type DayMode = "morning" | "afternoon" | "evening" | "night";
 type QuickCommand = { label: string; icon: React.ReactNode; run: () => void | Promise<void>; };
+type MessageSource = "voice" | "typed";
 
 const CHAT_STORAGE_KEY = "jazz-chat-history-v1";
 const DRAFT_STORAGE_KEY = "jazz-chat-draft-v1";
@@ -63,6 +64,15 @@ function readStoredString(key: string, fallback: string) {
 function writeStoredString(key: string, value: string) {
   try { localStorage.setItem(key, value); } catch { /* Browser storage may be unavailable or full. */ }
 }
+function textForVoiceReply(text: string) {
+  return String(text || "")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/```[\s\S]*$/g, " ")
+    .replace(/^\s*#{1,6}\s+(?:`[^`\n]+`|Project Structure)\s*$/gim, " ")
+    .replace(/^\s*#{1,6}\s+/gm, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 async function apiJson(path: string, options?: RequestInit) {
   const response = await fetch(path, options);
   const data = await response.json();
@@ -70,7 +80,7 @@ async function apiJson(path: string, options?: RequestInit) {
   return data;
 }
 
-async function streamChat(message: string, onText: (chunk: string) => void, source: "voice" | "typed" = "typed") {
+async function streamChat(message: string, onText: (chunk: string) => void, source: MessageSource = "typed") {
   const response = await fetch("/api/chat/stream", {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
@@ -113,6 +123,7 @@ function App() {
   const [activeMode, setActiveMode] = useState(() => readStoredString(MODE_STORAGE_KEY, "AI Chat"));
   const [activeNav, setActiveNav] = useState(() => readStoredString(NAV_STORAGE_KEY, "Chat"));
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [voiceMode, setVoiceMode] = useState(false);
   const [voiceState, setVoiceState] = useState<"idle" | "listening" | "speaking" | "unsupported">("idle");
   const [voiceTranscript, setVoiceTranscript] = useState("");
   const [profileImage, setProfileImage] = useState<string>(() => readStoredString("jazz-profile-image", ""));
@@ -123,12 +134,92 @@ function App() {
   const [showFeatures, setShowFeatures] = useState(false);
   const [toast, setToast] = useState("");
   const voiceRef = useRef<JazzVoice | null>(null);
-  const speechQueueRef = useRef(Promise.resolve());
+  const voiceModeRef = useRef(false);
+  const voiceActivationPendingRef = useRef(false);
+  const speechEpochRef = useRef(0);
+  const speechQueueRef = useRef<Promise<void>>(Promise.resolve());
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const profileInputRef = useRef<HTMLInputElement | null>(null);
   const sendInFlightRef = useRef(false);
   const lastSubmissionRef = useRef<{ value: string; at: number } | null>(null);
   const greeting = greetingFor(dayMode);
+
+  const setVoiceModeEnabled = (enabled: boolean) => {
+    voiceModeRef.current = enabled;
+    setVoiceMode(enabled);
+  };
+
+  const cancelSpeechQueue = () => {
+    speechEpochRef.current += 1;
+    speechQueueRef.current = Promise.resolve();
+    voiceRef.current?.stop();
+  };
+
+  const queueSpeech = (text: string) => {
+    if (!voiceModeRef.current) return false;
+    const clean = textForVoiceReply(text);
+    if (!clean) return false;
+    const epoch = speechEpochRef.current;
+    speechQueueRef.current = speechQueueRef.current
+      .then(async () => {
+        if (!voiceModeRef.current || epoch !== speechEpochRef.current) return;
+        const voice = voiceRef.current;
+        if (!voice) return;
+        voice.stop();
+        if (!voiceModeRef.current || epoch !== speechEpochRef.current) return;
+        await voice.speak(clean);
+        if (voiceModeRef.current && epoch === speechEpochRef.current) await voice.start();
+      })
+      .catch(() => undefined);
+    return true;
+  };
+
+  const addJazzMessage = (text: string) => {
+    setMessages(current => [...current, { id: Date.now() + Math.random(), sender: "jazz", text, time: nowTime() }]);
+    queueSpeech(text);
+  };
+
+  const sendMessage = async (valueOverride?: string, source: MessageSource = "typed") => {
+    const value = (valueOverride ?? input).trim();
+    if (!value || sendInFlightRef.current) return;
+    const now = Date.now();
+    if (lastSubmissionRef.current?.value === value && now - lastSubmissionRef.current.at < 1800) return;
+    lastSubmissionRef.current = { value, at: now };
+    sendInFlightRef.current = true;
+
+    if (voiceModeRef.current) cancelSpeechQueue();
+
+    setMessages(current => [...current, { id: Date.now(), sender: "user", text: value, time: nowTime() }]);
+    setInput(""); setVoiceTranscript("");
+    const replyId = Date.now() + Math.random();
+    setMessages(current => [...current, { id: replyId, sender: "jazz", text: "", time: nowTime() }]);
+    let streamedReply = "";
+    let speechScheduled = false;
+    try {
+      streamedReply = await streamChat(value, chunk => {
+        setMessages(current => current.map(item => item.id === replyId ? { ...item, text: item.text + chunk } : item));
+      }, source);
+      speechScheduled = queueSpeech(streamedReply);
+    } catch {
+      if (streamedReply.trim()) {
+        speechScheduled = queueSpeech(streamedReply);
+      } else {
+        try {
+          const data = await apiJson("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: value, source }) });
+          const reply = data.assistant || "Jazz is ready.";
+          setMessages(current => current.map(item => item.id === replyId ? { ...item, text: reply } : item));
+          speechScheduled = queueSpeech(reply);
+        } catch {
+          const reply = "Jazz could not reach the local API. Check Jazz Status and try again.";
+          setMessages(current => current.map(item => item.id === replyId ? { ...item, text: reply } : item));
+          speechScheduled = queueSpeech(reply);
+        }
+      }
+    } finally {
+      sendInFlightRef.current = false;
+      if (voiceModeRef.current && !speechScheduled) void voiceRef.current?.start();
+    }
+  };
 
   useEffect(() => {
     const timer = window.setInterval(() => setDayMode(getDayMode()), 30_000);
@@ -147,16 +238,35 @@ function App() {
     document.addEventListener("visibilitychange", onVisibility);
 
     const voice = new JazzVoice({
-      onState: state => setVoiceState(state),
-      onInterim: text => { setVoiceTranscript(text); setInput(text); },
+      onState: state => {
+        setVoiceState(state);
+        if (state === "listening" && voiceActivationPendingRef.current) {
+          voiceActivationPendingRef.current = false;
+          setVoiceModeEnabled(true);
+        }
+      },
+      onInterim: text => {
+        if (!voiceModeRef.current) return;
+        setVoiceTranscript(text);
+        setInput(text);
+      },
       onFinal: text => {
+        if (!voiceModeRef.current) return;
         const value = text.trim();
         setVoiceTranscript(value);
-        if (value) { voice.stop(); setInput(value); void sendMessage(value, voice); }
+        if (value) {
+          voice.stop();
+          setInput(value);
+          void sendMessage(value, "voice");
+        }
       },
       onError: message => {
+        if (voiceActivationPendingRef.current) {
+          voiceActivationPendingRef.current = false;
+          setVoiceModeEnabled(false);
+        }
         if (/didn't hear speech|did not detect clear speech/i.test(message)) {
-          window.setTimeout(() => { if (voiceRef.current === voice) void voice.start(); }, 250);
+          if (voiceModeRef.current) window.setTimeout(() => { if (voiceRef.current === voice && voiceModeRef.current) void voice.start(); }, 250);
           return;
         }
         addJazzMessage(message);
@@ -168,6 +278,9 @@ function App() {
       window.clearInterval(deviceTimer);
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onVisibility);
+      voiceActivationPendingRef.current = false;
+      voiceModeRef.current = false;
+      speechEpochRef.current += 1;
       voice.stop();
     };
   }, []);
@@ -182,88 +295,28 @@ function App() {
   useEffect(() => { writeStoredString(DRAFT_STORAGE_KEY, input); }, [input]);
   useEffect(() => { writeStoredString(MODE_STORAGE_KEY, activeMode); }, [activeMode]);
   useEffect(() => { writeStoredString(NAV_STORAGE_KEY, activeNav); }, [activeNav]);
-  useEffect(() => { if (!toast) return; const t = window.setTimeout(() => setToast(""), 2400); return () => window.clearTimeout(t); }, [toast]);
-
-  const addJazzMessage = (text: string) => setMessages(current => [...current, { id: Date.now() + Math.random(), sender: "jazz", text, time: nowTime() }]);
-  const speak = (text: string) => voiceRef.current?.speak(text.replace(/[*_#]/g, ""));
-  const queueSpeech = (text: string) => {
-    const clean = text.replace(/[*_#]/g, "").trim();
-    if (!clean) return;
-    speechQueueRef.current = speechQueueRef.current.then(() => voiceRef.current?.speak(clean) || Promise.resolve()).catch(() => undefined);
-  };
-
-  const sendMessage = async (valueOverride?: string, voice?: JazzVoice) => {
-    const value = (valueOverride ?? input).trim();
-    if (!value || sendInFlightRef.current) return;
-    const now = Date.now();
-    if (lastSubmissionRef.current?.value === value && now - lastSubmissionRef.current.at < 1800) return;
-    lastSubmissionRef.current = { value, at: now };
-    sendInFlightRef.current = true;
-    voice?.stop();
-    setMessages(current => [...current, { id: Date.now(), sender: "user", text: value, time: nowTime() }]);
-    setInput(""); setVoiceTranscript("");
-    const replyId = Date.now() + Math.random();
-    setMessages(current => [...current, { id: replyId, sender: "jazz", text: "", time: nowTime() }]);
-    let spokenBuffer = "";
-    let spokenChars = 0;
-    let receivedStreamText = false;
-    const flushSpeech = (force = false) => {
-      const available = spokenBuffer.slice(spokenChars);
-      if (!available) return;
-      const match = available.match(/^([\s\S]*?[.!?](?:["'”’)]*)?(?:\s|$))/);
-      if (match) {
-        const sentence = match[1].trim();
-        spokenChars += match[1].length;
-        queueSpeech(sentence);
-      } else if (force && available.trim()) {
-        spokenChars = spokenBuffer.length;
-        queueSpeech(available.trim());
-      } else if (available.length > 82) {
-        const cut = available.lastIndexOf(" ", 72);
-        if (cut > 28) { spokenChars += cut + 1; queueSpeech(available.slice(0, cut).trim()); }
-      }
-    };
-    try {
-      await streamChat(value, chunk => {
-        receivedStreamText = true;
-        spokenBuffer += chunk;
-        setMessages(current => current.map(item => item.id === replyId ? { ...item, text: item.text + chunk } : item));
-        flushSpeech(false);
-      }, voice ? "voice" : "typed");
-      flushSpeech(true);
-    } catch {
-      if (receivedStreamText) {
-        flushSpeech(true);
-      } else {
-        try {
-          const data = await apiJson("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: value, source: voice ? "voice" : "typed" }) });
-          const reply = data.assistant || "Jazz is ready.";
-          setMessages(current => current.map(item => item.id === replyId ? { ...item, text: reply } : item));
-          queueSpeech(reply);
-        } catch {
-          const reply = "Jazz could not reach the local API. Check Jazz Status and try again.";
-          setMessages(current => current.map(item => item.id === replyId ? { ...item, text: reply } : item));
-          queueSpeech(reply);
-        }
-      }
-    } finally {
-      sendInFlightRef.current = false;
-      if (voice) {
-        const resumeWhenSpeechEnds = () => {
-          if (window.speechSynthesis?.speaking) {
-            window.setTimeout(resumeWhenSpeechEnds, 220);
-            return;
-          }
-          if (voiceRef.current === voice) void voice.start();
-        };
-        void speechQueueRef.current.finally(() => window.setTimeout(resumeWhenSpeechEnds, 180));
-      }
-    }
-  };
+  useEffect(() => { if (!toast) return; const t = window.setTimeout(() => setToast("") , 2400); return () => window.clearTimeout(t); }, [toast]);
 
   const toggleVoice = () => {
-    if (!voiceRef.current?.isSupported()) { setVoiceState("unsupported"); addJazzMessage("Voice recognition is not supported here. Chrome or Edge is recommended."); return; }
-    if (voiceState === "listening") voiceRef.current.stop(); else voiceRef.current.start();
+    const voice = voiceRef.current;
+    if (!voice?.isSupported()) {
+      voiceActivationPendingRef.current = false;
+      setVoiceModeEnabled(false);
+      setVoiceState("unsupported");
+      addJazzMessage("Voice recognition is not supported here. Chrome or Edge is recommended.");
+      return;
+    }
+
+    if (voiceModeRef.current || voiceActivationPendingRef.current) {
+      voiceActivationPendingRef.current = false;
+      setVoiceModeEnabled(false);
+      setVoiceTranscript("");
+      cancelSpeechQueue();
+      return;
+    }
+
+    voiceActivationPendingRef.current = true;
+    void voice.start();
   };
   const newChat = () => { setActiveNav("Chat"); setShowFeatures(true); setMessages([{ id: Date.now(), sender: "jazz", text: "New chat started, Mama. I’m ready.", time: nowTime() }]); };
   const takeNote = async () => {
@@ -282,7 +335,7 @@ function App() {
   const runAndroidCommand = async (device: DeviceItem, action: string, args: Record<string, unknown> = {}) => {
     if (!device.bridge) { addJazzMessage(`${device.name} is not configured in the Windows ADB bridge yet.`); return; }
     if (!window.confirm(`Allow Jazz to send “${action}” to ${device.name}?`)) return;
-    try { const data = await apiJson("/api/device-command", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ deviceId: device.id, action, args, approved: true }) }); const text = data.message || `Command sent to ${device.name}.`; setToast(text); addJazzMessage(text); speak(text); }
+    try { const data = await apiJson("/api/device-command", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ deviceId: device.id, action, args, approved: true }) }); const text = data.message || `Command sent to ${device.name}.`; setToast(text); addJazzMessage(text); }
     catch (error) { addJazzMessage(`I couldn’t control ${device.name}: ${error instanceof Error ? error.message : "Device command failed"}`); }
   };
 
@@ -345,23 +398,23 @@ function App() {
         <NavItem icon={<Settings2 />} text="Settings" onClick={() => { setActiveNav("Settings"); addJazzMessage("Settings workspace opened."); }} />
       </nav>
       <div className="sidebar-overview"><div className="overview-title">Today’s Overview <ChevronDown size={14} /></div><div className="overview-grid"><Stat label="Tasks Completed" value="12/18" /><Stat label="Conversations" value="24" /></div><div className="overview-bottom"><div><span>Time Saved</span><strong>3.6 hrs</strong></div><div className="progress-ring"><span>75%</span></div></div></div>
-      <div className="sidebar-assistant-card"><div className="assistant-card-label"><strong>Jazz</strong> AI Assistant</div><span>Voice assistant active</span><div className="assistant-orb"><div className="assistant-orb-ring r1" /><div className="assistant-orb-ring r2" /><div className="assistant-orb-core"><MiniWave /></div></div></div>
+      <div className="sidebar-assistant-card"><div className="assistant-card-label"><strong>Jazz</strong> AI Assistant</div><span>{voiceMode ? "Voice replies on" : "Voice replies off"}</span><div className="assistant-orb"><div className="assistant-orb-ring r1" /><div className="assistant-orb-ring r2" /><div className="assistant-orb-core"><MiniWave /></div></div></div>
       <button className="customize-button" onClick={() => { setActiveNav("Settings"); setToast("Customize Hub opened"); }}><Wand2 size={16} /> Customize Hub</button>
-      <div className="sidebar-wave-strip">{Array.from({ length: 34 }, (_, i) => <i key={i} style={{ height: `${5 + ((i * 7) % 22)}px` }} />)}</div>
+      <div className="sidebar-wave-strip">{Array.from({ length: 34 }, (_, i) => <i key={i} style={{ height: `${5 + ((i * 7) % 22)}px` }} />}</div>
     </aside>
     <main className="main-content">
-      <header className="top-header"><button className="mobile-menu" onClick={() => setSidebarOpen(true)}><Menu size={22} /></button><div className="greeting"><h1>{greeting.title}</h1><p><span>Jazz is <b>online</b></span> and ready to assist you.</p></div><div className="top-search" onClick={() => setSearchOpen(true)}><Search size={17} /><span>Search anything...</span><kbd>Ctrl K</kbd></div><div className="header-actions"><button className={`round-button ${voiceState === "listening" ? "active" : ""}`} onClick={toggleVoice} title="Talk to Jazz"><Mic size={18} /></button><button className="round-button notification-button"><Bell size={18} /><span>3</span></button><div className="profile clickable" onClick={() => profileInputRef.current?.click()}>{profileImage ? <img src={profileImage} alt="Profile" className="profile-image" /> : <div className="profile-avatar">G</div>}<div className="profile-info"><strong>Gunakarna</strong><span><i />Online</span></div></div><input ref={profileInputRef} type="file" accept="image/*" onChange={onProfileSelected} hidden /></div></header>
+      <header className="top-header"><button className="mobile-menu" onClick={() => setSidebarOpen(true)}><Menu size={22} /></button><div className="greeting"><h1>{greeting.title}</h1><p><span>Jazz is <b>online</b></span> and ready to assist you.</p></div><div className="top-search" onClick={() => setSearchOpen(true)}><Search size={17} /><span>Search anything...</span><kbd>Ctrl K</kbd></div><div className="header-actions"><button className={`round-button ${voiceMode ? "active" : ""}`} onClick={toggleVoice} title={voiceMode ? "Turn voice replies off" : "Turn voice replies on"}><Mic size={18} /></button><button className="round-button notification-button"><Bell size={18} /><span>3</span></button><div className="profile clickable" onClick={() => profileInputRef.current?.click()}>{profileImage ? <img src={profileImage} alt="Profile" className="profile-image" /> : <div className="profile-avatar">G</div>}<div className="profile-info"><strong>Gunakarna</strong><span><i />Online</span></div></div><input ref={profileInputRef} type="file" accept="image/*" onChange={onProfileSelected} hidden /></div></header>
       <div className="dashboard-scroll"><div className="dashboard-grid">
         <section className="center-column">
           <div className="mode-tabs">{["AI Chat", "Code Assistant", "Web Search", "Summarize", "Creative"].map((tab, i) => <button key={tab} className={activeMode === tab ? "active" : ""} onClick={() => setActiveMode(tab)}>{i === 0 ? <Bot /> : i === 1 ? <Code2 /> : i === 2 ? <Search /> : i === 3 ? <FileText /> : <Sparkles />}{tab}</button>)}</div>
-          <section className="chat-panel"><div className="chat-panel-glow" /><div className="chat-messages" ref={messagesRef}>{messages.map(message => <ChatMessage key={message.id} message={message} />)}</div>{voiceState === "listening" && <VoiceListeningBubble transcript={voiceTranscript} />}<div className="composer-wrap"><div className="composer"><button className="composer-icon"><Paperclip size={18} /></button><input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === "Enter" && void sendMessage()} placeholder={voiceState === "listening" ? "Listening…" : "Type a message or use the microphone..."} /><button className={`composer-icon ${voiceState === "listening" ? "voice-on" : ""}`} onClick={toggleVoice}><Mic size={18} /></button></div><button className="send-button" onClick={() => void sendMessage()}><Send size={19} /></button></div><div className="suggestion-row"><Suggestion label="Summarize this page" icon={<FileText />} onClick={() => setInput("Summarize this page")} /><Suggestion label="Remind me at 8 PM" icon={<Timer />} onClick={setReminder} /><Suggestion label="Show my tasks" icon={<Check />} onClick={() => addJazzMessage("Your current dashboard shows 12 of 18 tasks completed.")} /><Suggestion label="Open WhatsApp" icon={<Webhook />} onClick={() => preferredAndroid && void runAndroidCommand(preferredAndroid, "launch_app", { packageName: "com.whatsapp" })} /><Suggestion label="Today’s agenda" icon={<CalendarDays />} onClick={openCalendar} /></div></section>
+          <section className="chat-panel"><div className="chat-panel-glow" /><div className="chat-messages" ref={messagesRef}>{messages.map(message => <ChatMessage key={message.id} message={message} />)}</div>{voiceMode && voiceState === "listening" && <VoiceListeningBubble transcript={voiceTranscript} />}<div className="composer-wrap"><div className="composer"><button className="composer-icon"><Paperclip size={18} /></button><input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === "Enter" && void sendMessage()} placeholder={voiceState === "listening" ? "Listening…" : voiceMode ? "Voice mode on — type or speak..." : "Type a message or use the microphone..."} /><button className={`composer-icon ${voiceMode ? "voice-on" : ""}`} onClick={toggleVoice} title={voiceMode ? "Turn voice replies off" : "Turn voice replies on"}><Mic size={18} /></button></div><button className="send-button" onClick={() => void sendMessage()}><Send size={19} /></button></div><div className="suggestion-row"><Suggestion label="Summarize this page" icon={<FileText />} onClick={() => setInput("Summarize this page")} /><Suggestion label="Remind me at 8 PM" icon={<Timer />} onClick={setReminder} /><Suggestion label="Show my tasks" icon={<Check />} onClick={() => addJazzMessage("Your current dashboard shows 12 of 18 tasks completed.")} /><Suggestion label="Open WhatsApp" icon={<Webhook />} onClick={() => preferredAndroid && void runAndroidCommand(preferredAndroid, "launch_app", { packageName: "com.whatsapp" })} /><Suggestion label="Today’s agenda" icon={<CalendarDays />} onClick={openCalendar} /></div></section>
           {showFeatures && <section className="feature-card"><div className="section-heading"><div><span className="heading-icon"><Sparkles size={16} /></span><strong>Powerful Features</strong></div></div><div className="feature-grid"><Feature icon={<Bot />} title="AI Agents" sub="Autonomous task" badge="NEW" /><Feature icon={<Webhook />} title="Automation" sub="Smart workflows" /><Feature icon={<FileText />} title="Knowledge" sub="Your knowledge base" /><Feature icon={<Code2 />} title="Code Assistant" sub="Write & debug code" /><Feature icon={<FileText />} title="File Analyzer" sub="Analyze any file" /><Feature icon={<Search />} title="Web Search" sub="Real-time results" /><Feature icon={<Mic />} title="Voice Control" sub="Hands-free control" /><Feature icon={<ImagePlus />} title="Image Generation" sub="Create with AI" /></div></section>}
         </section>
         <aside className="right-column">
           <DashboardCard icon={<Sparkles />} title="Quick Actions" action="Edit"><div className="quick-actions-grid">{quickActionList.map(action => <QuickAction key={action.label} {...action} />)}</div></DashboardCard>
           <DashboardCard icon={<Smartphone />} title="Devices" action={showAllDevices ? "Collapse" : "See all"} actionClick={() => setShowAllDevices(v => !v)}><div className="device-list">{(visibleDevices.length ? visibleDevices : [{ id: "android-phone", name: "Android Phone", kind: "android", status: "not-configured", bridge: false, connected: false }]).map(device => <DeviceRow key={device.id} device={device} onClick={() => setShowAllDevices(true)} />)}</div></DashboardCard>
-          <DashboardCard icon={<Bell />} title="Upcoming Reminders" action="See all"><div className="reminder-list">{reminders.length ? reminders.slice(0, 3).map(item => <ReminderRow key={item.id} item={item} />) : <div className="empty-row">No reminders yet. Use Set Reminder.</div>}</div></DashboardCard>
-          <div className="status-card"><div className="status-top"><div><div className="status-heading"><span className="status-icon"><Zap size={16} /></span><strong>Jazz Status</strong></div><p>Voice assistant ready • {voiceState === "listening" ? "listening..." : voiceState === "speaking" ? "speaking..." : "online"}</p></div><span className="online-badge">Online</span></div><div className="status-wave">{Array.from({ length: 22 }, (_, i) => <i key={i} style={{ height: `${6 + ((i * 11) % 27)}px` }} />)}</div></div>
+          <DashboardCard icon={<Bell />} title="Upcoming Reminders" action="See all"><div className="reminder-list">{reminders.length ? reminders.slice(0, 3).map(item => <ReminderRow key={item.id} item={item} />) : <div className="empty-row">No reminders yet. Use Set Reminder.</div>}</DashboardCard>
+          <div className="status-card"><div className="status-top"><div><div className="status-heading"><span className="status-icon"><Zap size={16} /></span><strong>Jazz Status</strong></div><p>{voiceMode ? `Voice replies on • ${voiceState === "listening" ? "listening..." : voiceState === "speaking" ? "speaking..." : "ready"}` : "Voice replies off • text only"}</p></div><span className="online-badge">Online</span></div><div className="status-wave">{Array.from({ length: 22 }, (_, i) => <i key={i} style={{ height: `${6 + ((i * 11) % 27)}px` }} />)}</div></div>
         </aside>
       </div>
       <section className="analytics-row"><div className="activity-card"><div className="analytics-heading"><div><span className="heading-icon blue"><Activity size={16} /></span><strong>Activity Overview</strong></div><button>This Week <ChevronDown size={14} /></button></div><div className="activity-content"><div className="productivity-ring"><span>68%</span><small>Productivity Score</small></div><div className="activity-legend"><Legend dot="purple" label="Chats" value="42%" /><Legend dot="cyan" label="Tasks" value="28%" /><Legend dot="green" label="Automations" value="18%" /><Legend dot="blue" label="Learning" value="12%" /></div></div></div></section></div>
