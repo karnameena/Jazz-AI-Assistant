@@ -51,9 +51,11 @@ class LostModeSecurityManager(private val context: Context) {
             .apply()
         LostModeHeartbeatWorker.schedule(context)
         LostModeHeartbeatWorker.syncNow(context)
+        LostModeForegroundService.start(context)
     }
 
     fun clear() {
+        LostModeForegroundService.stop(context)
         prefs.edit().clear().apply()
         LostModeHeartbeatWorker.cancel(context)
     }
