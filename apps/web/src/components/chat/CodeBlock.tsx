@@ -17,8 +17,7 @@ function tokenClass(token: string, language: string) {
   if (/^[+\-*\/=<>!&|?:%^~]+$/.test(token)) return "tok-operator";
   if (/^<\/?[A-Za-z][^>]*>$/.test(token)) return "tok-tag";
   if (KEYWORDS.has(token) || KEYWORDS.has(token.toUpperCase())) return "tok-keyword";
-  if (/^[A-Za-z_$][\w$]*(?=\()/.test(token)) return "tok-function";
-  if ((language === "css" || language === "scss") && /^[\w-]+(?=\s*:)/.test(token)) return "tok-property";
+  if ((language === "css" || language === "scss") && /^[\w-]+$/.test(token)) return "tok-property";
   return "";
 }
 
@@ -31,7 +30,17 @@ function highlightLine(line: string, language: string, lineNumber: number) {
   while ((match = matcher.exec(line))) {
     if (match.index > last) nodes.push(line.slice(last, match.index));
     const token = match[0];
-    const cls = tokenClass(token, language);
+    let cls = tokenClass(token, language);
+
+    if (!cls && /^[A-Za-z_$][\w$]*$/.test(token)) {
+      const after = line.slice(match.index + token.length);
+      const before = line.slice(0, match.index);
+      if (/^\s*\(/.test(after)) cls = "tok-function";
+      else if (/\b(?:function|class|interface|type)\s+$/.test(before)) cls = "tok-definition";
+      else if ((language === "css" || language === "scss") && /^\s*:/.test(after)) cls = "tok-property";
+      else if (/\b(?:const|let|var)\s+$/.test(before)) cls = "tok-variable";
+    }
+
     nodes.push(cls ? <span className={cls} key={`${lineNumber}-${part++}`}>{token}</span> : token);
     last = match.index + token.length;
   }
@@ -40,7 +49,8 @@ function highlightLine(line: string, language: string, lineNumber: number) {
 }
 
 function HighlightedCode({ code, language }: { code: string; language: string }) {
-  return <>{code.split("\n").map((line, index) => <React.Fragment key={index}>{highlightLine(line, language, index)}{index < code.split("\n").length - 1 ? "\n" : ""}</React.Fragment>)}</>;
+  const lines = code.split("\n");
+  return <>{lines.map((line, index) => <React.Fragment key={index}>{highlightLine(line, language, index)}{index < lines.length - 1 ? "\n" : ""}</React.Fragment>)}</>;
 }
 
 export function CodeBlock({ language, filename, code, complete = true }: { language: string; filename?: string; code: string; complete?: boolean }) {
@@ -60,20 +70,21 @@ export function CodeBlock({ language, filename, code, complete = true }: { langu
 
   return (
     <>
+      <div className="jazz-code-file-label" title={filename || "Code"}>{filename || "Code"}</div>
       <section className={`jazz-code-card ${complete ? "" : "is-streaming"}`}>
         <header className="jazz-code-card-header">
           <div className="jazz-code-title-group">
+            <span className="jazz-code-glyph" aria-hidden="true">&lt;/&gt;</span>
             <span className="jazz-code-language">{language.toUpperCase()}</span>
-            <strong title={filename}>{filename || "Code"}</strong>
             {!complete && <em>Streaming…</em>}
           </div>
           <div className="jazz-code-actions">
             <button type="button" onClick={copyCode} aria-label="Copy this code block" title="Copy code">
-              {copied ? <Check size={15} /> : <Copy size={15} />}
+              {copied ? <Check size={16} /> : <Copy size={16} />}
               <span>{copied ? "Copied" : "Copy"}</span>
             </button>
             <button type="button" onClick={() => setExpanded(true)} aria-label="Expand this code block" title="Expand code">
-              <Maximize2 size={15} />
+              <Maximize2 size={16} />
               <span>Expand</span>
             </button>
           </div>
