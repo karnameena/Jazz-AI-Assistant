@@ -185,6 +185,7 @@ function App() {
     const now = Date.now();
     if (lastSubmissionRef.current?.value === value && now - lastSubmissionRef.current.at < 1800) return;
     lastSubmissionRef.current = { value, at: now };
+    const shouldSpeakReply = voiceModeRef.current;
     sendInFlightRef.current = true;
 
     if (voiceModeRef.current) cancelSpeechQueue();
@@ -196,28 +197,29 @@ function App() {
     let streamedReply = "";
     let speechScheduled = false;
     try {
-      streamedReply = await streamChat(value, chunk => {
+      await streamChat(value, chunk => {
+        streamedReply += chunk;
         setMessages(current => current.map(item => item.id === replyId ? { ...item, text: item.text + chunk } : item));
       }, source);
-      speechScheduled = queueSpeech(streamedReply);
+      speechScheduled = shouldSpeakReply ? queueSpeech(streamedReply) : false;
     } catch {
       if (streamedReply.trim()) {
-        speechScheduled = queueSpeech(streamedReply);
+        speechScheduled = shouldSpeakReply ? queueSpeech(streamedReply) : false;
       } else {
         try {
           const data = await apiJson("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: value, source }) });
           const reply = data.assistant || "Jazz is ready.";
           setMessages(current => current.map(item => item.id === replyId ? { ...item, text: reply } : item));
-          speechScheduled = queueSpeech(reply);
+          speechScheduled = shouldSpeakReply ? queueSpeech(reply) : false;
         } catch {
           const reply = "Jazz could not reach the local API. Check Jazz Status and try again.";
           setMessages(current => current.map(item => item.id === replyId ? { ...item, text: reply } : item));
-          speechScheduled = queueSpeech(reply);
+          speechScheduled = shouldSpeakReply ? queueSpeech(reply) : false;
         }
       }
     } finally {
       sendInFlightRef.current = false;
-      if (voiceModeRef.current && !speechScheduled) void voiceRef.current?.start();
+      if (shouldSpeakReply && voiceModeRef.current && !speechScheduled) void voiceRef.current?.start();
     }
   };
 
@@ -295,7 +297,7 @@ function App() {
   useEffect(() => { writeStoredString(DRAFT_STORAGE_KEY, input); }, [input]);
   useEffect(() => { writeStoredString(MODE_STORAGE_KEY, activeMode); }, [activeMode]);
   useEffect(() => { writeStoredString(NAV_STORAGE_KEY, activeNav); }, [activeNav]);
-  useEffect(() => { if (!toast) return; const t = window.setTimeout(() => setToast("") , 2400); return () => window.clearTimeout(t); }, [toast]);
+  useEffect(() => { if (!toast) return; const t = window.setTimeout(() => setToast(""), 2400); return () => window.clearTimeout(t); }, [toast]);
 
   const toggleVoice = () => {
     const voice = voiceRef.current;
@@ -413,8 +415,8 @@ function App() {
         <aside className="right-column">
           <DashboardCard icon={<Sparkles />} title="Quick Actions" action="Edit"><div className="quick-actions-grid">{quickActionList.map(action => <QuickAction key={action.label} {...action} />)}</div></DashboardCard>
           <DashboardCard icon={<Smartphone />} title="Devices" action={showAllDevices ? "Collapse" : "See all"} actionClick={() => setShowAllDevices(v => !v)}><div className="device-list">{(visibleDevices.length ? visibleDevices : [{ id: "android-phone", name: "Android Phone", kind: "android", status: "not-configured", bridge: false, connected: false }]).map(device => <DeviceRow key={device.id} device={device} onClick={() => setShowAllDevices(true)} />)}</div></DashboardCard>
-          <DashboardCard icon={<Bell />} title="Upcoming Reminders" action="See all"><div className="reminder-list">{reminders.length ? reminders.slice(0, 3).map(item => <ReminderRow key={item.id} item={item} />) : <div className="empty-row">No reminders yet. Use Set Reminder.</div>}</DashboardCard>
-          <div className="status-card"><div className="status-top"><div><div className="status-heading"><span className="status-icon"><Zap size={16} /></span><strong>Jazz Status</strong></div><p>{voiceMode ? `Voice replies on • ${voiceState === "listening" ? "listening..." : voiceState === "speaking" ? "speaking..." : "ready"}` : "Voice replies off • text only"}</p></div><span className="online-badge">Online</span></div><div className="status-wave">{Array.from({ length: 22 }, (_, i) => <i key={i} style={{ height: `${6 + ((i * 11) % 27)}px` }} />)}</div></div>
+          <DashboardCard icon={<Bell />} title="Upcoming Reminders" action="See all"><div className="reminder-list">{reminders.length ? reminders.slice(0, 3).map(item => <ReminderRow key={item.id} item={item} />) : <div className="empty-row">No reminders yet. Use Set Reminder.</div>}</div></DashboardCard>
+          <div className="status-card"><div className="status-top"><div><div className="status-heading"><span className="status-icon"><Zap size={16} /></span><strong>Jazz Status</strong></div><p>{voiceMode ? `Voice replies on • ${voiceState === "listening" ? "listening..." : voiceState === "speaking" ? "speaking..." : "ready"}` : "Voice replies off • text only"}</p></div><span className="online-badge">Online</span></div><div className="status-wave">{Array.from({ length: 22 }, (_, i) => <i key={i} style={{ height: `${6 + ((i * 11) % 27)}px` }} />}</div></div>
         </aside>
       </div>
       <section className="analytics-row"><div className="activity-card"><div className="analytics-heading"><div><span className="heading-icon blue"><Activity size={16} /></span><strong>Activity Overview</strong></div><button>This Week <ChevronDown size={14} /></button></div><div className="activity-content"><div className="productivity-ring"><span>68%</span><small>Productivity Score</small></div><div className="activity-legend"><Legend dot="purple" label="Chats" value="42%" /><Legend dot="cyan" label="Tasks" value="28%" /><Legend dot="green" label="Automations" value="18%" /><Legend dot="blue" label="Learning" value="12%" /></div></div></div></section></div>
