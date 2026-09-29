@@ -81,6 +81,11 @@
             android:exported="false"
             android:foregroundServiceType="dataSync|location" />
 
+        <service
+            android:name=".lostmode.LostModeForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
         <receiver
             android:name=".recovery.RecoveryBootReceiver"
             android:exported="false">
