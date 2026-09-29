@@ -6,6 +6,7 @@ import { callOllama, ensureOllamaReady, getOllamaStatus, streamOllama } from "./
 import { getTtsStatus, streamPiperRaw, synthesizeWithPiper } from "./tts.mjs";
 import { debugUnderstanding, normalizeUtterance } from "./utterance-normalizer.mjs";
 import { jazzSystemPrompt, localPersonalityReply } from "./jazz-personality.mjs";
+import { getCodingAgentHealth, getCodingTask, handleCodingIntent, listCodingTasks } from "../../coding-agent/src/index.mjs";
 import {
   callReminderNow,
   createVoipReminder,
@@ -16,7 +17,7 @@ import {
   listVoipReminders
 } from "./voip-reminders.mjs";
 
-const VERSION = "0.10.3-local";
+const VERSION = "0.10.4-local";
 const port = Number(process.env.PORT || 8787);
 const memories = [];
 let pendingSensitiveAction = null;
@@ -29,6 +30,7 @@ const tools = [
   { name: "pc", description: "Execute an explicitly authorized PC action", requiresConfirmation: true },
   { name: "tts", description: "Speak Jazz replies with Piper or the browser fallback", requiresConfirmation: false },
   { name: "voip", description: "Schedule and deliver reminder calls through the configured local Asterisk SIP system", requiresConfirmation: false },
+  { name: "coding", description: "Create and validate code in an isolated workspace with approval-gated dependency installation and integration", requiresConfirmation: false },
   { name: "ollama", description: "Run Jazz's local LLM brain through Ollama", requiresConfirmation: false },
   { name: "web", description: "Search the live web when an approved online provider is configured", requiresConfirmation: false }
 ];
@@ -339,6 +341,9 @@ async function localAssistantReply(message) {
   const reminder = await handleVoipReminderCommand(text);
   if (reminder) return reminder;
 
+  const coding = await handleCodingIntent(text);
+  if (coding) return coding;
+
   const androidIntent = await handleAndroidIntent(text);
   if (androidIntent) return androidIntent;
 
@@ -482,6 +487,13 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { ok: true, item });
     }
 
+    const codingTaskMatch = pathname.match(/^\/api\/coding\/tasks\/([^/]+)$/);
+    if (req.method === "GET" && codingTaskMatch) {
+      const item = await getCodingTask(decodeURIComponent(codingTaskMatch[1]));
+      if (!item) return sendJson(res, 404, { ok: false, error: "Coding task not found" });
+      return sendJson(res, 200, { ok: true, item });
+    }
+
     if (req.method === "GET" && req.url === "/health") {
       const [ollama, tts] = await Promise.all([getOllamaStatus(), getTtsStatus()]);
       return sendJson(res, 200, {
@@ -498,6 +510,8 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && req.url === "/api/brain-health") return sendJson(res, 200, { ok: true, version: VERSION, provider: process.env.JAZZ_LLM_PROVIDER || "ollama", ollama: await getOllamaStatus() });
     if (req.method === "GET" && req.url === "/api/tts-health") return sendJson(res, 200, { ok: true, version: VERSION, tts: await getTtsStatus() });
     if (req.method === "GET" && req.url === "/api/voip/health") return sendJson(res, 200, { ok: true, voip: await getVoipHealth() });
+    if (req.method === "GET" && req.url === "/api/coding/health") return sendJson(res, 200, { ok: true, coding: await getCodingAgentHealth() });
+    if (req.method === "GET" && req.url === "/api/coding/tasks") return sendJson(res, 200, { ok: true, items: await listCodingTasks() });
     if (req.method === "GET" && req.url === "/api/tools") return sendJson(res, 200, { ok: true, tools });
     if (req.method === "GET" && req.url === "/api/scripts") return sendJson(res, 200, { ok: true, items: listScripts() });
     if (req.method === "GET" && req.url === "/api/devices") return sendJson(res, 200, { ok: true, items: devices });
