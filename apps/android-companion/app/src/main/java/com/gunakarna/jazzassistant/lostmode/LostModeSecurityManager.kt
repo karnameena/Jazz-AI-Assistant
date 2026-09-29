@@ -4,6 +4,7 @@ import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import androidx.core.content.ContextCompat
 import java.nio.charset.StandardCharsets
 import java.security.KeyStore
 import javax.crypto.Cipher
@@ -51,10 +52,13 @@ class LostModeSecurityManager(private val context: Context) {
             .apply()
         LostModeHeartbeatWorker.schedule(context)
         LostModeHeartbeatWorker.syncNow(context)
+        try { ContextCompat.startForegroundService(context, LostModeForegroundService.intent(context)) }
+        catch (_: Exception) { LostModeHeartbeatWorker.syncNow(context) }
     }
 
     fun clear() {
         prefs.edit().clear().apply()
+        context.stopService(LostModeForegroundService.intent(context))
         LostModeHeartbeatWorker.cancel(context)
     }
 
