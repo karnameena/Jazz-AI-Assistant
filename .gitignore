@@ -14,6 +14,11 @@ node_modules/
 **/.vite/
 **/.vite-jazz/
 
+# Lost Mode local database runtime
+services/lost-mode-server/data/*.db
+services/lost-mode-server/data/*.db-shm
+services/lost-mode-server/data/*.db-wal
+
 # Local device identity/runtime state
 bridges/windows-adb/.device-identities.json
 
