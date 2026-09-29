@@ -19,6 +19,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.core.content.ContextCompat
+import com.gunakarna.jazzassistant.lostmode.LostModeSetupActivity
 import com.gunakarna.jazzassistant.recovery.LostDeviceManager
 import com.gunakarna.jazzassistant.recovery.RecoveryForegroundService
 import com.gunakarna.jazzassistant.recovery.RecoveryHeartbeatWorker
@@ -178,6 +179,13 @@ class MainActivity : Activity() {
                         append("Then restart the recovery relay and tap Test Recovery Connection Now.")
                     }
                 }
+            }
+        })
+
+        content.addView(Button(this).apply {
+            text = "Open New Lost Mode Website Setup"
+            setOnClickListener {
+                startActivity(Intent(this@MainActivity, LostModeSetupActivity::class.java))
             }
         })
 
