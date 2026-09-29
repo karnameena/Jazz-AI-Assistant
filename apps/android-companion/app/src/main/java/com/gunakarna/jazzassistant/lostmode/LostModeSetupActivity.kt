@@ -14,6 +14,11 @@ class LostModeSetupActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val security = LostModeSecurityManager(this)
+        if (security.isConfigured()) {
+            LostModeHeartbeatWorker.schedule(this)
+            LostModeForegroundService.start(this)
+        }
+
         val status = TextView(this).apply { textSize = 14f; setPadding(0, 14, 0, 14) }
         val server = EditText(this).apply { hint = "https://your-lost-mode-server.example.com"; setText(security.serverUrl()) }
         val deviceId = EditText(this).apply { hint = "Device ID from create-device"; setText(security.deviceId()) }
@@ -36,11 +41,12 @@ class LostModeSetupActivity : Activity() {
                         val token = credential.text.toString()
                         if (token.isBlank() && security.isConfigured()) {
                             status.text = "Already configured. Enter a credential only when replacing enrollment."
+                            LostModeForegroundService.start(this@LostModeSetupActivity)
                             return@setOnClickListener
                         }
                         security.configure(server.text.toString(), deviceId.text.toString(), token)
                         credential.setText("")
-                        status.text = "Lost Mode enrollment saved securely. Initial sync queued."
+                        status.text = "Lost Mode enrollment saved securely. Live sync started."
                     } catch (e: Exception) { status.text = "Setup error: ${e.message}" }
                 }
             })
@@ -48,6 +54,7 @@ class LostModeSetupActivity : Activity() {
                 text = "Test Lost Mode Connection"
                 setOnClickListener {
                     status.text = "Testing…"
+                    LostModeForegroundService.start(this@LostModeSetupActivity)
                     Thread {
                         try {
                             val result = LostModeNetworkClient(applicationContext).syncOnce()
