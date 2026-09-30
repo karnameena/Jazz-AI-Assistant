@@ -38,10 +38,14 @@ class LostModeSecurityManager(private val context: Context) {
     fun configure(serverUrl: String, deviceId: String, credential: String) {
         val url = serverUrl.trim().trimEnd('/')
         val id = deviceId.trim()
-        val token = credential.trim()
+        val suppliedToken = credential.trim()
+        val existingToken = this.credential()
+        val token = if (suppliedToken.isNotBlank()) suppliedToken else existingToken
+
         require(url.startsWith("https://")) { "Lost Mode server must use HTTPS." }
         require(id.length in 3..120) { "Lost Mode device ID is invalid." }
-        require(token.length >= 32) { "Lost Mode device credential is invalid." }
+        require(token.length >= 32) { "Lost Mode device credential is invalid. Enter the credential when enrolling for the first time or after rotating it." }
+
         val encrypted = encrypt(token)
         prefs.edit()
             .putString(SERVER_URL, url)
