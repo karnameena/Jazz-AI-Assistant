@@ -1,0 +1,115 @@
+/* Targeted layout hardening for the Lost Mode portal. Existing component/workflow logic is untouched. */
+.topbar{
+  position:sticky;
+  top:12px;
+  z-index:50;
+  isolation:isolate;
+  background:linear-gradient(145deg,rgba(12,18,39,.96),rgba(8,13,30,.92));
+  box-shadow:0 18px 48px rgba(0,0,0,.34);
+}
+
+/* Keep sticky header content readable while the dashboard scrolls beneath it. */
+.topbar::after{
+  content:"";
+  position:absolute;
+  inset:0;
+  border-radius:inherit;
+  pointer-events:none;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.03);
+}
+
+.dashboard-layout,
+.dashboard-main,
+.recovery-grid,
+.location-card,
+.photo-card,
+.device-hero,
+.metrics-grid,
+.action-grid{
+  min-width:0;
+}
+
+.map-frame{
+  width:100%;
+  min-height:clamp(260px,38vw,480px);
+  aspect-ratio:auto;
+}
+
+.map-frame iframe{
+  min-width:100%;
+  min-height:100%;
+}
+
+.card-actions .primary-button,
+.card-actions .secondary-button{
+  white-space:normal;
+  text-align:center;
+}
+
+@media (max-width:1200px){
+  .dashboard-layout{grid-template-columns:250px minmax(0,1fr)}
+  .recovery-grid{grid-template-columns:1fr}
+  .photo-frame{height:clamp(300px,55vw,560px)}
+}
+
+@media (max-width:900px){
+  .app-shell{padding:12px}
+  .topbar{top:8px;margin-bottom:14px;padding:12px 13px;align-items:flex-start;flex-wrap:wrap}
+  .topbar-actions{width:100%;display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+  .fleet-pill,.topbar-actions .ghost-button{width:100%;min-width:0;justify-content:center}
+  .dashboard-layout{grid-template-columns:1fr;gap:14px}
+  .device-sidebar{position:relative;top:auto;overflow:hidden}
+  .device-list{display:flex;overflow-x:auto;gap:8px;padding-bottom:4px;scroll-snap-type:x proximity}
+  .device-row{min-width:220px;scroll-snap-align:start}
+  .metrics-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .action-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .section-heading{align-items:flex-start;flex-direction:column;gap:6px}
+  .section-heading>span{text-align:left;max-width:none}
+}
+
+@media (max-width:680px){
+  .app-shell{padding:8px}
+  .topbar{top:6px;border-radius:18px;padding:10px 11px}
+  .brand-block{gap:9px;min-width:0}
+  .brand-mark.small-mark{width:38px;height:38px;border-radius:13px}
+  .brand-block h1{font-size:.98rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:52vw}
+  .brand-block .eyebrow{font-size:.59rem}
+  .topbar-actions{grid-template-columns:1fr 1fr}
+  .fleet-pill{grid-column:1/-1;height:38px}
+  .topbar-actions .ghost-button{min-height:40px;padding:0 10px;font-size:.8rem}
+  .device-hero{grid-template-columns:1fr;padding:16px}
+  .mode-badge{justify-self:start}
+  .metrics-grid{grid-template-columns:1fr}
+  .metric-card{padding:11px 12px}
+  .action-grid{grid-template-columns:1fr}
+  .action-grid button{min-height:76px}
+  .location-card,.photo-card{padding:14px}
+  .map-frame{min-height:300px;border-radius:15px}
+  .location-meta{grid-template-columns:1fr}
+  .card-actions{display:grid;grid-template-columns:1fr}
+  .card-actions .primary-button,.card-actions .secondary-button{width:100%}
+  .photo-frame{height:min(72vh,520px)}
+  .photo-meta{flex-direction:column;gap:4px}
+  .site-footer{flex-direction:column;align-items:flex-start}
+}
+
+@media (max-width:430px){
+  .topbar{top:4px}
+  .brand-block h1{max-width:58vw;font-size:.9rem}
+  .brand-mark.small-mark{width:34px;height:34px}
+  .fleet-pill{font-size:.74rem}
+  .device-sidebar{padding:13px}
+  .device-row{min-width:205px;padding:9px}
+  .device-avatar{width:38px;height:38px}
+  .hero-main{align-items:flex-start}
+  .status-orb{width:44px;height:44px;border-radius:14px}
+  .hero-main h2{font-size:1.3rem}
+  .device-id-line{overflow-wrap:anywhere}
+  .map-frame{min-height:260px}
+  .map-overlay{left:8px;bottom:8px;max-width:calc(100% - 16px)}
+}
+
+@media (orientation:landscape) and (max-height:560px){
+  .topbar{top:4px;padding-top:8px;padding-bottom:8px}
+  .map-frame{min-height:340px}
+}
