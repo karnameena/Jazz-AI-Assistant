@@ -63,10 +63,34 @@ function ownerDevice(userId, id) {
   return db.prepare("SELECT * FROM devices WHERE id=? AND user_id=?").get(Number(id), userId);
 }
 
+// SQLite CURRENT_TIMESTAMP is UTC but is stored as "YYYY-MM-DD HH:MM:SS" without
+// a timezone suffix. Browsers/Node can otherwise interpret that value as local time,
+// which made Last Seen wrong and could incorrectly mark a live phone as OFFLINE.
+function sqliteUtcToIso(value) {
+  if (!value) return null;
+  const raw = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(raw)) {
+    return `${raw.replace(" ", "T")}Z`;
+  }
+  const parsed = Date.parse(raw);
+  return Number.isNaN(parsed) ? raw : new Date(parsed).toISOString();
+}
+
+function sqliteUtcToMs(value) {
+  const normalized = sqliteUtcToIso(value);
+  if (!normalized) return 0;
+  const parsed = Date.parse(normalized);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function sqliteUtcTimestamp(ms) {
+  return new Date(ms).toISOString().slice(0, 19).replace("T", " ");
+}
+
 function stateFor(deviceDbId) {
   const row = db.prepare("SELECT * FROM device_state WHERE device_id=?").get(deviceDbId);
   if (!row) return null;
-  const lastSeenMs = row.last_seen ? Date.parse(row.last_seen) : 0;
+  const lastSeenMs = sqliteUtcToMs(row.last_seen);
   return { ...row, online: Boolean(lastSeenMs && Date.now() - lastSeenMs <= ONLINE_WINDOW_MS) };
 }
 
@@ -82,7 +106,7 @@ function publicDevice(row) {
     battery: state.battery,
     charging: Boolean(state.charging),
     network: state.network || "UNKNOWN",
-    lastSeen: state.last_seen,
+    lastSeen: sqliteUtcToIso(state.last_seen),
     location: state.latitude == null ? null : {
       latitude: state.latitude,
       longitude: state.longitude,
@@ -247,7 +271,8 @@ const server = http.createServer(async (req, res) => {
       const session = requireSession(req, res); if (!session) return;
       const row = ownerDevice(session.user_id, auditMatch[1]);
       if (!row) return json(res, 404, { ok: false, error: "Device not found" });
-      const items = db.prepare("SELECT action,status,created_at FROM recovery_audit WHERE user_id=? AND device_id=? ORDER BY id DESC LIMIT 50").all(session.user_id, row.id);
+      const items = db.prepare("SELECT action,status,created_at FROM recovery_audit WHERE user_id=? AND device_id=? ORDER BY id DESC LIMIT 50").all(session.user_id, row.id)
+        .map(item => ({ ...item, created_at: sqliteUtcToIso(item.created_at) }));
       return json(res, 200, { ok: true, items });
     }
 
@@ -265,9 +290,9 @@ const server = http.createServer(async (req, res) => {
       if (!device) return json(res, 401, { ok: false, error: "Unauthorized device" });
       const command = db.prepare(`SELECT * FROM recovery_commands WHERE device_id=? AND status='pending' AND (leased_until IS NULL OR leased_until<CURRENT_TIMESTAMP) ORDER BY created_at LIMIT 1`).get(device.id);
       if (!command) return json(res, 200, { ok: true, command: null });
-      const leasedUntil = new Date(Date.now() + 30_000).toISOString();
+      const leasedUntil = sqliteUtcTimestamp(Date.now() + 30_000);
       db.prepare("UPDATE recovery_commands SET leased_until=? WHERE id=?").run(leasedUntil, command.id);
-      return json(res, 200, { ok: true, command: { id: command.id, type: command.type, args: JSON.parse(command.args_json || "{}"), createdAt: command.created_at } });
+      return json(res, 200, { ok: true, command: { id: command.id, type: command.type, args: JSON.parse(command.args_json || "{}"), createdAt: sqliteUtcToIso(command.created_at) } });
     }
 
     const resultMatch = path.match(/^\/android\/device\/commands\/([a-f0-9-]+)\/result$/i);
