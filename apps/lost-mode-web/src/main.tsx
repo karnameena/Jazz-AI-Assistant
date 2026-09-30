@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   BatteryCharging,
@@ -96,6 +96,11 @@ function downloadText(filename: string, value: string) {
   URL.revokeObjectURL(url);
 }
 
+function actionKey(name: string, args: Record<string, unknown> = {}) {
+  if (name === "RECOVERY_PHOTO") return `${name}:${args.camera === "rear" ? "rear" : "front"}`;
+  return name;
+}
+
 function Login({ done }: { done: () => void }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -151,8 +156,9 @@ function App() {
   const [selected, setSelected] = useState<number | null>(null);
   const [device, setDevice] = useState<Device | null>(null);
   const [msg, setMsg] = useState("");
-  const [busy, setBusy] = useState<string | null>(null);
+  const [activeCount, setActiveCount] = useState(0);
   const [voiceOpen, setVoiceOpen] = useState(false);
+  const actionLocks = useRef(new Set<string>());
 
   async function load() {
     const data = await api("/api/devices");
@@ -162,9 +168,10 @@ function App() {
   }
 
   async function refresh(id = selected) {
-    if (!id) return;
+    if (!id) return null;
     const data = await api(`/api/devices/${id}`);
     setDevice(data.device);
+    return data.device as Device;
   }
 
   useEffect(() => {
@@ -179,40 +186,81 @@ function App() {
   useEffect(() => {
     if (!login || !selected) return;
     const timer = window.setInterval(() => {
-      void refresh(selected);
-      void load();
-    }, 5000);
+      void refresh(selected).catch(() => {});
+      void load().catch(() => {});
+    }, 2000);
     return () => window.clearInterval(timer);
   }, [login, selected]);
 
+  function isActionBusy(name: string, args: Record<string, unknown> = {}) {
+    return actionLocks.current.has(actionKey(name, args));
+  }
+
   async function action(name: string, args: Record<string, unknown> = {}) {
     if (!selected) return;
-    setBusy(name);
+    const key = actionKey(name, args);
+    if (actionLocks.current.has(key)) {
+      setMsg("That recovery request is already in progress. Jazz will refresh the latest result automatically.");
+      return;
+    }
+
+    const selectedAtStart = selected;
+    const beforeLocation = String(device?.location?.timestamp ?? "");
+    const beforePhoto = `${device?.photo?.camera ?? ""}:${String(device?.photo?.timestamp ?? "")}`;
+    const beforeMode = device?.mode || "";
+
+    actionLocks.current.add(key);
+    setActiveCount(actionLocks.current.size);
     setMsg("Sending secure recovery request…");
+
     try {
-      const data = await api(`/api/devices/${selected}/actions`, {
+      const data = await api(`/api/devices/${selectedAtStart}/actions`, {
         method: "POST",
         body: JSON.stringify({ action: name, args }),
       });
-      setMsg(`Recovery request queued securely • ${data.commandId}`);
-      let attempts = 0;
-      const timer = window.setInterval(async () => {
-        attempts += 1;
-        await refresh(selected).catch(() => {});
-        await load().catch(() => {});
-        if (attempts >= 12) {
-          window.clearInterval(timer);
-          setBusy(null);
+      setMsg(data.deduplicated
+        ? "A matching recovery request is already queued. Waiting for the latest result…"
+        : "Recovery request sent. Waiting for the device…");
+
+      const maxAttempts = name === "GET_LOCATION" || name === "RECOVERY_PHOTO" ? 36 : 10;
+      for (let attempts = 0; attempts < maxAttempts; attempts += 1) {
+        await new Promise(resolve => window.setTimeout(resolve, 650));
+        const latest = await refresh(selectedAtStart).catch(() => null);
+        if (!latest) continue;
+        if (attempts % 3 === 0) void load().catch(() => {});
+
+        if (name === "GET_LOCATION") {
+          const now = String(latest.location?.timestamp ?? "");
+          if (now && now !== beforeLocation) {
+            setMsg("Latest location received and map updated.");
+            break;
+          }
+        } else if (name === "RECOVERY_PHOTO") {
+          const wanted = args.camera === "rear" ? "rear" : "front";
+          const now = `${latest.photo?.camera ?? ""}:${String(latest.photo?.timestamp ?? "")}`;
+          if (latest.photo?.camera === wanted && now !== beforePhoto) {
+            setMsg(`${wanted === "rear" ? "Back" : "Front"} camera recovery photo updated.`);
+            break;
+          }
+        } else if (name === "SET_RECOVERY_MODE" && latest.mode !== beforeMode) {
+          setMsg("Lost Mode state updated.");
+          break;
+        } else if (attempts === maxAttempts - 1) {
+          setMsg("Recovery request sent. The page will continue refreshing automatically.");
         }
-      }, 2500);
+      }
     } catch (error) {
-      setBusy(null);
       setMsg(error instanceof Error ? error.message : "Action failed");
+    } finally {
+      actionLocks.current.delete(key);
+      setActiveCount(actionLocks.current.size);
     }
   }
 
   async function logout() {
     setVoiceOpen(false);
+    actionLocks.current.clear();
+    setActiveCount(0);
     await api("/api/auth/logout", { method: "POST", body: "{}" }).catch(() => {});
     setLogin(false);
     setDevices([]);
@@ -319,24 +367,24 @@ function App() {
 
             <section className="section-heading"><div><span className="eyebrow">RECOVERY ACTIONS</span><h2>Remote controls</h2></div><span>Commands use the existing allowlisted recovery workflow.</span></section>
             <section className="action-grid">
-              <button onClick={() => action("DEVICE_STATUS")}><Smartphone /><div><strong>Device Status</strong><span>Refresh device health</span></div></button>
-              <button onClick={() => action("GET_LOCATION")}><LocateFixed /><div><strong>Get Location</strong><span>Request latest position</span></div></button>
-              <button onClick={() => action("RING_DEVICE")}><Volume2 /><div><strong>Ring Device</strong><span>Play recovery alert</span></div></button>
-              <button onClick={() => action("RECOVERY_PHOTO", { camera: "front" })}><Camera /><div><strong>Front Camera</strong><span>Request recovery photo</span></div></button>
-              <button onClick={() => action("RECOVERY_PHOTO", { camera: "rear" })}><Camera /><div><strong>Back Camera</strong><span>Request recovery photo</span></div></button>
-              <button className="critical-action" onClick={() => action("SET_RECOVERY_MODE", { enabled: true })}><ShieldCheck /><div><strong>Enable Lost Mode</strong><span>Secure recovery state</span></div></button>
-              <button className="voice-toggle" aria-expanded={voiceOpen} aria-controls="recovery-voice-panel" onClick={() => setVoiceOpen(open => !open)}><Mic /><div><strong>Voice Input</strong><span>Optional commands or audio message</span></div></button>
+              <button disabled={isActionBusy("DEVICE_STATUS")} onClick={() => action("DEVICE_STATUS")}><Smartphone /><div><strong>Device Status</strong><span>Refresh device health</span></div></button>
+              <button disabled={isActionBusy("GET_LOCATION")} onClick={() => action("GET_LOCATION")}><LocateFixed /><div><strong>Get Location</strong><span>{isActionBusy("GET_LOCATION") ? "Request in progress…" : "Request latest position"}</span></div></button>
+              <button disabled={isActionBusy("RING_DEVICE")} onClick={() => action("RING_DEVICE")}><Volume2 /><div><strong>Ring Device</strong><span>Play recovery alert</span></div></button>
+              <button disabled={isActionBusy("RECOVERY_PHOTO", { camera: "front" })} onClick={() => action("RECOVERY_PHOTO", { camera: "front" })}><Camera /><div><strong>Front Camera</strong><span>{isActionBusy("RECOVERY_PHOTO", { camera: "front" }) ? "Capturing…" : "Request recovery photo"}</span></div></button>
+              <button disabled={isActionBusy("RECOVERY_PHOTO", { camera: "rear" })} onClick={() => action("RECOVERY_PHOTO", { camera: "rear" })}><Camera /><div><strong>Back Camera</strong><span>{isActionBusy("RECOVERY_PHOTO", { camera: "rear" }) ? "Capturing…" : "Request recovery photo"}</span></div></button>
+              <button className="critical-action" disabled={isActionBusy("SET_RECOVERY_MODE", { enabled: true })} onClick={() => action("SET_RECOVERY_MODE", { enabled: true })}><ShieldCheck /><div><strong>Enable Lost Mode</strong><span>Secure recovery state</span></div></button>
+              <button className="voice-toggle" aria-expanded={voiceOpen} aria-controls="recovery-voice-panel" onClick={() => setVoiceOpen(open => !open)}><Mic /><div><strong>Voice Input</strong><span>Remote recovery voice broadcast</span></div></button>
             </section>
 
             {voiceOpen && <VoiceInput
               key={selected}
               deviceName={devices.find(item => item.id === selected)?.deviceName || "Selected device"}
-              disabled={Boolean(busy) || device.id !== selected}
+              disabled={activeCount > 0 || device.id !== selected}
               onAction={action}
               onClose={() => setVoiceOpen(false)}
             />}
 
-            {(msg || busy) && <div className="command-banner glass-panel"><div className="pulse-dot" /><span>{msg || "Processing…"}</span>{busy && <RefreshCw className="spin" size={16} />}</div>}
+            {(msg || activeCount > 0) && <div className="command-banner glass-panel"><div className="pulse-dot" /><span>{msg || "Processing…"}</span>{activeCount > 0 && <RefreshCw className="spin" size={16} />}</div>}
 
             <section className="recovery-grid">
               <article className="location-card glass-panel">
