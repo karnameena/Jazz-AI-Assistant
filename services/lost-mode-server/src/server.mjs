@@ -3,16 +3,15 @@ import crypto from "node:crypto";
 import { applyMigrations, db } from "./db/database.mjs";
 import { verifySecret } from "./auth/password.mjs";
 import { createSession, sessionCookie, clearSessionCookie, getSession, destroySession } from "./auth/sessions.mjs";
-import { createVoiceHandler } from "./voice.mjs";
 
 applyMigrations();
 
 const port = Number(process.env.PORT || 8890);
 const publicOrigin = String(process.env.LOST_MODE_PUBLIC_ORIGIN || "http://localhost:5190").replace(/\/$/, "");
 const ONLINE_WINDOW_MS = 90_000;
-const ALLOWED_COMMANDS = new Set(["DEVICE_STATUS", "GET_LOCATION", "RING_DEVICE", "RECOVERY_PHOTO", "SET_RECOVERY_MODE"]);
+const MAX_VOICE_WAV_BYTES = 900_000;
+const ALLOWED_COMMANDS = new Set(["DEVICE_STATUS", "GET_LOCATION", "RING_DEVICE", "RECOVERY_PHOTO", "SET_RECOVERY_MODE", "PLAY_VOICE_MESSAGE"]);
 const loginAttempts = new Map();
-const handleVoice = createVoiceHandler({ getSession, json, publicOrigin });
 
 function json(res, status, body, extraHeaders = {}) {
   res.statusCode = status;
@@ -65,15 +64,10 @@ function ownerDevice(userId, id) {
   return db.prepare("SELECT * FROM devices WHERE id=? AND user_id=?").get(Number(id), userId);
 }
 
-// SQLite CURRENT_TIMESTAMP is UTC but is stored as "YYYY-MM-DD HH:MM:SS" without
-// a timezone suffix. Browsers/Node can otherwise interpret that value as local time,
-// which made Last Seen wrong and could incorrectly mark a live phone as OFFLINE.
 function sqliteUtcToIso(value) {
   if (!value) return null;
   const raw = String(value).trim();
-  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(raw)) {
-    return `${raw.replace(" ", "T")}Z`;
-  }
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(raw)) return `${raw.replace(" ", "T")}Z`;
   const parsed = Date.parse(raw);
   return Number.isNaN(parsed) ? raw : new Date(parsed).toISOString();
 }
@@ -146,6 +140,17 @@ function authenticateDevice(req) {
   return row;
 }
 
+function validateVoiceArgs(args = {}) {
+  if (args.mimeType !== "audio/wav" || typeof args.audioBase64 !== "string") return null;
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(args.audioBase64)) return null;
+  let audio;
+  try { audio = Buffer.from(args.audioBase64, "base64"); } catch { return null; }
+  if (audio.length <= 44 || audio.length > MAX_VOICE_WAV_BYTES) return null;
+  if (audio.toString("ascii", 0, 4) !== "RIFF" || audio.toString("ascii", 8, 12) !== "WAVE") return null;
+  if (audio.readUInt16LE(20) !== 1 || audio.readUInt16LE(22) !== 1 || audio.readUInt32LE(24) !== 16000 || audio.readUInt16LE(34) !== 16) return null;
+  return { mimeType: "audio/wav", audioBase64: args.audioBase64 };
+}
+
 function mapCommand(type, args = {}) {
   switch (type) {
     case "DEVICE_STATUS": return { type: "device_status", args: {} };
@@ -153,6 +158,10 @@ function mapCommand(type, args = {}) {
     case "RING_DEVICE": return { type: "ring_device", args: { durationMs: Math.min(60_000, Math.max(5_000, Number(args.durationMs || 30_000))) } };
     case "RECOVERY_PHOTO": return { type: "recovery_photo", args: { camera: args.camera === "rear" ? "rear" : "front" } };
     case "SET_RECOVERY_MODE": return { type: "set_recovery_mode", args: { enabled: args.enabled !== false } };
+    case "PLAY_VOICE_MESSAGE": {
+      const voice = validateVoiceArgs(args);
+      return voice ? { type: "play_voice_message", args: voice } : null;
+    }
     default: return null;
   }
 }
@@ -210,10 +219,6 @@ const server = http.createServer(async (req, res) => {
   try {
     if (req.method === "GET" && path === "/health") return json(res, 200, { ok: true, service: "jazz-lost-mode-server", storage: "sqlite" });
 
-    if ((req.method === "GET" && path === "/api/voice/config") || (req.method === "POST" && path === "/api/voice/transcribe")) {
-      return await handleVoice(req, res, path);
-    }
-
     if (req.method === "POST" && path === "/api/auth/login") {
       const body = await readJson(req);
       const username = String(body.username || "").trim();
@@ -265,6 +270,7 @@ const server = http.createServer(async (req, res) => {
       const action = String(body.action || "").toUpperCase();
       if (!ALLOWED_COMMANDS.has(action)) return json(res, 400, { ok: false, error: "Recovery action is not allowed" });
       const mapped = mapCommand(action, body.args || {});
+      if (!mapped) return json(res, 400, { ok: false, error: action === "PLAY_VOICE_MESSAGE" ? "Invalid or oversized recovery voice message" : "Invalid recovery action arguments" });
       const id = crypto.randomUUID();
       db.prepare("INSERT INTO recovery_commands(id,device_id,type,args_json) VALUES(?,?,?,?)")
         .run(id, row.id, mapped.type, JSON.stringify(mapped.args));
