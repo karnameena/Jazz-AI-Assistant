@@ -1,4 +1,4 @@
-export const MAX_RECORDING_SECONDS = 30;
+export const MAX_RECORDING_SECONDS = 20;
 const MAX_RECORDING_BYTES = 2 * 1024 * 1024;
 
 export function microphoneUnavailable(): string | null {
@@ -18,7 +18,6 @@ export function microphoneError(error: unknown): string {
   return error instanceof Error ? error.message : "Microphone recording failed. Please try again.";
 }
 
-/** Owns one explicit recording, including permission requests that resolve late. */
 type RecordingCallbacks = {
   onStarted: () => void;
   onDone: (blob: Blob) => void;
@@ -112,13 +111,12 @@ export class BrowserRecording {
   }
 }
 
-// Whisper's existing /transcribe endpoint accepts 16 kHz mono PCM WAV.
 export async function recordingToWav(blob: Blob): Promise<Blob> {
   const context = new AudioContext();
   try {
     const decoded = await context.decodeAudioData(await blob.arrayBuffer());
     if (!decoded.length || decoded.duration > MAX_RECORDING_SECONDS + 1) {
-      throw new Error("Record a command of 30 seconds or less.");
+      throw new Error(`Record a voice message of ${MAX_RECORDING_SECONDS} seconds or less.`);
     }
     const offline = new OfflineAudioContext(1, Math.ceil(decoded.duration * 16000), 16000);
     const source = offline.createBufferSource();
