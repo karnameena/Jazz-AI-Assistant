@@ -23,6 +23,7 @@ import {
   Wifi,
 } from "lucide-react";
 import "./styles.css";
+import "./responsive-fixes.css";
 
 type LocationState = {
   latitude: number;
@@ -348,8 +349,9 @@ function App() {
                   <div className="card-actions">
                     <a className="primary-button" target="_blank" rel="noreferrer" href={googleMapsUrl(device.location)}><ExternalLink size={17} /> Open in Maps</a>
                     <button className="secondary-button" onClick={shareLocation}><Navigation size={17} /> Share Location</button>
+                    <button className="secondary-button" onClick={downloadReport}><Download size={17} /> Download Report</button>
                   </div>
-                </> : <div className="empty-state"><Crosshair size={34} /><h3>No location yet</h3><p>Use Get Location to request the latest available position.</p></div>}
+                </> : <div className="empty-state"><Crosshair size={30} /><h3>No location yet</h3><p>Use Get Location to request the latest available position.</p></div>}
               </article>
 
               <article className="photo-card glass-panel">
@@ -358,20 +360,20 @@ function App() {
                   <Camera size={22} />
                 </div>
                 {device.photo ? <>
-                  <div className="photo-frame"><img src={device.photo.dataUrl} alt="Latest recovery capture" /></div>
+                  <div className="photo-frame"><img src={device.photo.dataUrl} alt="Latest recovery" /></div>
                   <div className="photo-meta"><span>{device.photo.camera || "camera"} camera</span><span>{formatTime(device.photo.timestamp)}</span></div>
-                  <div className="card-actions stacked-mobile">
-                    <a className="primary-button" href={device.photo.dataUrl} download={`jazz-recovery-${device.deviceId || device.id}.jpg`}><Download size={17} /> Download Recovery Photo</a>
+                  <div className="card-actions">
+                    <a className="primary-button" href={device.photo.dataUrl} download={`jazz-recovery-${device.photo.camera || "photo"}.jpg`}><Download size={17} /> Download Recovery Photo</a>
                     <button className="secondary-button" onClick={downloadReport}><Download size={17} /> Download Recovery Report</button>
                   </div>
-                </> : <div className="empty-state photo-empty"><Camera size={34} /><h3>No recovery photo yet</h3><p>Use Front Camera or Back Camera to request a recovery image.</p><button className="secondary-button" onClick={downloadReport}><Download size={17} /> Download Recovery Report</button></div>}
+                </> : <div className="empty-state photo-empty"><Camera size={32} /><h3>No recovery photo yet</h3><p>Request the front or back camera using the recovery controls above.</p></div>}
               </article>
             </section>
           </>}
         </main>
       </div>
 
-      <footer className="site-footer"><span>Jazz Lost Mode • Secure Device Recovery</span><span>Developed by 😈gunakarna😈</span></footer>
+      <footer className="site-footer"><span>Jazz Device Recovery</span><span>Developed by 😈gunakarna😈</span></footer>
     </div>
   );
 }
