@@ -18,6 +18,10 @@ import java.nio.charset.StandardCharsets
  * delegates approved commands to the existing RecoveryCommandExecutor.
  */
 class LostModeNetworkClient(private val context: Context) {
+    companion object {
+        private const val MAX_COMMANDS_PER_SYNC = 3
+    }
+
     private val security = LostModeSecurityManager(context)
     private val existingIdentity = RecoverySecurityManager(context)
     private val statusManager = DeviceStatusManager(context)
@@ -43,21 +47,45 @@ class LostModeNetworkClient(private val context: Context) {
         locationManager.cachedLocation()?.let { heartbeat.put("lastKnownLocation", it) }
         request("POST", "/android/device/heartbeat", heartbeat)
 
-        val next = request("GET", "/android/device/commands/next", null)
-        val command = next.optJSONObject("command") ?: return JSONObject().put("ok", true).put("status", "HEARTBEAT_SENT")
-        val commandId = command.optString("id")
-        if (commandId.isBlank()) return JSONObject().put("ok", false).put("status", "INVALID_COMMAND")
+        var processed = 0
+        var lastCommandId: String? = null
+        var lastResult: JSONObject? = null
 
-        val type = command.optString("type")
-        if (type !in setOf("device_status", "device_location", "ring_device", "recovery_photo", "set_recovery_mode", "play_voice_message")) {
-            val rejected = JSONObject().put("ok", false).put("status", "COMMAND_NOT_ALLOWED")
-            postResult(commandId, rejected)
-            return rejected
+        while (processed < MAX_COMMANDS_PER_SYNC) {
+            val next = request("GET", "/android/device/commands/next", null)
+            val command = next.optJSONObject("command") ?: break
+            val commandId = command.optString("id")
+            if (commandId.isBlank()) {
+                return JSONObject().put("ok", false).put("status", "INVALID_COMMAND")
+            }
+
+            val type = command.optString("type")
+            if (type !in setOf("device_status", "device_location", "ring_device", "recovery_photo", "set_recovery_mode", "play_voice_message")) {
+                val rejected = JSONObject().put("ok", false).put("status", "COMMAND_NOT_ALLOWED")
+                postResult(commandId, rejected)
+                processed += 1
+                lastCommandId = commandId
+                lastResult = rejected
+                continue
+            }
+
+            val result = executor.execute(command)
+            postResult(commandId, result)
+            processed += 1
+            lastCommandId = commandId
+            lastResult = result
         }
 
-        val result = executor.execute(command)
-        postResult(commandId, result)
-        return JSONObject().put("ok", true).put("status", "COMMAND_EXECUTED").put("commandId", commandId).put("result", result)
+        return if (processed == 0) {
+            JSONObject().put("ok", true).put("status", "HEARTBEAT_SENT")
+        } else {
+            JSONObject()
+                .put("ok", true)
+                .put("status", "COMMANDS_EXECUTED")
+                .put("processed", processed)
+                .put("commandId", lastCommandId)
+                .put("result", lastResult)
+        }
     }
 
     private fun postResult(commandId: String, result: JSONObject) {
