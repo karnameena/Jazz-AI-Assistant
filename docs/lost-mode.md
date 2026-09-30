@@ -90,3 +90,65 @@ cd apps/android-companion
 ```
 
 Then verify both the original Jazz recovery path and the new Lost Mode path before merging this branch.
+
+## Optional browser voice input
+
+Select a device and open **Voice Input** alongside the existing recovery actions.
+The panel starts closed and never requests microphone permission until **Start
+recording** is clicked. Use HTTPS on a hosted site, or localhost for development;
+ordinary HTTP LAN addresses do not support browser microphone access.
+
+- **Voice command:** record up to 30 seconds, stop, review/edit the transcript,
+  and click **Confirm command**. Confirmation calls the exact same `action()`
+  function and `/api/devices/:id/actions` endpoint as the existing buttons.
+- The six supported commands are device status, location, ring, front photo,
+  back photo, and enable Lost Mode. Say one command at a time, e.g. “Hey Jazz,
+  get my phone location.” Unknown, negative, and multiple instructions do not
+  match the strict command parser. Voice never bypasses the server allowlist.
+- **Audio message:** record, preview, download, or share through the browser's
+  native file share sheet when supported. Otherwise use Download audio. This
+  records the browser user's microphone; it does not record the lost phone's
+  microphone or send/play a message on that phone. No new Android action is added.
+- Closing the panel, switching selected devices, logging out, hiding the tab,
+  or leaving the page stops recording and clears the in-memory draft. There is
+  no automatic listening, browser speech-service fallback, or localStorage audio.
+  Sharing opens the user's share sheet; only its selected destination receives
+  the audio file. Downloaded/shared files remain with their chosen destination.
+
+### Enable local transcription
+
+Audio-message recording and typed command review need no STT setup. Voice
+transcription is opt-in and uses the existing `services/stt/server.mjs` Whisper
+service, which must already have its CLI/model installed. In the **Lost Mode
+server's process environment**, set `LOST_MODE_STT_URL` to that service's private
+base URL. For the same Windows machine:
+
+```powershell
+# Terminal 1: existing local Whisper service (if not already started by Jazz)
+node services/stt/server.mjs
+
+# Terminal 2: Lost Mode backend
+$env:LOST_MODE_STT_URL = "http://127.0.0.1:8798"
+pnpm lost-mode:server
+```
+
+The current server start script does not automatically load `.env` files; set
+variables in the process or hosting environment. A hosted Lost Mode backend's
+`127.0.0.1` refers to that host, not your Windows PC. Use a private reachable STT
+service or leave transcription disabled; no public unauthenticated STT tunnel
+is required. Existing recovery remains independent of transcription availability.
+
+The new `/api/voice/config` and `/api/voice/transcribe` routes require the existing
+owner session. The adapter accepts bounded mono PCM WAV input, enforces one
+transcription at a time and a timeout, and returns the raw transcript for review.
+It adds no database tables, commands, credentials, or paid service dependency.
+The adapter does not persist audio/transcripts. The reused STT service retains
+its existing temporary-file cleanup and console logging behavior.
+
+### Voice validation
+
+With Node 24+, run `node --test apps/lost-mode-web/tests/*.test.mjs
+services/lost-mode-server/tests/voice.test.mjs`, then build the Lost Mode frontend.
+Check microphone allow/deny, Stop/Cancel, review and confirmation, all six
+commands, multiple/unknown instructions, device switching, logout, disabled or
+unavailable STT, and audio preview/download/share on the intended browsers.

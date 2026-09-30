@@ -13,6 +13,7 @@ import {
   LockKeyhole,
   LogOut,
   MapPin,
+  Mic,
   Navigation,
   Radio,
   RefreshCw,
@@ -24,6 +25,7 @@ import {
 } from "lucide-react";
 import "./styles.css";
 import "./responsive-fixes.css";
+import { VoiceInput } from "./voice/VoiceInput";
 
 type LocationState = {
   latitude: number;
@@ -150,6 +152,7 @@ function App() {
   const [device, setDevice] = useState<Device | null>(null);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
+  const [voiceOpen, setVoiceOpen] = useState(false);
 
   async function load() {
     const data = await api("/api/devices");
@@ -209,6 +212,7 @@ function App() {
   }
 
   async function logout() {
+    setVoiceOpen(false);
     await api("/api/auth/logout", { method: "POST", body: "{}" }).catch(() => {});
     setLogin(false);
     setDevices([]);
@@ -321,7 +325,16 @@ function App() {
               <button onClick={() => action("RECOVERY_PHOTO", { camera: "front" })}><Camera /><div><strong>Front Camera</strong><span>Request recovery photo</span></div></button>
               <button onClick={() => action("RECOVERY_PHOTO", { camera: "rear" })}><Camera /><div><strong>Back Camera</strong><span>Request recovery photo</span></div></button>
               <button className="critical-action" onClick={() => action("SET_RECOVERY_MODE", { enabled: true })}><ShieldCheck /><div><strong>Enable Lost Mode</strong><span>Secure recovery state</span></div></button>
+              <button className="voice-toggle" aria-expanded={voiceOpen} aria-controls="recovery-voice-panel" onClick={() => setVoiceOpen(open => !open)}><Mic /><div><strong>Voice Input</strong><span>Optional commands or audio message</span></div></button>
             </section>
+
+            {voiceOpen && <VoiceInput
+              key={selected}
+              deviceName={devices.find(item => item.id === selected)?.deviceName || "Selected device"}
+              disabled={Boolean(busy) || device.id !== selected}
+              onAction={action}
+              onClose={() => setVoiceOpen(false)}
+            />}
 
             {(msg || busy) && <div className="command-banner glass-panel"><div className="pulse-dot" /><span>{msg || "Processing…"}</span>{busy && <RefreshCw className="spin" size={16} />}</div>}
 

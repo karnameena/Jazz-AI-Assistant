@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { applyMigrations, db } from "./db/database.mjs";
 import { verifySecret } from "./auth/password.mjs";
 import { createSession, sessionCookie, clearSessionCookie, getSession, destroySession } from "./auth/sessions.mjs";
+import { createVoiceHandler } from "./voice.mjs";
 
 applyMigrations();
 
@@ -11,6 +12,7 @@ const publicOrigin = String(process.env.LOST_MODE_PUBLIC_ORIGIN || "http://local
 const ONLINE_WINDOW_MS = 90_000;
 const ALLOWED_COMMANDS = new Set(["DEVICE_STATUS", "GET_LOCATION", "RING_DEVICE", "RECOVERY_PHOTO", "SET_RECOVERY_MODE"]);
 const loginAttempts = new Map();
+const handleVoice = createVoiceHandler({ getSession, json, publicOrigin });
 
 function json(res, status, body, extraHeaders = {}) {
   res.statusCode = status;
@@ -207,6 +209,10 @@ const server = http.createServer(async (req, res) => {
 
   try {
     if (req.method === "GET" && path === "/health") return json(res, 200, { ok: true, service: "jazz-lost-mode-server", storage: "sqlite" });
+
+    if ((req.method === "GET" && path === "/api/voice/config") || (req.method === "POST" && path === "/api/voice/transcribe")) {
+      return await handleVoice(req, res, path);
+    }
 
     if (req.method === "POST" && path === "/api/auth/login") {
       const body = await readJson(req);
