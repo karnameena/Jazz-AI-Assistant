@@ -11,6 +11,7 @@ const publicOrigin = String(process.env.LOST_MODE_PUBLIC_ORIGIN || "http://local
 const ONLINE_WINDOW_MS = 90_000;
 const MAX_VOICE_WAV_BYTES = 900_000;
 const ALLOWED_COMMANDS = new Set(["DEVICE_STATUS", "GET_LOCATION", "RING_DEVICE", "RECOVERY_PHOTO", "SET_RECOVERY_MODE", "PLAY_VOICE_MESSAGE"]);
+const DEDUPE_COMMANDS = new Set(["device_status", "device_location", "recovery_photo"]);
 const loginAttempts = new Map();
 
 function json(res, status, body, extraHeaders = {}) {
@@ -22,6 +23,16 @@ function json(res, status, body, extraHeaders = {}) {
   res.setHeader("Referrer-Policy", "no-referrer");
   for (const [name, value] of Object.entries(extraHeaders)) res.setHeader(name, value);
   res.end(JSON.stringify(body));
+}
+
+function html(res, status, body) {
+  res.statusCode = status;
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.setHeader("Cache-Control", "no-store, max-age=0");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; frame-ancestors 'none'");
+  res.end(body);
 }
 
 function readJson(req, maxBytes = 2 * 1024 * 1024) {
@@ -166,6 +177,35 @@ function mapCommand(type, args = {}) {
   }
 }
 
+function sameCommandArgs(type, leftJson, rightArgs) {
+  if (type !== "recovery_photo") return true;
+  try {
+    const left = JSON.parse(leftJson || "{}");
+    return String(left.camera || "front") === String(rightArgs.camera || "front");
+  } catch {
+    return false;
+  }
+}
+
+function existingPendingCommand(deviceDbId, mapped) {
+  if (!DEDUPE_COMMANDS.has(mapped.type)) return null;
+  const rows = db.prepare("SELECT id,args_json,leased_until FROM recovery_commands WHERE device_id=? AND type=? AND status='pending' ORDER BY created_at ASC LIMIT 12")
+    .all(deviceDbId, mapped.type);
+  return rows.find(item => sameCommandArgs(mapped.type, item.args_json, mapped.args)) || null;
+}
+
+function serverHome() {
+  const deviceRows = db.prepare("SELECT id FROM devices").all();
+  const online = deviceRows.filter(row => stateFor(row.id)?.online).length;
+  const pending = Number(db.prepare("SELECT COUNT(*) AS total FROM recovery_commands WHERE status='pending'").get()?.total || 0);
+  const generated = new Date().toISOString();
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Jazz Lost Mode Server</title>
+<style>
+:root{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;color:#f4f7ff;background:radial-gradient(circle at 20% 10%,#273a91 0,transparent 34rem),radial-gradient(circle at 85% 15%,#632b78 0,transparent 28rem),#050816}.card{width:min(760px,100%);padding:30px;border:1px solid rgba(142,161,238,.2);border-radius:28px;background:linear-gradient(145deg,rgba(18,27,56,.94),rgba(8,13,31,.9));box-shadow:0 30px 90px rgba(0,0,0,.42)}.brand{display:flex;align-items:center;gap:14px}.logo{width:52px;height:52px;border-radius:17px;display:grid;place-items:center;font-size:24px;background:linear-gradient(135deg,#5fe6ff,#6f8cff 42%,#a777ff 72%,#ff66c4);box-shadow:0 0 32px rgba(112,136,255,.34)}.eyebrow{font-size:12px;letter-spacing:.16em;color:#91a3ce;font-weight:800}.title{margin:3px 0 0;font-size:clamp(24px,5vw,36px);letter-spacing:-.04em}.status{display:inline-flex;align-items:center;gap:8px;margin-top:22px;padding:9px 12px;border-radius:999px;background:rgba(65,221,143,.09);border:1px solid rgba(91,240,166,.18);color:#9af7c5;font-weight:800}.dot{width:9px;height:9px;border-radius:50%;background:#67f7af;box-shadow:0 0 18px #67f7af}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:22px}.metric{padding:16px;border-radius:18px;border:1px solid rgba(136,153,218,.13);background:rgba(4,9,23,.45)}.metric span{display:block;color:#8291b4;font-size:12px}.metric strong{display:block;margin-top:6px;font-size:20px}.note{margin-top:20px;color:#93a3c8;line-height:1.6}.actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:22px}a{color:#eef3ff;text-decoration:none;font-weight:800;padding:11px 14px;border-radius:13px;border:1px solid rgba(135,154,220,.2);background:rgba(11,17,38,.76)}a.primary{background:linear-gradient(100deg,#5c79ff,#8c6eff 50%,#d45dda);border:0}.foot{margin-top:24px;color:#62718f;font-size:12px}@media(max-width:620px){.card{padding:20px;border-radius:22px}.grid{grid-template-columns:1fr}.actions a{width:100%;text-align:center}}
+</style></head><body><main class="card"><div class="brand"><div class="logo">✦</div><div><div class="eyebrow">JAZZ AI ASSISTANT</div><h1 class="title">Lost Mode Recovery Server</h1></div></div><div class="status"><span class="dot"></span>SERVER ONLINE</div><div class="grid"><div class="metric"><span>Registered devices</span><strong>${deviceRows.length}</strong></div><div class="metric"><span>Devices online</span><strong>${online}</strong></div><div class="metric"><span>Pending commands</span><strong>${pending}</strong></div></div><p class="note">Secure SQLite-backed recovery API is running. Android devices poll through the authenticated Lost Mode channel; the recovery website remains a separate frontend.</p><div class="actions"><a class="primary" href="${publicOrigin}">Open Lost Mode Website</a><a href="/health">Health JSON</a></div><div class="foot">Generated ${generated} · Port ${port}</div></main></body></html>`;
+}
+
 function updateStateFromHeartbeat(device, input) {
   const status = input.status && typeof input.status === "object" ? input.status : {};
   const loc = input.lastKnownLocation?.ok ? input.lastKnownLocation : null;
@@ -217,7 +257,8 @@ const server = http.createServer(async (req, res) => {
   }
 
   try {
-    if (req.method === "GET" && path === "/health") return json(res, 200, { ok: true, service: "jazz-lost-mode-server", storage: "sqlite" });
+    if (req.method === "GET" && path === "/") return html(res, 200, serverHome());
+    if (req.method === "GET" && path === "/health") return json(res, 200, { ok: true, service: "jazz-lost-mode-server", storage: "sqlite", commandPolling: "fast" });
 
     if (req.method === "POST" && path === "/api/auth/login") {
       const body = await readJson(req);
@@ -271,11 +312,18 @@ const server = http.createServer(async (req, res) => {
       if (!ALLOWED_COMMANDS.has(action)) return json(res, 400, { ok: false, error: "Recovery action is not allowed" });
       const mapped = mapCommand(action, body.args || {});
       if (!mapped) return json(res, 400, { ok: false, error: action === "PLAY_VOICE_MESSAGE" ? "Invalid or oversized recovery voice message" : "Invalid recovery action arguments" });
+
+      const existing = existingPendingCommand(row.id, mapped);
+      if (existing) {
+        audit(session.user_id, row.id, action, "COALESCED");
+        return json(res, 202, { ok: true, commandId: existing.id, status: "ALREADY_QUEUED", deduplicated: true });
+      }
+
       const id = crypto.randomUUID();
       db.prepare("INSERT INTO recovery_commands(id,device_id,type,args_json) VALUES(?,?,?,?)")
         .run(id, row.id, mapped.type, JSON.stringify(mapped.args));
       audit(session.user_id, row.id, action, "QUEUED");
-      return json(res, 202, { ok: true, commandId: id, status: "QUEUED" });
+      return json(res, 202, { ok: true, commandId: id, status: "QUEUED", deduplicated: false });
     }
 
     const auditMatch = path.match(/^\/api\/devices\/(\d+)\/audit$/);
@@ -331,5 +379,5 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(port, "0.0.0.0", () => {
   console.log(`[Jazz Lost Mode] listening on :${port}`);
-  console.log("[Jazz Lost Mode] SQLite persistence active; existing Jazz services are independent.");
+  console.log("[Jazz Lost Mode] Fast command polling + SQLite persistence active; existing Jazz services are independent.");
 });
