@@ -55,14 +55,64 @@ type Device = {
   photo: PhotoState | null;
 };
 
-async function api(path: string, options?: RequestInit) {
-  const response = await fetch(path, {
-    credentials: "include",
-    ...options,
-    headers: { "Content-Type": "application/json", ...(options?.headers || {}) },
-  });
+const rawApiBaseUrl = String(import.meta.env.VITE_API_BASE_URL || "").trim();
+
+function apiBaseUrl() {
+  if (!rawApiBaseUrl) return "";
+  try {
+    const parsed = new URL(rawApiBaseUrl);
+    if (parsed.username || parsed.password || parsed.search || parsed.hash) {
+      throw new Error("API URL must not contain credentials, query parameters, or fragments.");
+    }
+    const local = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1" || parsed.hostname === "::1";
+    if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && local)) {
+      throw new Error("Hosted Lost Mode API must use HTTPS.");
+    }
+    const cleanPath = parsed.pathname.replace(/\/+$/, "");
+    return `${parsed.origin}${cleanPath}`;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid API URL";
+    throw new Error(`Lost Mode API configuration error: ${message}`);
+  }
+}
+
+const API_BASE_URL = apiBaseUrl();
+
+async function api(path: string, options: RequestInit = {}) {
+  const headers = new Headers(options.headers || {});
+  headers.set("Accept", "application/json");
+  // Do not attach application/json to body-less GET requests. Avoiding that
+  // unnecessary non-simple header prevents a CORS preflight on every dashboard poll.
+  if (options.body != null && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json; charset=utf-8");
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      ...options,
+      credentials: "include",
+      cache: "no-store",
+      headers,
+    });
+  } catch (error) {
+    throw new Error(
+      API_BASE_URL
+        ? "Could not reach the Jazz Lost Mode server. Check the hosted API URL, HTTPS, CORS origin, and server status."
+        : "Could not reach the Jazz Lost Mode API. If web and server are hosted separately, set VITE_API_BASE_URL on the web build."
+    );
+  }
+
+  const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+  if (!contentType.includes("application/json")) {
+    throw new Error(
+      `Lost Mode API returned an unexpected response (${response.status}). ` +
+      "Check VITE_API_BASE_URL and make sure it points to the Lost Mode server, not the website."
+    );
+  }
+
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || "Request failed");
+  if (!response.ok) throw new Error(data.error || `Request failed (${response.status})`);
   return data;
 }
 
@@ -102,22 +152,44 @@ function actionKey(name: string, args: Record<string, unknown> = {}) {
 }
 
 function Login({ done }: { done: () => void }) {
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const passwordRef = useRef<HTMLInputElement>(null);
 
-  async function submit(event: React.FormEvent) {
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (submitting) return;
     setError("");
+    setSubmitting(true);
+
+    const form = event.currentTarget;
+    const fields = new FormData(form);
+    const username = String(fields.get("username") || "").trim();
+    let password = String(fields.get("password") || "");
+
+    if (!username || !password) {
+      password = "";
+      if (passwordRef.current) passwordRef.current.value = "";
+      setError("Enter your username and password.");
+      setSubmitting(false);
+      return;
+    }
+
+    // Serialize once, then immediately clear the password field and local variable.
+    // A password must exist in browser memory while it is being submitted, but it is
+    // never placed in React state, localStorage, sessionStorage, or the URL.
+    const body = JSON.stringify({ username, password });
+    password = "";
+    if (passwordRef.current) passwordRef.current.value = "";
+
     try {
-      await api("/api/auth/login", {
-        method: "POST",
-        body: JSON.stringify({ username, password }),
-      });
-      setPassword("");
+      await api("/api/auth/login", { method: "POST", body });
+      form.reset();
       done();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -130,17 +202,20 @@ function Login({ done }: { done: () => void }) {
         <div className="eyebrow">JAZZ SECURE RECOVERY</div>
         <h1>Lost Mode</h1>
         <p className="auth-subtitle">Secure access to your registered recovery devices.</p>
-        <form onSubmit={submit} className="auth-form">
+        <form onSubmit={submit} className="auth-form" autoComplete="on">
           <label>
             <span>Username</span>
-            <input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" placeholder="Enter username" />
+            <input name="username" autoComplete="username" autoCapitalize="none" spellCheck={false} placeholder="Enter username" required />
           </label>
           <label>
             <span>Password</span>
-            <input value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" type="password" placeholder="Enter password" />
+            <input ref={passwordRef} name="password" autoComplete="current-password" type="password" placeholder="Enter password" required />
           </label>
-          {error && <div className="error-banner">{error}</div>}
-          <button className="primary-button full-width" type="submit"><LockKeyhole size={18} /> Enter Lost Mode</button>
+          {error && <div className="error-banner" role="alert">{error}</div>}
+          <button className="primary-button full-width" type="submit" disabled={submitting}>
+            {submitting ? <RefreshCw className="spin" size={18} /> : <LockKeyhole size={18} />}
+            {submitting ? "Verifying securely…" : "Enter Lost Mode"}
+          </button>
         </form>
         <div className="secure-note"><ShieldCheck size={16} /> Owner-only authenticated recovery portal</div>
       </section>
@@ -399,6 +474,7 @@ function App() {
                       src={mapEmbedUrl(device.location)}
                       loading="lazy"
                       referrerPolicy="no-referrer"
+                      sandbox="allow-scripts allow-same-origin"
                     />
                     <div className="map-overlay"><Navigation size={15} /> Last known position</div>
                   </div>
