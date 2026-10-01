@@ -39,14 +39,9 @@ class LostModeNetworkClient(private val context: Context) {
             return JSONObject().put("ok", false).put("status", "NO_VALIDATED_INTERNET")
         }
 
-        val heartbeat = JSONObject()
-            .put("deviceId", security.deviceId())
-            .put("deviceName", existingIdentity.deviceName())
-            .put("mode", lostDeviceManager.mode())
-            .put("status", status)
-        locationManager.cachedLocation()?.let { heartbeat.put("lastKnownLocation", it) }
-        request("POST", "/android/device/heartbeat", heartbeat)
-
+        // Check owner-issued recovery commands before doing the routine heartbeat.
+        // This removes one complete network round trip from the critical path for
+        // Get Location / recovery-photo commands while preserving the same API flow.
         var processed = 0
         var lastCommandId: String? = null
         var lastResult: JSONObject? = null
@@ -75,6 +70,16 @@ class LostModeNetworkClient(private val context: Context) {
             lastCommandId = commandId
             lastResult = result
         }
+
+        // Heartbeat remains part of every successful sync, but no longer delays a
+        // queued recovery action from reaching the command executor.
+        val heartbeat = JSONObject()
+            .put("deviceId", security.deviceId())
+            .put("deviceName", existingIdentity.deviceName())
+            .put("mode", lostDeviceManager.mode())
+            .put("status", statusManager.snapshot())
+        locationManager.cachedLocation()?.let { heartbeat.put("lastKnownLocation", it) }
+        request("POST", "/android/device/heartbeat", heartbeat)
 
         return if (processed == 0) {
             JSONObject().put("ok", true).put("status", "HEARTBEAT_SENT")
