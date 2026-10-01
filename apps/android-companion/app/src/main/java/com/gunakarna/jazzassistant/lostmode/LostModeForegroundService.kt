@@ -17,7 +17,10 @@ class LostModeForegroundService : Service() {
     companion object {
         private const val CHANNEL_ID = "jazz_lost_mode_channel"
         private const val NOTIFICATION_ID = 7401
-        private const val ACTIVE_SYNC_SECONDS = 3L
+        // The recovery service is already a foreground service. A one-second poll keeps
+        // owner-triggered location/camera commands feeling immediate without changing
+        // the existing outbound-only recovery architecture.
+        private const val ACTIVE_SYNC_SECONDS = 1L
 
         fun intent(context: Context) = Intent(context, LostModeForegroundService::class.java)
 
