@@ -3,7 +3,7 @@ import { db, cleanupExpiredSessions } from "../db/database.mjs";
 import { randomToken, tokenHash } from "./password.mjs";
 
 const LEGACY_COOKIE_NAME = "jazz_lost_mode_session";
-const isProduction = String(process.env.NODE_ENV || "").toLowerCase() === "production";
+const isProduction = String(process.env.NODE_ENV || "").toLowerCase() === "production" || String(process.env.RENDER || "").toLowerCase() === "true";
 const secure = process.env.LOST_MODE_COOKIE_SECURE == null
   ? isProduction
   : String(process.env.LOST_MODE_COOKIE_SECURE).toLowerCase() === "true";
