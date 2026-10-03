@@ -16,9 +16,18 @@ import android.provider.ContactsContract
 import android.telecom.TelecomManager
 import androidx.core.content.ContextCompat
 import com.gunakarna.jazzassistant.notifications.JazzNotificationListenerService
+import java.text.Normalizer
+import java.util.Locale
 
 class SystemControlManager(private val context: Context) {
     private val audio = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
+    private data class ContactCandidate(
+        val displayName: String,
+        val normalizedName: String,
+        val number: String,
+        val score: Int
+    )
 
     fun volumeUp(): Map<String, Any?> = adjustVolume(AudioManager.ADJUST_RAISE, "Volume increased.")
     fun volumeDown(): Map<String, Any?> = adjustVolume(AudioManager.ADJUST_LOWER, "Volume decreased.")
@@ -71,18 +80,53 @@ class SystemControlManager(private val context: Context) {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
             return fail("READ_CONTACTS_REQUIRED", "Contacts permission is required before Jazz can call a saved contact.")
         }
-        val numbers = findPhoneNumbers(name)
-        if (numbers.isEmpty()) return fail("CONTACT_NOT_FOUND", "No saved contact exactly matched '$name'.")
-        if (numbers.size > 1) return fail("CONTACT_AMBIGUOUS", "Multiple saved contacts or numbers match '$name'. Please choose which one.", mapOf("matches" to numbers.size))
-        val number = numbers.single()
+
+        val matches = findPhoneNumbers(name)
+        if (matches.isEmpty()) {
+            return fail("CONTACT_NOT_FOUND", "I couldn't find a saved contact matching '$name'.")
+        }
+
+        val bestScore = matches.maxOf { it.score }
+        val best = matches.filter { it.score == bestScore }
+        val bestNames = best.map { it.normalizedName }.distinct()
+        if (bestNames.size > 1) {
+            val choices = best.map { it.displayName }.distinct().take(5)
+            return fail(
+                "CONTACT_AMBIGUOUS",
+                "Multiple contacts match '$name'. Please say a little more of the name.",
+                mapOf("matches" to choices)
+            )
+        }
+
+        val selectedName = best.first().displayName
+        val selectedNumbers = best.map { it.number }.filter { it.isNotBlank() }.distinct()
+        if (selectedNumbers.size > 1) {
+            return fail(
+                "CONTACT_AMBIGUOUS",
+                "'$selectedName' has multiple phone numbers. Please choose the specific number.",
+                mapOf("matches" to selectedNumbers.size, "contact" to selectedName)
+            )
+        }
+
+        val number = selectedNumbers.singleOrNull()
+            ?: return fail("CONTACT_NOT_FOUND", "I found '$selectedName', but there is no usable phone number.")
+
         val callIntent = if (ContextCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED) {
             Intent(Intent.ACTION_CALL, Uri.parse("tel:${Uri.encode(number)}"))
         } else {
             Intent(Intent.ACTION_DIAL, Uri.parse("tel:${Uri.encode(number)}"))
         }.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
         context.startActivity(callIntent)
-        return if (callIntent.action == Intent.ACTION_CALL) ok("Calling $name.", mapOf("contact" to name))
-        else fail("CALL_PHONE_REQUIRED", "Opened the dialer for $name. Grant Phone permission to place calls directly.", mapOf("contact" to name, "dialerOpened" to true))
+        return if (callIntent.action == Intent.ACTION_CALL) {
+            ok("Calling $name.", mapOf("contact" to selectedName, "requestedContact" to name))
+        } else {
+            fail(
+                "CALL_PHONE_REQUIRED",
+                "Opened the dialer for $name. Grant Phone permission to place calls directly.",
+                mapOf("contact" to selectedName, "requestedContact" to name, "dialerOpened" to true)
+            )
+        }
     }
 
     fun answerCall(): Map<String, Any?> {
@@ -117,25 +161,68 @@ class SystemControlManager(private val context: Context) {
         }
     }
 
-    private fun findPhoneNumbers(name: String): List<String> {
-        val results = mutableListOf<String>()
+    private fun findPhoneNumbers(name: String): List<ContactCandidate> {
+        val query = normalizeContactName(name)
+        if (query.isBlank()) return emptyList()
+
+        val results = mutableListOf<ContactCandidate>()
         val projection = arrayOf(
             ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
             ContactsContract.CommonDataKinds.Phone.NUMBER
         )
+
         context.contentResolver.query(
             ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
             projection,
-            "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} = ? COLLATE NOCASE",
-            arrayOf(name),
+            null,
+            null,
             null
         )?.use { cursor ->
+            val nameIndex = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
             val numberIndex = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
             while (cursor.moveToNext()) {
-                if (numberIndex >= 0) cursor.getString(numberIndex)?.takeIf { it.isNotBlank() }?.let(results::add)
+                if (nameIndex < 0 || numberIndex < 0) continue
+                val displayName = cursor.getString(nameIndex)?.trim().orEmpty()
+                val number = cursor.getString(numberIndex)?.trim().orEmpty()
+                if (displayName.isBlank() || number.isBlank()) continue
+
+                val normalized = normalizeContactName(displayName)
+                val score = contactMatchScore(query, normalized)
+                if (score > 0) {
+                    results += ContactCandidate(displayName, normalized, number, score)
+                }
             }
         }
-        return results.distinct()
+
+        return results
+            .distinctBy { Triple(it.normalizedName, it.number, it.score) }
+            .sortedWith(compareByDescending<ContactCandidate> { it.score }.thenBy { it.normalizedName.length })
+    }
+
+    private fun contactMatchScore(query: String, candidate: String): Int {
+        if (query.isBlank() || candidate.isBlank()) return 0
+        if (candidate == query) return 100
+
+        val queryTokens = query.split(' ').filter { it.isNotBlank() }
+        val candidateTokens = candidate.split(' ').filter { it.isNotBlank() }
+
+        if (candidate.startsWith(query)) return 90
+        if (candidateTokens.any { it == query }) return 88
+        if (candidateTokens.any { it.startsWith(query) }) return 84
+        if (queryTokens.size > 1 && queryTokens.all { q -> candidateTokens.any { it.startsWith(q) } }) return 82
+        if (candidate.contains(" $query ") || candidate.endsWith(" $query")) return 78
+        if (query.length >= 3 && candidate.contains(query)) return 70
+        return 0
+    }
+
+    private fun normalizeContactName(value: String): String {
+        val decomposed = Normalizer.normalize(value, Normalizer.Form.NFD)
+        return decomposed
+            .replace(Regex("\\p{M}+"), "")
+            .lowercase(Locale.ROOT)
+            .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
     }
 
     private fun ok(message: String, extra: Map<String, Any?> = emptyMap()): Map<String, Any?> =
