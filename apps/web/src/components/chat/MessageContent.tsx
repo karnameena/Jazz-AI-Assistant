@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import React from "react";
 import { parseMessageContent } from "../../utils/parseCodeBlocks";
 import { CodeBlock } from "./CodeBlock";
 import "./code-block.css";
@@ -13,8 +13,11 @@ function InlineText({ text }: { text: string }) {
 }
 
 export function MessageContent({ text }: { text: string }) {
-  const segments = useMemo(() => parseMessageContent(text), [text]);
   if (!text) return <span className="streaming-cursor">▌</span>;
+
+  // Parsing is inexpensive and keeping this renderer hook-free prevents a stray
+  // dev-runtime hook mismatch from blanking the complete Jazz chat surface.
+  const segments = parseMessageContent(text);
 
   return (
     <div className="jazz-message-content">
