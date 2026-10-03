@@ -26,6 +26,7 @@ class SystemControlManager(private val context: Context) {
         val displayName: String,
         val normalizedName: String,
         val number: String,
+        val numberKey: String,
         val score: Int
     )
 
@@ -99,16 +100,19 @@ class SystemControlManager(private val context: Context) {
         }
 
         val selectedName = best.first().displayName
-        val selectedNumbers = best.map { it.number }.filter { it.isNotBlank() }.distinct()
-        if (selectedNumbers.size > 1) {
+        val uniqueNumbers = best
+            .filter { it.numberKey.isNotBlank() }
+            .distinctBy { it.numberKey }
+
+        if (uniqueNumbers.size > 1) {
             return fail(
                 "CONTACT_AMBIGUOUS",
-                "'$selectedName' has multiple phone numbers. Please choose the specific number.",
-                mapOf("matches" to selectedNumbers.size, "contact" to selectedName)
+                "'$selectedName' has multiple different phone numbers. Please choose the specific number.",
+                mapOf("matches" to uniqueNumbers.size, "contact" to selectedName)
             )
         }
 
-        val number = selectedNumbers.singleOrNull()
+        val number = uniqueNumbers.singleOrNull()?.number
             ?: return fail("CONTACT_NOT_FOUND", "I found '$selectedName', but there is no usable phone number.")
 
         val callIntent = if (ContextCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED) {
@@ -188,14 +192,15 @@ class SystemControlManager(private val context: Context) {
 
                 val normalized = normalizeContactName(displayName)
                 val score = contactMatchScore(query, normalized)
-                if (score > 0) {
-                    results += ContactCandidate(displayName, normalized, number, score)
+                val numberKey = phoneIdentity(number)
+                if (score > 0 && numberKey.isNotBlank()) {
+                    results += ContactCandidate(displayName, normalized, number, numberKey, score)
                 }
             }
         }
 
         return results
-            .distinctBy { Triple(it.normalizedName, it.number, it.score) }
+            .distinctBy { Triple(it.normalizedName, it.numberKey, it.score) }
             .sortedWith(compareByDescending<ContactCandidate> { it.score }.thenBy { it.normalizedName.length })
     }
 
@@ -223,6 +228,12 @@ class SystemControlManager(private val context: Context) {
             .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
             .replace(Regex("\\s+"), " ")
             .trim()
+    }
+
+    private fun phoneIdentity(value: String): String {
+        val digits = value.filter(Char::isDigit)
+        if (digits.isBlank()) return ""
+        return if (digits.length > 10) digits.takeLast(10) else digits
     }
 
     private fun ok(message: String, extra: Map<String, Any?> = emptyMap()): Map<String, Any?> =
