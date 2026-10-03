@@ -1,26 +1,36 @@
 (() => {
   const STORAGE_KEY = "jazz-assistant-mode-v1";
   const MODE_PREFIX = /^\[JAZZ_MODE:(?:NORMAL|EVIL)\]\s*/i;
+  const DEVICE_RECOVERY_LABEL = "📱 DEVICE RECOVERY";
   const evilActions = new Map([
-    ["Take a Note", { label: "Nmap Scan", prompt: "Start an Nmap scan in my authorized ethical-hacking lab environment." }],
-    ["Set Reminder", { label: "Metasploit", prompt: "Open the Metasploit workflow for my authorized ethical-hacking lab." }],
-    ["Search Web", { label: "Burp Suite", prompt: "Open the Burp Suite workflow for my authorized ethical-hacking lab." }],
-    ["Generate Image", { label: "Customize Script", prompt: "Help me customize a script for my authorized ethical-hacking lab." }]
+    ["Take a Note", { label: "Nmap Scan", prompt: "Start an Nmap scan in my authorized ethical-hacking lab environment.", icon: "nmap" }],
+    ["Set Reminder", { label: "Metasploit", prompt: "Open the Metasploit workflow for my authorized ethical-hacking lab.", icon: "metasploit" }],
+    ["Search Web", { label: "Burp Suite", prompt: "Open the Burp Suite workflow for my authorized ethical-hacking lab.", icon: "burp" }],
+    ["Generate Image", { label: "Customize Script", prompt: "Help me customize a script for my authorized ethical-hacking lab.", icon: "script" }]
   ]);
+
+  const toolIcons = {
+    nmap: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="2.3"/><circle cx="19" cy="6" r="2.3"/><circle cx="19" cy="18" r="2.3"/><path d="M7.2 11.1 16.8 6.9M7.2 12.9l9.6 4.2"/></svg>',
+    metasploit: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7 9 3 3-3 3M12.5 15H17"/></svg>',
+    burp: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M4 12h16M12 4a13 13 0 0 1 0 16M12 4a13 13 0 0 0 0 16M7 8h4M13 16h4"/></svg>',
+    script: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 7-5 5 5 5M16 7l5 5-5 5M14 4l-4 16"/></svg>',
+    recovery: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M10 18.5h4M9 8.5l3-2 3 2v3.2c0 2.2-1.5 3.7-3 4.5-1.5-.8-3-2.3-3-4.5Z"/></svg>'
+  };
 
   let currentMode = localStorage.getItem(STORAGE_KEY) === "evil" ? "evil" : "normal";
   let observer = null;
   let observerRoot = null;
   let scheduledApply = 0;
 
-  const modeCommandFor = value => {
-    const text = String(value || "")
-      .replace(MODE_PREFIX, "")
-      .trim()
-      .toLowerCase()
-      .replace(/[.!?]+$/g, "")
-      .replace(/\s+/g, " ");
+  const normalizeCommandText = value => String(value || "")
+    .replace(MODE_PREFIX, "")
+    .trim()
+    .toLowerCase()
+    .replace(/[.!?]+$/g, "")
+    .replace(/\s+/g, " ");
 
+  const modeCommandFor = value => {
+    const text = normalizeCommandText(value);
     if (/^(?:hey |hi |hello )?(?:jazz[, ]+)?(?:please )?(?:change|switch|turn|move|set|go)(?: me)? (?:to |into )?(?:the )?(?:evil|ethical hack(?:ing)?(?: lab)?) mode$/.test(text)
       || /^(?:hey |hi |hello )?(?:jazz[, ]+)?(?:please )?(?:enable|activate|start) (?:the )?(?:evil|ethical hack(?:ing)?(?: lab)?) mode$/.test(text)
       || /^(?:hey |hi |hello )?(?:jazz[, ]+)?evil mode$/.test(text)) return "evil";
@@ -32,11 +42,55 @@
     return null;
   };
 
+  const isModeQuestion = value => {
+    const text = normalizeCommandText(value);
+    return /^(?:hey |hi |hello )?(?:jazz[, ]+)?(?:which|what) mode(?: now)? (?:are you|you are)(?: in)?$/.test(text)
+      || /^(?:hey |hi |hello )?(?:jazz[, ]+)?(?:which|what) mode are you in$/.test(text)
+      || /^(?:hey |hi |hello )?(?:jazz[, ]+)?what is your (?:current )?mode$/.test(text)
+      || /^(?:hey |hi |hello )?(?:jazz[, ]+)?current mode$/.test(text);
+  };
+
+  const isWakeGreeting = value => /^(?:hey|hi|hello)(?:\s+jazz)?$/i.test(normalizeCommandText(value)) || /^jazz$/i.test(normalizeCommandText(value));
+
+  const localModeReply = value => {
+    const requestedMode = modeCommandFor(value);
+    if (requestedMode) {
+      setMode(requestedMode);
+      return requestedMode === "evil"
+        ? "Evil Ethical Hack Lab mode active, Mama. 😈 Dolphin Phi is now the active local model. What are we going to test in your authorized lab?"
+        : "Normal Assist mode active, Mama. ✨ Qwen 3 0.6B is now the active local model. What do you need?";
+    }
+
+    if (isModeQuestion(value)) {
+      return currentMode === "evil"
+        ? "I’m in Evil Ethical Hack Lab mode, Mama. 😈 My active local model is dolphin-phi:2.7b-v2.6-q2_K."
+        : "I’m in Normal Assist mode, Mama. ✨ My active local model is qwen3:0.6b.";
+    }
+
+    if (isWakeGreeting(value)) {
+      return currentMode === "evil"
+        ? "Hey Mama 😈 Evil mode active. What are we going to ethically hack or test in your authorized lab?"
+        : "Hey Mama 👋😎 Normal Assist mode active. I’m here and listening. What do you want me to do?";
+    }
+
+    return null;
+  };
+
   const setReactInputValue = (input, value) => {
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
     setter?.call(input, value);
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.focus();
+  };
+
+  const setButtonIcon = (button, iconName) => {
+    button.querySelector(":scope > .jazz-mode-tool-icon")?.remove();
+    button.classList.toggle("jazz-custom-action-icon", Boolean(iconName));
+    if (!iconName || !toolIcons[iconName]) return;
+    const icon = document.createElement("span");
+    icon.className = "jazz-mode-tool-icon";
+    icon.innerHTML = toolIcons[iconName];
+    button.prepend(icon);
   };
 
   const ensureToggle = () => {
@@ -86,14 +140,34 @@
   const updateQuickActions = () => {
     const buttons = document.querySelectorAll(".quick-action");
     for (const button of buttons) {
-      const span = button.querySelector("span");
+      const span = button.querySelector(":scope > span:last-child");
       if (!span) continue;
-      if (!button.dataset.normalLabel) button.dataset.normalLabel = span.textContent?.trim() || "";
+
+      const visibleLabel = span.textContent?.trim() || "";
+      if (!button.dataset.normalLabel) {
+        button.dataset.normalLabel = visibleLabel === "Open Calculator" || visibleLabel === "Device Recovery" || visibleLabel === DEVICE_RECOVERY_LABEL
+          ? DEVICE_RECOVERY_LABEL
+          : visibleLabel;
+      }
+
+      if (button.dataset.normalLabel === "Open Calculator") button.dataset.normalLabel = DEVICE_RECOVERY_LABEL;
       const normalLabel = button.dataset.normalLabel;
+
+      if (normalLabel === DEVICE_RECOVERY_LABEL) {
+        if (span.textContent !== DEVICE_RECOVERY_LABEL) span.textContent = DEVICE_RECOVERY_LABEL;
+        button.classList.remove("evil-tool-action");
+        button.dataset.evilIcon = "";
+        setButtonIcon(button, "recovery");
+        continue;
+      }
+
       const replacement = evilActions.get(normalLabel);
-      const wanted = currentMode === "evil" && replacement ? replacement.label : normalLabel;
+      const evilAction = currentMode === "evil" && Boolean(replacement);
+      const wanted = evilAction ? replacement.label : normalLabel;
       if (span.textContent !== wanted) span.textContent = wanted;
-      button.classList.toggle("evil-tool-action", currentMode === "evil" && !!replacement);
+      button.classList.toggle("evil-tool-action", evilAction);
+      button.dataset.evilIcon = evilAction ? replacement.icon : "";
+      setButtonIcon(button, evilAction ? replacement.icon : null);
     }
   };
 
@@ -105,11 +179,8 @@
   const applyMode = () => {
     ensureToggle();
     const evil = currentMode === "evil";
-    const app = document.querySelector(".jazz-app");
-    app?.classList.toggle("jazz-evil-mode", evil);
-
-    const wrap = document.querySelector(".jazz-mode-toggle-wrap");
-    wrap?.classList.toggle("evil-active", evil);
+    document.querySelector(".jazz-app")?.classList.toggle("jazz-evil-mode", evil);
+    document.querySelector(".jazz-mode-toggle-wrap")?.classList.toggle("evil-active", evil);
 
     document.querySelectorAll("[data-jazz-mode]").forEach(button => {
       const active = button.dataset.jazzMode === currentMode;
@@ -155,6 +226,22 @@
   window.setJazzAssistantMode = mode => setMode(mode);
   window.getJazzAssistantMode = () => currentMode;
 
+  const makeLocalChatResponse = (url, reply) => {
+    const stream = /\/api\/chat\/stream(?:$|[?#])/i.test(url);
+    if (stream) {
+      const body = [
+        `event: meta\ndata: ${JSON.stringify({ mode: "local-mode-control", assistantMode: currentMode })}\n`,
+        `event: text\ndata: ${JSON.stringify({ text: reply })}\n`,
+        `event: done\ndata: ${JSON.stringify({ assistant: reply, mode: "local-mode-control", assistantMode: currentMode })}\n`
+      ].join("\n");
+      return new Response(body, { status: 200, headers: { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store" } });
+    }
+    return new Response(JSON.stringify({ ok: true, assistant: reply, mode: "local-mode-control", assistantMode: currentMode }), {
+      status: 200,
+      headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" }
+    });
+  };
+
   const installChatModeRouter = () => {
     if (window.__jazzModeFetchRouterInstalled) return;
     window.__jazzModeFetchRouterInstalled = true;
@@ -170,8 +257,8 @@
         const payload = JSON.parse(init.body);
         if (payload && typeof payload.message === "string") {
           const cleanMessage = payload.message.replace(MODE_PREFIX, "").trim();
-          const requestedMode = modeCommandFor(cleanMessage);
-          if (requestedMode) setMode(requestedMode);
+          const localReply = localModeReply(cleanMessage);
+          if (localReply) return makeLocalChatResponse(url, localReply);
 
           const prefix = currentMode === "evil" ? "[JAZZ_MODE:EVIL]" : "[JAZZ_MODE:NORMAL]";
           payload.message = `${prefix} ${cleanMessage}`.trim();
