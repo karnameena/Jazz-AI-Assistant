@@ -3,18 +3,22 @@ import { normalizeUtterance } from "./utterance-normalizer.mjs";
 
 const DEFAULT_URL = "http://127.0.0.1:11434";
 const DEFAULT_MODEL = "qwen2.5:7b";
-// Prefer smaller Qwen models for low-latency voice/chat. Users can override this
-// with JAZZ_OLLAMA_MODEL when they want a larger model for harder work.
+const DEFAULT_NORMAL_MODEL = "qwen3:0.6b";
+const DEFAULT_EVIL_MODEL = "dolphin-phi:2.7b-v2.6-q2_K";
+const MODE_PREFIX = /^\[JAZZ_MODE:(NORMAL|EVIL)\]\s*/i;
+// Prefer smaller Qwen models for low-latency normal voice/chat when no explicit
+// normal model is configured. Evil / Ethical Hack Lab mode uses its own model.
 const PREFERRED_MODELS = ["qwen3:1.7b", "qwen3:0.6b", "qwen3:8b", DEFAULT_MODEL];
 let autoStartAttempted = false;
-let cachedModel = null;
-let cachedModelsSignature = "";
-let warmAttemptedFor = "";
+let cachedInstalledModels = null;
+const warmedModels = new Set();
 
 export function ollamaConfig() {
   return {
     url: (process.env.JAZZ_OLLAMA_URL || DEFAULT_URL).replace(/\/$/, ""),
     model: process.env.JAZZ_OLLAMA_MODEL || "",
+    normalModel: process.env.JAZZ_NORMAL_MODEL || process.env.JAZZ_OLLAMA_MODEL || DEFAULT_NORMAL_MODEL,
+    evilModel: process.env.JAZZ_EVIL_MODEL || DEFAULT_EVIL_MODEL,
     fallbackModel: process.env.JAZZ_OLLAMA_FALLBACK_MODEL || DEFAULT_MODEL,
     autoStart: process.env.JAZZ_OLLAMA_AUTOSTART !== "false",
     bin: process.env.JAZZ_OLLAMA_BIN || "ollama",
@@ -41,6 +45,7 @@ export async function getOllamaStatus() {
     if (!response.ok) return { ok: false, url: config.url, models: [], error: `HTTP ${response.status}` };
     const data = await response.json();
     const models = Array.isArray(data?.models) ? data.models.map(item => item?.name).filter(Boolean) : [];
+    cachedInstalledModels = models;
     return { ok: true, url: config.url, models };
   } catch (error) {
     return { ok: false, url: config.url, models: [], error: error instanceof Error ? error.message : String(error) };
@@ -69,8 +74,11 @@ function findInstalledModel(installed, requested) {
   return installed.find(name => name === requested || name.startsWith(`${requested}:`)) || null;
 }
 
-function chooseModel(installed, config) {
-  if (config.model) return findInstalledModel(installed, config.model);
+function chooseNormalModel(installed, config) {
+  const requested = config.normalModel;
+  const exact = requested ? findInstalledModel(installed, requested) : null;
+  if (exact) return exact;
+  if (process.env.JAZZ_NORMAL_MODEL || process.env.JAZZ_OLLAMA_MODEL) return null;
   for (const preferred of PREFERRED_MODELS) {
     const match = findInstalledModel(installed, preferred);
     if (match) return match;
@@ -78,39 +86,30 @@ function chooseModel(installed, config) {
   return installed[0] || null;
 }
 
+function chooseModeModel(installed, mode, config) {
+  if (mode === "evil") return findInstalledModel(installed, config.evilModel);
+  return chooseNormalModel(installed, config);
+}
+
 function warmModelInBackground(model) {
   const config = ollamaConfig();
-  if (!model || warmAttemptedFor === model) return;
-  warmAttemptedFor = model;
-  // Loading the model once at startup removes the largest first-voice-command delay.
-  // An empty generate request asks Ollama to load/keep the model without producing text.
+  if (!model || warmedModels.has(model)) return;
+  warmedModels.add(model);
   void fetchWithTimeout(`${config.url}/api/generate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ model, prompt: "", stream: false, keep_alive: config.keepAlive })
   }, 60000).catch(() => {
-    warmAttemptedFor = "";
+    warmedModels.delete(model);
   });
-}
-
-function cacheResolvedModel(models) {
-  const config = ollamaConfig();
-  const signature = models.join("|");
-  if (cachedModel && cachedModelsSignature === signature) return cachedModel;
-  const selected = chooseModel(models, config);
-  if (!selected && config.model) {
-    throw new Error(`Ollama model '${config.model}' is not installed. Installed models: ${models.join(", ") || "none"}.`);
-  }
-  cachedModel = selected;
-  cachedModelsSignature = signature;
-  if (selected) warmModelInBackground(selected);
-  return selected;
 }
 
 export async function ensureOllamaReady() {
   let status = await getOllamaStatus();
   if (status.ok) {
-    cacheResolvedModel(status.models);
+    const config = ollamaConfig();
+    const normal = chooseModeModel(status.models, "normal", config);
+    if (normal) warmModelInBackground(normal);
     return status;
   }
   if (!startOllamaProcess()) return status;
@@ -119,34 +118,46 @@ export async function ensureOllamaReady() {
     await new Promise(resolve => setTimeout(resolve, 500));
     status = await getOllamaStatus();
     if (status.ok) {
-      cacheResolvedModel(status.models);
+      const config = ollamaConfig();
+      const normal = chooseModeModel(status.models, "normal", config);
+      if (normal) warmModelInBackground(normal);
       return status;
     }
   }
   return status;
 }
 
-async function resolveModel() {
+async function resolveModel(mode = "normal") {
   const config = ollamaConfig();
-  // Fast path: normal chat requests no longer call /api/tags on every turn.
-  if (cachedModel) return cachedModel;
+  let installed = cachedInstalledModels;
+  if (!installed) {
+    const status = await ensureOllamaReady();
+    if (!status.ok) throw new Error(`Ollama is not running at ${config.url}. Install/start Ollama or run start-jazz.ps1.`);
+    installed = status.models;
+  }
 
-  const status = await ensureOllamaReady();
-  if (!status.ok) throw new Error(`Ollama is not running at ${config.url}. Install/start Ollama or run start-jazz.ps1.`);
-  const selected = cacheResolvedModel(status.models);
-  if (selected) return selected;
-  throw new Error(`Ollama is running but has no models installed. Run: ollama pull ${config.fallbackModel}`);
+  const selected = chooseModeModel(installed, mode, config);
+  if (selected) {
+    warmModelInBackground(selected);
+    return selected;
+  }
+
+  const requested = mode === "evil" ? config.evilModel : config.normalModel;
+  throw new Error(`Ollama ${mode} model '${requested}' is not installed. Installed models: ${installed.join(", ") || "none"}.`);
 }
 
-function chatPayload(model, systemInstruction, message, stream) {
+function chatPayload(model, systemInstruction, message, stream, mode) {
   const config = ollamaConfig();
+  const modeInstruction = mode === "evil"
+    ? "\n\nJazz mode: Ethical Hack Lab. Focus on authorized, defensive, CTF, sandbox, and owner-controlled security testing. Keep the answer practical and technically precise."
+    : "\n\nJazz mode: Normal assistant.";
   return {
     model,
     think: false,
     stream,
     keep_alive: config.keepAlive,
     messages: [
-      { role: "system", content: systemInstruction },
+      { role: "system", content: `${systemInstruction}${modeInstruction}` },
       { role: "user", content: message }
     ],
     options: {
@@ -157,27 +168,35 @@ function chatPayload(model, systemInstruction, message, stream) {
   };
 }
 
+function extractModeAndMessage(message) {
+  const raw = String(message || "").trim();
+  const match = raw.match(MODE_PREFIX);
+  const mode = match?.[1]?.toLowerCase() === "evil" ? "evil" : "normal";
+  const clean = raw.replace(MODE_PREFIX, "").trim();
+  return { mode, message: clean };
+}
+
 function normalizeForBrain(message) {
   const understanding = normalizeUtterance(message, { source: "typed" });
   return understanding.normalized || String(message || "").trim();
 }
 
 function invalidateModelOnTransportFailure() {
-  cachedModel = null;
-  cachedModelsSignature = "";
-  warmAttemptedFor = "";
+  cachedInstalledModels = null;
+  warmedModels.clear();
 }
 
 export async function callOllama(message, systemInstruction) {
   const config = ollamaConfig();
-  const model = await resolveModel();
-  const normalizedMessage = normalizeForBrain(message);
+  const routed = extractModeAndMessage(message);
+  const model = await resolveModel(routed.mode);
+  const normalizedMessage = normalizeForBrain(routed.message);
   let response;
   try {
     response = await fetchWithTimeout(`${config.url}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(chatPayload(model, systemInstruction, normalizedMessage, false))
+      body: JSON.stringify(chatPayload(model, systemInstruction, normalizedMessage, false, routed.mode))
     }, Number(process.env.JAZZ_OLLAMA_TIMEOUT_MS || 120000));
   } catch (error) {
     invalidateModelOnTransportFailure();
@@ -190,19 +209,20 @@ export async function callOllama(message, systemInstruction) {
   const data = await response.json();
   const text = typeof data?.message?.content === "string" ? data.message.content.trim() : "";
   if (!text) throw new Error("Ollama returned no text");
-  return { text, model };
+  return { text, model, assistantMode: routed.mode };
 }
 
 export async function streamOllama(message, systemInstruction, onText) {
   const config = ollamaConfig();
-  const model = await resolveModel();
-  const normalizedMessage = normalizeForBrain(message);
+  const routed = extractModeAndMessage(message);
+  const model = await resolveModel(routed.mode);
+  const normalizedMessage = normalizeForBrain(routed.message);
   let response;
   try {
     response = await fetch(`${config.url}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(chatPayload(model, systemInstruction, normalizedMessage, true))
+      body: JSON.stringify(chatPayload(model, systemInstruction, normalizedMessage, true, routed.mode))
     });
   } catch (error) {
     invalidateModelOnTransportFailure();
