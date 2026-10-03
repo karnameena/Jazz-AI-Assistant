@@ -84,6 +84,9 @@
   };
 
   const setButtonIcon = (button, iconName) => {
+    const wanted = iconName || "";
+    if ((button.dataset.jazzModeIcon || "") === wanted) return;
+    button.dataset.jazzModeIcon = wanted;
     button.querySelector(":scope > .jazz-mode-tool-icon")?.remove();
     button.classList.toggle("jazz-custom-action-icon", Boolean(iconName));
     if (!iconName || !toolIcons[iconName]) return;
@@ -198,7 +201,20 @@
     observer.observe(observerRoot, { childList: true, subtree: true });
   };
 
-  const scheduleApply = () => {
+  const mutationNeedsApply = mutations => {
+    if (!document.querySelector(".jazz-mode-toggle-wrap")) return true;
+    for (const mutation of mutations) {
+      for (const node of mutation.addedNodes || []) {
+        if (!(node instanceof Element)) continue;
+        if (node.matches?.(".top-header,.quick-action,.quick-actions-grid,.mode-tabs,.center-column,.greeting")
+          || node.querySelector?.(".top-header,.quick-action,.quick-actions-grid,.mode-tabs,.center-column,.greeting")) return true;
+      }
+    }
+    return false;
+  };
+
+  const scheduleApply = mutations => {
+    if (!mutationNeedsApply(mutations || [])) return;
     if (scheduledApply) return;
     scheduledApply = requestAnimationFrame(() => {
       scheduledApply = 0;
