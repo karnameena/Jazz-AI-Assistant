@@ -2,6 +2,7 @@
   const STORAGE_KEY = "jazz-assistant-mode-v1";
   const NORMAL_STATUS = "Jazz is online • normal assist mode active";
   const EVIL_STATUS = "Jazz is online • ethical hack lab mode active";
+  const MODE_PREFIX = /^\[JAZZ_MODE:(?:NORMAL|EVIL)\]\s*/i;
   const evilActions = new Map([
     ["Take a Note", { label: "Nmap Scan", prompt: "Start an Nmap scan in my authorized ethical-hacking lab environment." }],
     ["Set Reminder", { label: "Metasploit", prompt: "Open the Metasploit workflow for my authorized ethical-hacking lab." }],
@@ -15,6 +16,32 @@
     setter?.call(input, value);
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.focus();
+  };
+
+  const installChatModeRouter = () => {
+    if (window.__jazzModeFetchRouterInstalled) return;
+    window.__jazzModeFetchRouterInstalled = true;
+    const baseFetch = window.fetch.bind(window);
+    window.fetch = async (input, init = {}) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input?.url || "";
+      const isChatRequest = /\/api\/chat(?:\/stream)?(?:$|[?#])/i.test(url);
+      const method = String(init?.method || (typeof input !== "string" && input?.method) || "GET").toUpperCase();
+      if (!isChatRequest || method !== "POST" || typeof init?.body !== "string") return baseFetch(input, init);
+
+      try {
+        const payload = JSON.parse(init.body);
+        if (payload && typeof payload.message === "string") {
+          const cleanMessage = payload.message.replace(MODE_PREFIX, "").trim();
+          const prefix = currentMode === "evil" ? "[JAZZ_MODE:EVIL]" : "[JAZZ_MODE:NORMAL]";
+          payload.message = `${prefix} ${cleanMessage}`.trim();
+          payload.assistantMode = currentMode;
+          return baseFetch(input, { ...init, body: JSON.stringify(payload) });
+        }
+      } catch {
+        // Keep the existing request untouched if it is not JSON.
+      }
+      return baseFetch(input, init);
+    };
   };
 
   const ensureToggle = () => {
@@ -110,9 +137,11 @@
 
   const observer = new MutationObserver(() => applyMode());
   const start = () => {
+    installChatModeRouter();
     applyMode();
     const root = document.getElementById("root");
     if (root) observer.observe(root, { childList: true, subtree: true });
+    console.info(`[Jazz] Assistant mode router active: ${currentMode}`);
   };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start, { once: true });
   else start();
