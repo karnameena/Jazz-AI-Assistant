@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React from "react";
 import { Check, Copy, Maximize2 } from "lucide-react";
 import { CodeViewer } from "./CodeViewer";
 
@@ -53,45 +53,79 @@ function HighlightedCode({ code, language }: { code: string; language: string })
   return <>{lines.map((line, index) => <React.Fragment key={index}>{highlightLine(line, language, index)}{index < lines.length - 1 ? "\n" : ""}</React.Fragment>)}</>;
 }
 
-export function CodeBlock({ language, filename, code, complete = true }: { language: string; filename?: string; code: string; complete?: boolean }) {
-  const [copied, setCopied] = useState(false);
-  const [expanded, setExpanded] = useState(false);
-  const highlighted = useMemo(() => <HighlightedCode code={code} language={language} />, [code, language]);
+type CodeBlockProps = {
+  language: string;
+  filename?: string;
+  code: string;
+  complete?: boolean;
+};
 
-  const copyCode = async () => {
+type CodeBlockState = {
+  copied: boolean;
+  expanded: boolean;
+};
+
+/**
+ * Class-based on purpose: this rich-code surface should never be able to blank
+ * the entire Jazz UI because of a hook-dispatcher/runtime mismatch in Vite dev mode.
+ */
+export class CodeBlock extends React.PureComponent<CodeBlockProps, CodeBlockState> {
+  state: CodeBlockState = { copied: false, expanded: false };
+  private copyTimer: number | null = null;
+
+  componentWillUnmount() {
+    if (this.copyTimer != null) window.clearTimeout(this.copyTimer);
+  }
+
+  private copyCode = async () => {
     try {
-      await navigator.clipboard.writeText(code);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1800);
+      await navigator.clipboard.writeText(this.props.code);
+      this.setState({ copied: true });
+      if (this.copyTimer != null) window.clearTimeout(this.copyTimer);
+      this.copyTimer = window.setTimeout(() => this.setState({ copied: false }), 1800);
     } catch {
-      setCopied(false);
+      this.setState({ copied: false });
     }
   };
 
-  return (
-    <>
-      <div className="jazz-code-file-label" title={filename || "Code"}>{filename || "Code"}</div>
-      <section className={`jazz-code-card ${complete ? "" : "is-streaming"}`}>
-        <header className="jazz-code-card-header">
-          <div className="jazz-code-title-group">
-            <span className="jazz-code-glyph" aria-hidden="true">&lt;/&gt;</span>
-            <span className="jazz-code-language">{language.toUpperCase()}</span>
-            {!complete && <em>Streaming…</em>}
-          </div>
-          <div className="jazz-code-actions">
-            <button type="button" onClick={copyCode} aria-label="Copy this code block" title="Copy code">
-              {copied ? <Check size={16} /> : <Copy size={16} />}
-              <span>{copied ? "Copied" : "Copy"}</span>
-            </button>
-            <button type="button" onClick={() => setExpanded(true)} aria-label="Expand this code block" title="Expand code">
-              <Maximize2 size={16} />
-              <span>Expand</span>
-            </button>
-          </div>
-        </header>
-        <pre className="jazz-code-body"><code>{highlighted}</code></pre>
-      </section>
-      <CodeViewer open={expanded} language={language} filename={filename} code={highlighted} copied={copied} onCopy={copyCode} onClose={() => setExpanded(false)} />
-    </>
-  );
+  render() {
+    const { language, filename, code, complete = true } = this.props;
+    const { copied, expanded } = this.state;
+    const highlighted = <HighlightedCode code={code} language={language} />;
+
+    return (
+      <>
+        <div className="jazz-code-file-label" title={filename || "Code"}>{filename || "Code"}</div>
+        <section className={`jazz-code-card ${complete ? "" : "is-streaming"}`}>
+          <header className="jazz-code-card-header">
+            <div className="jazz-code-title-group">
+              <span className="jazz-code-glyph" aria-hidden="true">&lt;/&gt;</span>
+              <span className="jazz-code-language">{language.toUpperCase()}</span>
+              {!complete && <em>Streaming…</em>}
+            </div>
+            <div className="jazz-code-actions">
+              <button type="button" onClick={this.copyCode} aria-label="Copy this code block" title="Copy code">
+                {copied ? <Check size={16} /> : <Copy size={16} />}
+                <span>{copied ? "Copied" : "Copy"}</span>
+              </button>
+              <button type="button" onClick={() => this.setState({ expanded: true })} aria-label="Expand this code block" title="Expand code">
+                <Maximize2 size={16} />
+                <span>Expand</span>
+              </button>
+            </div>
+          </header>
+          <pre className="jazz-code-body"><code>{highlighted}</code></pre>
+        </section>
+        <CodeViewer
+          open={expanded}
+          language={language}
+          filename={filename}
+          code={highlighted}
+          copied={copied}
+          onCopy={this.copyCode}
+          onClose={() => this.setState({ expanded: false })}
+        />
+      </>
+    );
+  }
 }

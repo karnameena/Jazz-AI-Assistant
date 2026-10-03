@@ -18,6 +18,10 @@ import java.nio.charset.StandardCharsets
  * delegates approved commands to the existing RecoveryCommandExecutor.
  */
 class LostModeNetworkClient(private val context: Context) {
+    companion object {
+        private const val MAX_COMMANDS_PER_SYNC = 3
+    }
+
     private val security = LostModeSecurityManager(context)
     private val existingIdentity = RecoverySecurityManager(context)
     private val statusManager = DeviceStatusManager(context)
@@ -35,29 +39,58 @@ class LostModeNetworkClient(private val context: Context) {
             return JSONObject().put("ok", false).put("status", "NO_VALIDATED_INTERNET")
         }
 
+        // Check owner-issued recovery commands before doing the routine heartbeat.
+        // This removes one complete network round trip from the critical path for
+        // Get Location / recovery-photo commands while preserving the same API flow.
+        var processed = 0
+        var lastCommandId: String? = null
+        var lastResult: JSONObject? = null
+
+        while (processed < MAX_COMMANDS_PER_SYNC) {
+            val next = request("GET", "/android/device/commands/next", null)
+            val command = next.optJSONObject("command") ?: break
+            val commandId = command.optString("id")
+            if (commandId.isBlank()) {
+                return JSONObject().put("ok", false).put("status", "INVALID_COMMAND")
+            }
+
+            val type = command.optString("type")
+            if (type !in setOf("device_status", "device_location", "ring_device", "recovery_photo", "set_recovery_mode", "play_voice_message")) {
+                val rejected = JSONObject().put("ok", false).put("status", "COMMAND_NOT_ALLOWED")
+                postResult(commandId, rejected)
+                processed += 1
+                lastCommandId = commandId
+                lastResult = rejected
+                continue
+            }
+
+            val result = executor.execute(command)
+            postResult(commandId, result)
+            processed += 1
+            lastCommandId = commandId
+            lastResult = result
+        }
+
+        // Heartbeat remains part of every successful sync, but no longer delays a
+        // queued recovery action from reaching the command executor.
         val heartbeat = JSONObject()
             .put("deviceId", security.deviceId())
             .put("deviceName", existingIdentity.deviceName())
             .put("mode", lostDeviceManager.mode())
-            .put("status", status)
+            .put("status", statusManager.snapshot())
         locationManager.cachedLocation()?.let { heartbeat.put("lastKnownLocation", it) }
         request("POST", "/android/device/heartbeat", heartbeat)
 
-        val next = request("GET", "/android/device/commands/next", null)
-        val command = next.optJSONObject("command") ?: return JSONObject().put("ok", true).put("status", "HEARTBEAT_SENT")
-        val commandId = command.optString("id")
-        if (commandId.isBlank()) return JSONObject().put("ok", false).put("status", "INVALID_COMMAND")
-
-        val type = command.optString("type")
-        if (type !in setOf("device_status", "device_location", "ring_device", "recovery_photo", "set_recovery_mode")) {
-            val rejected = JSONObject().put("ok", false).put("status", "COMMAND_NOT_ALLOWED")
-            postResult(commandId, rejected)
-            return rejected
+        return if (processed == 0) {
+            JSONObject().put("ok", true).put("status", "HEARTBEAT_SENT")
+        } else {
+            JSONObject()
+                .put("ok", true)
+                .put("status", "COMMANDS_EXECUTED")
+                .put("processed", processed)
+                .put("commandId", lastCommandId)
+                .put("result", lastResult)
         }
-
-        val result = executor.execute(command)
-        postResult(commandId, result)
-        return JSONObject().put("ok", true).put("status", "COMMAND_EXECUTED").put("commandId", commandId).put("result", result)
     }
 
     private fun postResult(commandId: String, result: JSONObject) {

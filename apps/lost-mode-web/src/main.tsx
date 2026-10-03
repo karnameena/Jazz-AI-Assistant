@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   BatteryCharging,
@@ -13,6 +13,7 @@ import {
   LockKeyhole,
   LogOut,
   MapPin,
+  Mic,
   Navigation,
   Radio,
   RefreshCw,
@@ -24,6 +25,7 @@ import {
 } from "lucide-react";
 import "./styles.css";
 import "./responsive-fixes.css";
+import { VoiceInput } from "./voice/VoiceInput";
 
 type LocationState = {
   latitude: number;
@@ -53,14 +55,64 @@ type Device = {
   photo: PhotoState | null;
 };
 
-async function api(path: string, options?: RequestInit) {
-  const response = await fetch(path, {
-    credentials: "include",
-    ...options,
-    headers: { "Content-Type": "application/json", ...(options?.headers || {}) },
-  });
+const rawApiBaseUrl = String(import.meta.env.VITE_API_BASE_URL || "").trim();
+
+function apiBaseUrl() {
+  if (!rawApiBaseUrl) return "";
+  try {
+    const parsed = new URL(rawApiBaseUrl);
+    if (parsed.username || parsed.password || parsed.search || parsed.hash) {
+      throw new Error("API URL must not contain credentials, query parameters, or fragments.");
+    }
+    const local = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1" || parsed.hostname === "::1";
+    if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && local)) {
+      throw new Error("Hosted Lost Mode API must use HTTPS.");
+    }
+    const cleanPath = parsed.pathname.replace(/\/+$/, "");
+    return `${parsed.origin}${cleanPath}`;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid API URL";
+    throw new Error(`Lost Mode API configuration error: ${message}`);
+  }
+}
+
+const API_BASE_URL = apiBaseUrl();
+
+async function api(path: string, options: RequestInit = {}) {
+  const headers = new Headers(options.headers || {});
+  headers.set("Accept", "application/json");
+  // Do not attach application/json to body-less GET requests. Avoiding that
+  // unnecessary non-simple header prevents a CORS preflight on every dashboard poll.
+  if (options.body != null && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json; charset=utf-8");
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      ...options,
+      credentials: "include",
+      cache: "no-store",
+      headers,
+    });
+  } catch (error) {
+    throw new Error(
+      API_BASE_URL
+        ? "Could not reach the Jazz Lost Mode server. Check the hosted API URL, HTTPS, CORS origin, and server status."
+        : "Could not reach the Jazz Lost Mode API. If web and server are hosted separately, set VITE_API_BASE_URL on the web build."
+    );
+  }
+
+  const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+  if (!contentType.includes("application/json")) {
+    throw new Error(
+      `Lost Mode API returned an unexpected response (${response.status}). ` +
+      "Check VITE_API_BASE_URL and make sure it points to the Lost Mode server, not the website."
+    );
+  }
+
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || "Request failed");
+  if (!response.ok) throw new Error(data.error || `Request failed (${response.status})`);
   return data;
 }
 
@@ -94,23 +146,50 @@ function downloadText(filename: string, value: string) {
   URL.revokeObjectURL(url);
 }
 
-function Login({ done }: { done: () => void }) {
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
+function actionKey(name: string, args: Record<string, unknown> = {}) {
+  if (name === "RECOVERY_PHOTO") return `${name}:${args.camera === "rear" ? "rear" : "front"}`;
+  return name;
+}
 
-  async function submit(event: React.FormEvent) {
+function Login({ done }: { done: () => void }) {
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const passwordRef = useRef<HTMLInputElement>(null);
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (submitting) return;
     setError("");
+    setSubmitting(true);
+
+    const form = event.currentTarget;
+    const fields = new FormData(form);
+    const username = String(fields.get("username") || "").trim();
+    let password = String(fields.get("password") || "");
+
+    if (!username || !password) {
+      password = "";
+      if (passwordRef.current) passwordRef.current.value = "";
+      setError("Enter your username and password.");
+      setSubmitting(false);
+      return;
+    }
+
+    // Serialize once, then immediately clear the password field and local variable.
+    // A password must exist in browser memory while it is being submitted, but it is
+    // never placed in React state, localStorage, sessionStorage, or the URL.
+    const body = JSON.stringify({ username, password });
+    password = "";
+    if (passwordRef.current) passwordRef.current.value = "";
+
     try {
-      await api("/api/auth/login", {
-        method: "POST",
-        body: JSON.stringify({ username, password }),
-      });
-      setPassword("");
+      await api("/api/auth/login", { method: "POST", body });
+      form.reset();
       done();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -123,17 +202,20 @@ function Login({ done }: { done: () => void }) {
         <div className="eyebrow">JAZZ SECURE RECOVERY</div>
         <h1>Lost Mode</h1>
         <p className="auth-subtitle">Secure access to your registered recovery devices.</p>
-        <form onSubmit={submit} className="auth-form">
+        <form onSubmit={submit} className="auth-form" autoComplete="on">
           <label>
             <span>Username</span>
-            <input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" placeholder="Enter username" />
+            <input name="username" autoComplete="username" autoCapitalize="none" spellCheck={false} placeholder="Enter username" required />
           </label>
           <label>
             <span>Password</span>
-            <input value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" type="password" placeholder="Enter password" />
+            <input ref={passwordRef} name="password" autoComplete="current-password" type="password" placeholder="Enter password" required />
           </label>
-          {error && <div className="error-banner">{error}</div>}
-          <button className="primary-button full-width" type="submit"><LockKeyhole size={18} /> Enter Lost Mode</button>
+          {error && <div className="error-banner" role="alert">{error}</div>}
+          <button className="primary-button full-width" type="submit" disabled={submitting}>
+            {submitting ? <RefreshCw className="spin" size={18} /> : <LockKeyhole size={18} />}
+            {submitting ? "Verifying securely…" : "Enter Lost Mode"}
+          </button>
         </form>
         <div className="secure-note"><ShieldCheck size={16} /> Owner-only authenticated recovery portal</div>
       </section>
@@ -149,7 +231,9 @@ function App() {
   const [selected, setSelected] = useState<number | null>(null);
   const [device, setDevice] = useState<Device | null>(null);
   const [msg, setMsg] = useState("");
-  const [busy, setBusy] = useState<string | null>(null);
+  const [activeCount, setActiveCount] = useState(0);
+  const [voiceOpen, setVoiceOpen] = useState(false);
+  const actionLocks = useRef(new Set<string>());
 
   async function load() {
     const data = await api("/api/devices");
@@ -159,9 +243,10 @@ function App() {
   }
 
   async function refresh(id = selected) {
-    if (!id) return;
+    if (!id) return null;
     const data = await api(`/api/devices/${id}`);
     setDevice(data.device);
+    return data.device as Device;
   }
 
   useEffect(() => {
@@ -176,39 +261,81 @@ function App() {
   useEffect(() => {
     if (!login || !selected) return;
     const timer = window.setInterval(() => {
-      void refresh(selected);
-      void load();
-    }, 5000);
+      void refresh(selected).catch(() => {});
+      void load().catch(() => {});
+    }, 2000);
     return () => window.clearInterval(timer);
   }, [login, selected]);
 
+  function isActionBusy(name: string, args: Record<string, unknown> = {}) {
+    return actionLocks.current.has(actionKey(name, args));
+  }
+
   async function action(name: string, args: Record<string, unknown> = {}) {
     if (!selected) return;
-    setBusy(name);
+    const key = actionKey(name, args);
+    if (actionLocks.current.has(key)) {
+      setMsg("That recovery request is already in progress. Jazz will refresh the latest result automatically.");
+      return;
+    }
+
+    const selectedAtStart = selected;
+    const beforeLocation = String(device?.location?.timestamp ?? "");
+    const beforePhoto = `${device?.photo?.camera ?? ""}:${String(device?.photo?.timestamp ?? "")}`;
+    const beforeMode = device?.mode || "";
+
+    actionLocks.current.add(key);
+    setActiveCount(actionLocks.current.size);
     setMsg("Sending secure recovery request…");
+
     try {
-      const data = await api(`/api/devices/${selected}/actions`, {
+      const data = await api(`/api/devices/${selectedAtStart}/actions`, {
         method: "POST",
         body: JSON.stringify({ action: name, args }),
       });
-      setMsg(`Recovery request queued securely • ${data.commandId}`);
-      let attempts = 0;
-      const timer = window.setInterval(async () => {
-        attempts += 1;
-        await refresh(selected).catch(() => {});
-        await load().catch(() => {});
-        if (attempts >= 12) {
-          window.clearInterval(timer);
-          setBusy(null);
+      setMsg(data.deduplicated
+        ? "A matching recovery request is already queued. Waiting for the latest result…"
+        : "Recovery request sent. Waiting for the device…");
+
+      const maxAttempts = name === "GET_LOCATION" || name === "RECOVERY_PHOTO" ? 36 : 10;
+      for (let attempts = 0; attempts < maxAttempts; attempts += 1) {
+        await new Promise(resolve => window.setTimeout(resolve, 650));
+        const latest = await refresh(selectedAtStart).catch(() => null);
+        if (!latest) continue;
+        if (attempts % 3 === 0) void load().catch(() => {});
+
+        if (name === "GET_LOCATION") {
+          const now = String(latest.location?.timestamp ?? "");
+          if (now && now !== beforeLocation) {
+            setMsg("Latest location received and map updated.");
+            break;
+          }
+        } else if (name === "RECOVERY_PHOTO") {
+          const wanted = args.camera === "rear" ? "rear" : "front";
+          const now = `${latest.photo?.camera ?? ""}:${String(latest.photo?.timestamp ?? "")}`;
+          if (latest.photo?.camera === wanted && now !== beforePhoto) {
+            setMsg(`${wanted === "rear" ? "Back" : "Front"} camera recovery photo updated.`);
+            break;
+          }
+        } else if (name === "SET_RECOVERY_MODE" && latest.mode !== beforeMode) {
+          setMsg("Lost Mode state updated.");
+          break;
+        } else if (attempts === maxAttempts - 1) {
+          setMsg("Recovery request sent. The page will continue refreshing automatically.");
         }
-      }, 2500);
+      }
     } catch (error) {
-      setBusy(null);
       setMsg(error instanceof Error ? error.message : "Action failed");
+    } finally {
+      actionLocks.current.delete(key);
+      setActiveCount(actionLocks.current.size);
     }
   }
 
   async function logout() {
+    setVoiceOpen(false);
+    actionLocks.current.clear();
+    setActiveCount(0);
     await api("/api/auth/logout", { method: "POST", body: "{}" }).catch(() => {});
     setLogin(false);
     setDevices([]);
@@ -315,15 +442,24 @@ function App() {
 
             <section className="section-heading"><div><span className="eyebrow">RECOVERY ACTIONS</span><h2>Remote controls</h2></div><span>Commands use the existing allowlisted recovery workflow.</span></section>
             <section className="action-grid">
-              <button onClick={() => action("DEVICE_STATUS")}><Smartphone /><div><strong>Device Status</strong><span>Refresh device health</span></div></button>
-              <button onClick={() => action("GET_LOCATION")}><LocateFixed /><div><strong>Get Location</strong><span>Request latest position</span></div></button>
-              <button onClick={() => action("RING_DEVICE")}><Volume2 /><div><strong>Ring Device</strong><span>Play recovery alert</span></div></button>
-              <button onClick={() => action("RECOVERY_PHOTO", { camera: "front" })}><Camera /><div><strong>Front Camera</strong><span>Request recovery photo</span></div></button>
-              <button onClick={() => action("RECOVERY_PHOTO", { camera: "rear" })}><Camera /><div><strong>Back Camera</strong><span>Request recovery photo</span></div></button>
-              <button className="critical-action" onClick={() => action("SET_RECOVERY_MODE", { enabled: true })}><ShieldCheck /><div><strong>Enable Lost Mode</strong><span>Secure recovery state</span></div></button>
+              <button disabled={isActionBusy("DEVICE_STATUS")} onClick={() => action("DEVICE_STATUS")}><Smartphone /><div><strong>Device Status</strong><span>Refresh device health</span></div></button>
+              <button disabled={isActionBusy("GET_LOCATION")} onClick={() => action("GET_LOCATION")}><LocateFixed /><div><strong>Get Location</strong><span>{isActionBusy("GET_LOCATION") ? "Request in progress…" : "Request latest position"}</span></div></button>
+              <button disabled={isActionBusy("RING_DEVICE")} onClick={() => action("RING_DEVICE")}><Volume2 /><div><strong>Ring Device</strong><span>Play recovery alert</span></div></button>
+              <button disabled={isActionBusy("RECOVERY_PHOTO", { camera: "front" })} onClick={() => action("RECOVERY_PHOTO", { camera: "front" })}><Camera /><div><strong>Front Camera</strong><span>{isActionBusy("RECOVERY_PHOTO", { camera: "front" }) ? "Capturing…" : "Request recovery photo"}</span></div></button>
+              <button disabled={isActionBusy("RECOVERY_PHOTO", { camera: "rear" })} onClick={() => action("RECOVERY_PHOTO", { camera: "rear" })}><Camera /><div><strong>Back Camera</strong><span>{isActionBusy("RECOVERY_PHOTO", { camera: "rear" }) ? "Capturing…" : "Request recovery photo"}</span></div></button>
+              <button className="critical-action" disabled={isActionBusy("SET_RECOVERY_MODE", { enabled: true })} onClick={() => action("SET_RECOVERY_MODE", { enabled: true })}><ShieldCheck /><div><strong>Enable Lost Mode</strong><span>Secure recovery state</span></div></button>
+              <button className="voice-toggle" aria-expanded={voiceOpen} aria-controls="recovery-voice-panel" onClick={() => setVoiceOpen(open => !open)}><Mic /><div><strong>Voice Input</strong><span>Remote recovery voice broadcast</span></div></button>
             </section>
 
-            {(msg || busy) && <div className="command-banner glass-panel"><div className="pulse-dot" /><span>{msg || "Processing…"}</span>{busy && <RefreshCw className="spin" size={16} />}</div>}
+            {voiceOpen && <VoiceInput
+              key={selected}
+              deviceName={devices.find(item => item.id === selected)?.deviceName || "Selected device"}
+              disabled={activeCount > 0 || device.id !== selected}
+              onAction={action}
+              onClose={() => setVoiceOpen(false)}
+            />}
+
+            {(msg || activeCount > 0) && <div className="command-banner glass-panel"><div className="pulse-dot" /><span>{msg || "Processing…"}</span>{activeCount > 0 && <RefreshCw className="spin" size={16} />}</div>}
 
             <section className="recovery-grid">
               <article className="location-card glass-panel">
@@ -338,6 +474,7 @@ function App() {
                       src={mapEmbedUrl(device.location)}
                       loading="lazy"
                       referrerPolicy="no-referrer"
+                      sandbox="allow-scripts allow-same-origin"
                     />
                     <div className="map-overlay"><Navigation size={15} /> Last known position</div>
                   </div>

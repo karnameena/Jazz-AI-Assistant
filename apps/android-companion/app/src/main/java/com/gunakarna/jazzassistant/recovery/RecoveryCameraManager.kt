@@ -12,6 +12,7 @@ import java.util.concurrent.TimeUnit
 
 class RecoveryCameraManager(private val context: Context) {
     companion object {
+        private const val CAPTURE_TIMEOUT_SECONDS = 15L
         private val captureLock = Any()
         @Volatile private var captureLatch: CountDownLatch? = null
         @Volatile private var captureResult: JSONObject? = null
@@ -61,13 +62,14 @@ class RecoveryCameraManager(private val context: Context) {
                 .addFlags(
                     Intent.FLAG_ACTIVITY_NEW_TASK or
                         Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS or
-                        Intent.FLAG_ACTIVITY_NO_HISTORY
+                        Intent.FLAG_ACTIVITY_NO_HISTORY or
+                        Intent.FLAG_ACTIVITY_NO_ANIMATION
                 )
                 .putExtra("camera", lens)
                 .putExtra("recovery", true)
             context.startActivity(intent)
 
-            val finished = latch.await(25, TimeUnit.SECONDS)
+            val finished = latch.await(CAPTURE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             synchronized(captureLock) {
                 val result = captureResult
                 captureLatch = null

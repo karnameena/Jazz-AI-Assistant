@@ -11,6 +11,7 @@ class RecoveryCommandExecutor(private val context: Context) {
     private val lostDeviceManager = LostDeviceManager(context)
     private val ringManager = RecoveryRingManager(context)
     private val cameraManager = RecoveryCameraManager(context)
+    private val voiceMessageManager = RecoveryVoiceMessageManager(context)
     private val securityManager = RecoverySecurityManager(context)
 
     fun execute(command: JSONObject): JSONObject {
@@ -30,6 +31,9 @@ class RecoveryCommandExecutor(private val context: Context) {
                 .put("deviceName", securityManager.deviceName())
                 .put("statusSnapshot", statusManager.snapshot())
             "ring_device" -> ringManager.ring(args.optLong("durationMs", 30_000L))
+            "play_voice_message" -> voiceMessageManager.play(args)
+                .put("deviceId", securityManager.deviceId())
+                .put("deviceName", securityManager.deviceName())
             "set_recovery_mode" -> {
                 val enabled = args.optBoolean("enabled", true)
                 lostDeviceManager.setEnabled(enabled)

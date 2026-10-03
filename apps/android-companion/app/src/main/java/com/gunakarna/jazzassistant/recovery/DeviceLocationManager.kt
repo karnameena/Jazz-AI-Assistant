@@ -19,18 +19,39 @@ class DeviceLocationManager(private val context: Context) {
         private const val LAST_ACCURACY = "last_accuracy"
         private const val LAST_PROVIDER = "last_provider"
         private const val LAST_TIME = "last_location_time"
+        private const val FRESH_LOCATION_MAX_AGE_MS = 10_000L
+        private const val LAST_LOCATION_WAIT_MS = 1_500L
     }
 
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     private val client = LocationServices.getFusedLocationProviderClient(context)
     private val history = RecoveryLocationHistory(context)
 
-    fun currentLocation(timeoutSeconds: Long = 12): JSONObject {
+    fun currentLocation(timeoutSeconds: Long = 6): JSONObject {
         if (!hasLocationPermission()) {
             return JSONObject()
                 .put("ok", false)
                 .put("status", "LOCATION_PERMISSION_REQUIRED")
                 .put("error", "Location permission has not been granted to Jazz Android Companion.")
+        }
+
+        // Fused Location normally already has a very recent fix. Use it immediately
+        // when it is fresh instead of forcing a new GPS fix and making the owner wait.
+        try {
+            val recent = Tasks.await(client.lastLocation, LAST_LOCATION_WAIT_MS, TimeUnit.MILLISECONDS)
+            if (recent != null && recent.time > 0L && System.currentTimeMillis() - recent.time <= FRESH_LOCATION_MAX_AGE_MS) {
+                save(recent.latitude, recent.longitude, recent.accuracy.toDouble(), recent.provider ?: "fused", recent.time)
+                return jsonLocation(
+                    latitude = recent.latitude,
+                    longitude = recent.longitude,
+                    accuracy = recent.accuracy.toDouble(),
+                    provider = recent.provider ?: "fused",
+                    timestamp = recent.time,
+                    kind = "LIVE_LOCATION"
+                )
+            }
+        } catch (_: Exception) {
+            // Continue to an active high-accuracy request.
         }
 
         val cancellation = CancellationTokenSource()
@@ -56,7 +77,7 @@ class DeviceLocationManager(private val context: Context) {
         } catch (_: Exception) {
             cancellation.cancel()
             try {
-                val last = Tasks.await(client.lastLocation, 4, TimeUnit.SECONDS)
+                val last = Tasks.await(client.lastLocation, LAST_LOCATION_WAIT_MS, TimeUnit.MILLISECONDS)
                 if (last != null) {
                     save(last.latitude, last.longitude, last.accuracy.toDouble(), last.provider ?: "fused", last.time)
                     jsonLocation(
@@ -73,6 +94,8 @@ class DeviceLocationManager(private val context: Context) {
             } catch (_: Exception) {
                 lastKnownLocation("LAST_KNOWN_LOCATION")
             }
+        } finally {
+            cancellation.cancel()
         }
     }
 
