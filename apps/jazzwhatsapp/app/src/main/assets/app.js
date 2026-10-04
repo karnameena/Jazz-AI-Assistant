@@ -260,7 +260,7 @@ function reminderCards() {
       );
 }
 function renderChat() {
-  root.innerHTML = `<header class="topbar">${act("chats", icon("back"), "iconbtn")}<button data-action="jazzProfile" style="display:flex;align-items:center;gap:10px;flex:1;text-align:left">${avatar()}<div><h3>${esc(state.jazzProfile.name)}</h3><small>${typing ? "typing…" : connection === "Connected" ? "online" : "connecting…"}</small></div></button>${act("callJazz", icon("call"), "iconbtn")}${act("chatMenu", icon("more"), "iconbtn")}</header>${connection !== "Connected" ? `<div class="connectionBanner">${esc(connection)}</div>` : ""}<main class="chatwall" id="messages"><div class="day">Today</div>${state.messages.map(bubble).join("")}${typing ? '<div class="bubble"><div class="muted">Jazz is typing…</div></div>' : ""}</main><div class="composerwrap">${replyTo ? `<div class="replybar"><div><b>Replying to ${replyTo.sender === "jazz" ? esc(state.jazzProfile.name) : "you"}</b><p>${esc(replyTo.text.slice(0, 80))}</p></div>${act("cancelReply", "×")}</div>` : ""}<form id="composer" class="composer"><div class="inputbox">${act("emoji", "☺", "iconbtn")}<textarea id="message" rows="1" placeholder="Message" aria-label="Message"></textarea>${act("attachment", icon("clip"), "iconbtn")}${act("photoMessage", icon("camera"), "iconbtn")}</div><button type="submit" class="sendbtn" aria-label="Send">${icon("send")}</button>${act("dictate", icon("mic"), "iconbtn")}</form></div>`;
+  root.innerHTML = `<header class="topbar">${act("chats", icon("back"), "iconbtn")}<button data-action="jazzProfile" style="display:flex;align-items:center;gap:10px;flex:1;text-align:left">${avatar()}<div><h3>${esc(state.jazzProfile.name)}</h3><small>${typing ? "typing…" : connection === "Connected" ? (state.assistantMode === "evil" ? "Evil mode · online" : "Normal mode · online") : "connecting…"}</small></div></button>${act("callJazz", icon("call"), "iconbtn")}${act("chatMenu", icon("more"), "iconbtn")}</header>${connection !== "Connected" ? `<div class="connectionBanner">${esc(connection)}</div>` : ""}<main class="chatwall" id="messages"><div class="day">Today</div>${state.messages.filter(m => !m.deleted).map(bubble).join("")}${typing ? '<div class="bubble"><div class="muted">Jazz is typing…</div></div>' : ""}</main><div class="composerwrap">${replyTo ? `<div class="replybar"><div><b>Replying to ${replyTo.sender === "jazz" ? esc(state.jazzProfile.name) : "you"}</b><p>${esc(replyTo.text.slice(0, 80))}</p></div>${act("cancelReply", "×")}</div>` : ""}<form id="composer" class="composer"><div class="inputbox">${act("emoji", "☺", "iconbtn")}<textarea id="message" rows="1" placeholder="Message" aria-label="Message"></textarea>${act("attachment", icon("clip"), "iconbtn")}${act("photoMessage", icon("camera"), "iconbtn")}</div><button type="submit" class="sendbtn" aria-label="Send">${icon("send")}</button>${act("dictate", icon("mic"), "iconbtn")}</form></div>`;
   requestAnimationFrame(
     () => ($("#messages").scrollTop = $("#messages").scrollHeight),
   );
@@ -465,7 +465,10 @@ document.addEventListener("click", async (e) => {
           break;
         case "delete":
           await api("/message-action", { id: m.id, action: "delete" });
+          state.messages = state.messages.filter(item => item.id !== m.id);
+          for (const item of state.messages) if (item.replyTo === m.id) delete item.replyTo;
           closeSheet();
+          render();
       }
       return;
     }
@@ -584,12 +587,23 @@ document.addEventListener("click", async (e) => {
         );
         closeSheet();
         break;
+      case "clearChat":
+        sheet('<h2>Clear chat?</h2><p>Remove all conversation messages. Scheduled reminders remain active.</p>' + act("confirmClearChat", "Clear all messages", "row"));
+        break;
+      case "confirmClearChat":
+        await api("/clear-chat", {});
+        state.messages = [];
+        replyTo = null;
+        closeSheet();
+        render();
+        break;
       case "chatMenu":
         sheet(
           "<h2>Jazz conversation</h2>" +
             act("jazzProfile", "Jazz profile", "row") +
             act("newReminder", "Set reminder", "row") +
-            act("callJazz", "Voice call", "row"),
+            act("callJazz", "Voice call", "row") +
+            act("clearChat", "Clear chat", "row"),
         );
         break;
       case "server":
@@ -733,6 +747,24 @@ window.onNativeEvent = (raw) => {
           bubble.textContent = streamingText;
           $("#messages").scrollTop = $("#messages").scrollHeight;
         }, 85);
+      break;
+    case "chat.cleared":
+      state.messages = [];
+      replyTo = null;
+      streamingText = "";
+      clearTimeout(streamingTimer);
+      streamingTimer = null;
+      render();
+      break;
+    case "message.deleted":
+      state.messages = state.messages.filter(m => m.id !== event.id);
+      for (const m of state.messages) if (m.replyTo === event.id) delete m.replyTo;
+      if (replyTo?.id === event.id) replyTo = null;
+      render();
+      break;
+    case "mode.updated":
+      state.assistantMode = event.assistantMode;
+      if (page === "chat") render();
       break;
     case "message.new":
     case "message.updated":

@@ -48,6 +48,8 @@ export async function createJazzWhatsApp({
       },
     };
   }
+  state.assistantMode ||= "normal";
+  state.messages = state.messages.filter(m => !m.deleted);
   const sockets = new Set();
   let write = Promise.resolve(),
     jobs = Promise.resolve();
@@ -69,6 +71,7 @@ export async function createJazzWhatsApp({
       if (socket.readyState === 1) socket.send(event);
   };
   const publicState = () => ({
+    assistantMode: state.assistantMode,
     messages: state.messages,
     calls: state.calls,
     profile: state.profile,
@@ -402,6 +405,13 @@ export async function createJazzWhatsApp({
             clientId: body.clientId,
           });
           await save();
+          const modeCommand = text.match(/^(?:hey\s+jazz[, ]*)?(?:turn\s+on|switch\s+to|change\s+to|enable|activate)\s+(evil|normal)\s+mode[.! ]*$/i);
+          if (modeCommand) {
+            state.assistantMode = modeCommand[1].toLowerCase();
+            await save();
+            early = { assistant: `${state.assistantMode === "evil" ? "Evil (Ethical Hack Lab)" : "Normal"} mode enabled, Mama.` };
+            emit("mode.updated", { assistantMode: state.assistantMode });
+          }
           // Only explicit quoted reminder replies acknowledge tasks; unrelated chat does not cancel calls.
           if (parent?.reminderId) {
             const snooze = text.match(
@@ -466,10 +476,8 @@ export async function createJazzWhatsApp({
         emit("jazz.typing", { active: true });
         let result;
         try {
-          const context = state.messages
-            .slice(-16)
-            .map((m) => `${m.sender === "jazz" ? "Jazz" : "Mama"}: ${m.text}`)
-            .join("\n");
+          const context = state.messages.filter(m => m.id !== incoming.id && !m.deleted)
+            .slice(-16).map(m => ({role: m.sender === "jazz" ? "assistant" : "user", content: m.text}));
           result =
             early ||
             (streamReply
@@ -478,7 +486,8 @@ export async function createJazzWhatsApp({
                   body.source === "voice" ? "voice" : "typed",
                   context,
                   (chunk) =>
-                    emit("message.delta", { id: incoming.id, text: chunk }),
+                    state.messages.some(m => m.id === incoming.id) && emit("message.delta", { id: incoming.id, text: chunk }),
+                  state.assistantMode,
                 )
               : await assistantReply(
                   text,
@@ -489,12 +498,13 @@ export async function createJazzWhatsApp({
           emit("jazz.typing", { active: false });
         }
         const outgoing = await lock(async () => {
+          if (!state.messages.some(m => m.id === incoming.id)) return null;
           incoming.status = "read";
           emit("message.updated", { message: incoming });
           const msg = message(
             "jazz",
             result.assistant || "Jazz returned no reply.",
-            { replyTo: incoming.id },
+            {},
           );
           await save();
           return msg;
@@ -581,6 +591,12 @@ export async function createJazzWhatsApp({
           emit("call.updated", { call });
           return reply(200, { call });
         }
+        if (route === "/clear-chat" && req.method === "POST") {
+          state.messages = [];
+          await save();
+          emit("chat.cleared", {});
+          return reply(200, { ok: true });
+        }
         if (route === "/message-action" && req.method === "POST") {
           const msg = state.messages.find((m) => m.id === body.id);
           if (!msg) throw new Error("Message not found");
@@ -588,8 +604,11 @@ export async function createJazzWhatsApp({
             msg.reaction = String(body.emoji || "").slice(0, 12);
           else if (body.action === "read") msg.status = "read";
           else if (body.action === "delete") {
-            msg.text = "Message deleted";
-            msg.deleted = true;
+            state.messages = state.messages.filter(m => m.id !== msg.id);
+            for (const item of state.messages) if (item.replyTo === msg.id) delete item.replyTo;
+            await save();
+            emit("message.deleted", { id: msg.id });
+            return reply(200, { ok: true });
           } else throw new Error("Invalid message action");
           await save();
           emit("message.updated", { message: msg });

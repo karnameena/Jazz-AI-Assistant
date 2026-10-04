@@ -146,7 +146,7 @@ async function resolveModel(mode = "normal") {
   throw new Error(`Ollama ${mode} model '${requested}' is not installed. Installed models: ${installed.join(", ") || "none"}.`);
 }
 
-function chatPayload(model, systemInstruction, message, stream, mode) {
+function chatPayload(model, systemInstruction, message, stream, mode, history = []) {
   const config = ollamaConfig();
   const modeInstruction = mode === "evil"
     ? "\n\nJazz mode: Ethical Hack Lab. Focus on authorized, defensive, CTF, sandbox, and owner-controlled security testing. Keep the answer practical and technically precise."
@@ -158,6 +158,7 @@ function chatPayload(model, systemInstruction, message, stream, mode) {
     keep_alive: config.keepAlive,
     messages: [
       { role: "system", content: `${systemInstruction}${modeInstruction}` },
+      ...history,
       { role: "user", content: message }
     ],
     options: {
@@ -212,7 +213,7 @@ export async function callOllama(message, systemInstruction) {
   return { text, model, assistantMode: routed.mode };
 }
 
-export async function streamOllama(message, systemInstruction, onText) {
+export async function streamOllama(message, systemInstruction, onText, history = []) {
   const config = ollamaConfig();
   const routed = extractModeAndMessage(message);
   const model = await resolveModel(routed.mode);
@@ -222,7 +223,7 @@ export async function streamOllama(message, systemInstruction, onText) {
     response = await fetch(`${config.url}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(chatPayload(model, systemInstruction, normalizedMessage, true, routed.mode))
+      body: JSON.stringify(chatPayload(model, systemInstruction, normalizedMessage, true, routed.mode, history))
     });
   } catch (error) {
     invalidateModelOnTransportFailure();

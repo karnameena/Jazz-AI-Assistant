@@ -41,7 +41,7 @@ test("authenticated chat, shared reminder delivery, escalation, acknowledgement,
     directory: path.join(temp, "app"),
     clock: () => now,
     assistantReply: async (text, source, context) => ({
-      assistant: `Reply: ${text} (${source}); context ${context.includes("Mama:")}`,
+      assistant: `Reply: ${text} (${source}); context ${Array.isArray(context)}`,
     }),
   });
   const parse = async (req) => {

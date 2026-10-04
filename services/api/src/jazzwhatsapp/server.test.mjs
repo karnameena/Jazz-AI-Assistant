@@ -9,14 +9,16 @@ import { fileURLToPath } from "node:url";
 test("real Jazz API retains old routes and streams app chat through the same brain", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "jazz-api-live-"));
   let llmCalls = 0;
+  let lastInput;
   const ollama = http.createServer(async (req, res) => {
     if (req.url === "/api/tags") {
-      res.end(JSON.stringify({ models: [{ name: "qwen3:0.6b" }] }));
+      res.end(JSON.stringify({ models: [{ name: "qwen3:0.6b" }, { name: "dolphin-phi:2.7b-v2.6-q2_K" }] }));
       return;
     }
     let raw = "";
     for await (const b of req) raw += b;
     const input = JSON.parse(raw || "{}");
+    if (input.messages) lastInput = input;
     if (input.messages?.some((m) => m.role === "user" && m.content)) llmCalls++;
     if (input.stream) {
       res.write(
@@ -106,6 +108,22 @@ test("real Jazz API retains old routes and streams app chat through the same bra
     assert.equal(reply.code, 200);
     assert.match(reply.text, /Hello from shared Jazz/);
     assert.doesNotMatch(reply.text, /qwen3/);
+    assert.equal(JSON.parse(reply.text).assistant.replyTo, undefined);
+    await request("/api/jazzwhatsapp/message", {text: "Turn on evil mode"});
+    await request("/api/jazzwhatsapp/message", {text: "Explain defensive security testing"});
+    assert.equal(lastInput.model, "dolphin-phi:2.7b-v2.6-q2_K");
+    assert.equal(lastInput.messages.at(-1).content, "Explain defensive security testing");
+    assert.ok(lastInput.messages.some(m => m.role === "assistant"));
+    await request("/api/jazzwhatsapp/message", {text: "Change to normal mode"});
+    await request("/api/jazzwhatsapp/message", {text: "Give React interview tips"});
+    assert.equal(lastInput.model, "qwen3:0.6b");
+    const removeId = JSON.parse(reply.text).message.id;
+    await request("/api/jazzwhatsapp/message-action", {id: removeId, action: "delete"});
+    let snapshot = JSON.parse((await request("/api/jazzwhatsapp/sync")).text);
+    assert.ok(!snapshot.messages.some(m => m.id === removeId));
+    await request("/api/jazzwhatsapp/clear-chat", {});
+    snapshot = JSON.parse((await request("/api/jazzwhatsapp/sync")).text);
+    assert.deepEqual(snapshot.messages, []);
     const count = llmCalls;
     const action = await request("/api/jazzwhatsapp/message", {
       text: "Open Instagram",
