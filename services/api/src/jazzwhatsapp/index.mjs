@@ -12,19 +12,26 @@ import {
 } from "../voip-reminders.mjs";
 const scrypt = promisify(crypto.scrypt);
 export function interpretAcknowledgement(text) {
-  if (/\b(not done|haven.t|not yet|no|later|after|will|going to)\b/i.test(text))
-    return "acknowledged";
-  if (
-    /^(done|completed|finished|yes|already done|i did it|i finished it|yes i bought it|got the medicine)[.! 👍]*$/i.test(
-      text.trim(),
-    )
-  )
-    return "completed";
+  const value = String(text).toLowerCase().replace(/[^a-z0-9' ]/g, " ");
+  if (/\b(finished driving|done driving|stopped driving)\b/.test(value)) return "acknowledged";
+  if (/\b(driving|call you back|busy driving)\b/.test(value)) return "snoozed";
+  if (/\b(not|haven't|havent|didn't|didnt|not yet|will|gonna|going to|shall|need to|should|must)\b/.test(value) || /^(?:what|how|when|why|can|could|have you|did you)\b/.test(value.trim())) return "acknowledged";
+  if (/\b(done|completed|finished|bought|purchased|drank|drunk|taken|i got it|got the|did it|had water)\b/.test(value)) return "completed";
   return "acknowledged";
 }
+export function parseModeCommand(text) {
+  const value = String(text).toLowerCase().replace(/[^a-z ]/g, " ").replace(/\s+/g, " ").trim();
+  if (/\b(don t|do not|dont|never)\b/.test(value)) return null;
+  const match = value.match(/^(?:(?:hey|hi|ok|okay) )?(?:jazz )?(?:(?:could|can|would) you )?(?:please )?(?:turn on|switch to|change to|enable|activate|set)(?: the)? (evil|normal) mode(?: (?:please|jazz))?$/);
+  if (match) return match[1];
+  if (/^(?:jazz )?(?:turn off|disable) evil mode$/.test(value)) return "normal";
+  return null;
+}
+const BOILERPLATE = /(?:here to understand what you mean|brain and conversation layer|own personal AI assistant and technical partner)/i;
 export async function createJazzWhatsApp({
   assistantReply,
   streamReply,
+  resolveMode = async mode => mode,
   directory = path.resolve(".jazz/jazzwhatsapp"),
   clock = Date.now,
 }) {
@@ -50,6 +57,8 @@ export async function createJazzWhatsApp({
   }
   state.assistantMode ||= "normal";
   state.messages = state.messages.filter(m => !m.deleted);
+  for (const m of state.messages) if (m.sender === "jazz") delete m.replyTo;
+  const confirmations = new Map();
   const sockets = new Set();
   let write = Promise.resolve(),
     jobs = Promise.resolve();
@@ -71,7 +80,10 @@ export async function createJazzWhatsApp({
       if (socket.readyState === 1) socket.send(event);
   };
   const publicState = () => ({
+    apiVersion: "1.0.3",
+    capabilities: ["clear-chat", "bulk-delete", "model-modes", "reminder-followup"],
     assistantMode: state.assistantMode,
+    assistantModel: state.assistantModel || null,
     messages: state.messages,
     calls: state.calls,
     profile: state.profile,
@@ -103,7 +115,7 @@ export async function createJazzWhatsApp({
     if (!call) throw new Error("Call not found");
     return call;
   };
-  const cancelCalls = (reminderId) => {
+  const cancelCalls = (reminderId, endActive = false) => {
     for (const call of state.calls)
       if (call.reminderId === reminderId && call.status === "ringing") {
         call.status = "cancelled";
@@ -137,9 +149,9 @@ export async function createJazzWhatsApp({
             messageSentAt: null,
             callStartedAt: null,
           }
-        : { status: action, acknowledgedAt: new Date(clock()).toISOString() };
+        : { status: action, acknowledgedAt: new Date(clock()).toISOString(), nextTextAt: action === "acknowledged" ? new Date(clock() + 600000).toISOString() : null };
     await updateReminder(id, patch);
-    cancelCalls(id);
+    cancelCalls(id, action === "snoozed");
     emit("reminder.updated", { reminder: { ...item, ...patch } });
     await save();
     return { ...item, ...patch };
@@ -158,10 +170,10 @@ export async function createJazzWhatsApp({
             (m) => m.dueKey === `${reminder.id}:${reminder.scheduledAt}`,
           );
           if (!msg) {
-            msg = message("jazz", `Mama, reminder: ${reminder.title}`, {
+            msg = message("jazz", `⏰ Mama, time for: ${reminder.title} 😊 Let me know when you have finished.`, {
               reminderId: reminder.id,
               dueKey: `${reminder.id}:${reminder.scheduledAt}`,
-              type: "reminder",
+              type: "reminder-text",
             });
             await save();
           }
@@ -169,10 +181,23 @@ export async function createJazzWhatsApp({
             status: "message_sent",
             messageSentAt: msg.createdAt,
             messageId: msg.id,
+            actionCardAt: new Date(clock() + Math.min(30000, reminder.escalationDelaySeconds * 500)).toISOString(),
+            actionCardSent: false,
           });
           emit("reminder.updated", {
             reminder: listVoipReminders().find((r) => r.id === reminder.id),
           });
+        }
+        if (reminder.status === "acknowledged" && reminder.nextTextAt && Date.parse(reminder.nextTextAt) <= clock()) {
+          const msg = message("jazz", `😊 Mama, checking in: have you finished ${reminder.title}?`, {reminderId: reminder.id, type: "reminder"});
+          await updateReminder(reminder.id, {status: "message_sent", messageSentAt: msg.createdAt, messageId: msg.id, actionCardSent: true, nextTextAt: null});
+          emit("reminder.updated", {reminder: listVoipReminders().find(r => r.id === reminder.id)});
+          await save();
+        }
+        if (reminder.status === "message_sent" && !reminder.actionCardSent && reminder.actionCardAt && Date.parse(reminder.actionCardAt) <= clock()) {
+          message("jazz", `✅ Finished ${reminder.title}, Mama? Tap Done, or Snooze if you need more time.`, {reminderId: reminder.id, type: "reminder"});
+          await updateReminder(reminder.id, {actionCardSent: true});
+          await save();
         }
         if (
           reminder.status === "message_sent" &&
@@ -210,6 +235,7 @@ export async function createJazzWhatsApp({
           clock() - Date.parse(call.createdAt) > 45000
         ) {
           call.status = "missed";
+          if (call.reminderId) await changeReminder(call.reminderId, "acknowledged");
           emit("call.ended", { call });
           await save();
         }
@@ -274,6 +300,7 @@ export async function createJazzWhatsApp({
       return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
     };
     try {
+      if (route === "/version" && req.method === "GET") return reply(200, {ok: true, apiVersion: "1.0.3"});
       if (route === "/auth" && req.method === "POST") {
         const ip = req.socket.remoteAddress;
         const entry = attempts.get(ip) || { count: 0, time: clock() };
@@ -361,7 +388,7 @@ export async function createJazzWhatsApp({
         const text = String(body.text || "").trim();
         if (!text || text.length > 16000)
           return reply(400, { error: "Message must be 1–16000 characters" });
-        let incoming, early;
+        let incoming, early, replyMode;
         await lock(async () => {
           if (body.clientId) {
             incoming = state.messages.find((m) => m.clientId === body.clientId);
@@ -381,39 +408,56 @@ export async function createJazzWhatsApp({
               r.delivery === "jazzwhatsapp" &&
               ["message_sent", "calling", "acknowledged"].includes(r.status),
           );
-          const replyLike =
-            /^(?:done|completed|finished|yes|snooze|not done|not yet|i will do|i.ll do|after dinner)\b/i.test(
-              text,
-            );
+          const replyLike = /^(?:(?:hey|ok|okay)\s+)?(?:jazz[, ]+)?(?:ok|okay|thanks|thank you)\b/i.test(text) || /\b(done|completed|finished|bought|purchased|drank|drunk|taken|got it|got the|did it|yes|snooze|not yet|will do|gonna buy|going to buy|driving|call you back|definitely)\b/i.test(text);
+          const mentioned = outstanding.filter(r => {
+            const words = r.title.toLowerCase().match(/[a-z]{4,}/g) || [];
+            return words.some(w => new RegExp(`\\b${w}\\b`, "i").test(text));
+          });
+          const target = outstanding.length === 1 ? outstanding[0] : mentioned.length === 1 ? mentioned[0] : null;
           const inferred =
-            replyLike && !body.replyTo && !voiceCall && outstanding.length === 1
+            replyLike && !body.replyTo && !voiceCall && target
               ? state.messages.findLast(
-                  (m) => m.reminderId === outstanding[0].id,
-                )
+                  (m) => m.reminderId === target.id,
+                ) || {reminderId: target.id}
               : null;
           const parent =
             state.messages.find((m) => m.id === body.replyTo) ||
             inferred ||
             (voiceCall?.reminderId &&
-            /^(?:done|completed|finished|yes|snooze)\b/i.test(text)
+            replyLike
               ? state.messages.findLast(
                   (m) => m.reminderId === voiceCall.reminderId,
-                )
+                ) || {reminderId: voiceCall.reminderId}
               : null);
           incoming = message("user", text, {
             replyTo: parent?.id,
             clientId: body.clientId,
           });
           await save();
-          const modeCommand = text.match(/^(?:hey\s+jazz[, ]*)?(?:turn\s+on|switch\s+to|change\s+to|enable|activate)\s+(evil|normal)\s+mode[.! ]*$/i);
-          if (modeCommand) {
-            state.assistantMode = modeCommand[1].toLowerCase();
-            await save();
-            early = { assistant: `${state.assistantMode === "evil" ? "Evil (Ethical Hack Lab)" : "Normal"} mode enabled, Mama.` };
-            emit("mode.updated", { assistantMode: state.assistantMode });
+          const sessionKey = req.headers.authorization;
+          const pending = confirmations.get(sessionKey);
+          if (/^(?:(?:hey\s+)?jazz[, ]+)?(?:(?:could|can|would)\s+you\s+)?(?:please\s+)?unlock\s+(?:my\s+)?(?:mobile|phone)(?:\s+(?:please|now))?[!. ]*$/i.test(text.trim())) {
+            confirmations.set(sessionKey, {expires: clock() + 60000});
+            early = {assistant: 'I found your approved unlockmobile.ps1 workflow. This sensitive action needs one final confirmation. Say “confirm” within 60 seconds when you want me to run it on Mobile.'};
+          } else if (/^(?:jazz[, ]+)?confirm[!. ]*$/i.test(text.trim()) && pending) {
+            confirmations.delete(sessionKey);
+            early = pending.expires >= clock() ? await assistantReply("unlock my mobile", "typed") : {assistant: "The confirmation expired, Mama. Ask me to unlock your mobile again."};
+          }
+          const selectedMode = parseModeCommand(text);
+          if (selectedMode) {
+            try {
+              const model = await resolveMode(selectedMode);
+              state.assistantMode = selectedMode;
+              state.assistantModel = model;
+              await save();
+              early = {assistant: selectedMode === "evil" ? "😈 Hey Mama, I am in Evil mode right now. Tell me what ethical hacking stuff you want to do." : "😊 Normal mode is on, Mama. What shall we do next?", model};
+              emit("mode.updated", {assistantMode: selectedMode, assistantModel: model});
+            } catch (error) {
+              early = {assistant: `I couldn't switch models, Mama: ${error.message}`};
+            }
           }
           // Only explicit quoted reminder replies acknowledge tasks; unrelated chat does not cancel calls.
-          if (parent?.reminderId) {
+          if (!early && parent?.reminderId && replyLike) {
             const snooze = text.match(
               /^snooze\s+(\d+)\s*(?:minutes?|mins?)?$/i,
             );
@@ -423,16 +467,15 @@ export async function createJazzWhatsApp({
               status,
               snooze ? Number(snooze[1]) : 10,
             );
-            if (snooze || status === "completed")
-              early = {
-                assistant: snooze
-                  ? `Snoozed for ${snooze[1]} minutes, Mama.`
+            early = {
+                assistant: status === "snoozed"
+                  ? `🚗 Take your time, Mama. I’ve snoozed this reminder for ${snooze ? snooze[1] : 10} minutes. Focus on your driving if you are on the road.`
                   : status === "completed"
-                    ? "Perfect, Mama. Reminder completed."
-                    : "Got it, Mama. I have acknowledged your reminder.",
+                    ? "✅ Perfect, Mama. Reminder completed!"
+                    : "😊 Okay, Mama. I’ll check in again in 10 minutes. Tell me when you’ve finished.",
               };
           }
-          if (replyLike && !parent && !voiceCall && outstanding.length > 1)
+          if (!early && replyLike && !parent && !voiceCall && outstanding.length > 1)
             early = {
               assistant:
                 "Which reminder do you mean, Mama? Reply to its reminder bubble so I can update the right one.",
@@ -471,12 +514,13 @@ export async function createJazzWhatsApp({
               assistant: `Sure, Mama. I’ll message you at ${new Date(reminder.scheduledAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}: ${reminder.title}`,
             };
           }
+          replyMode = state.assistantMode;
         });
         if (early?.duplicate) return reply(200, early);
         emit("jazz.typing", { active: true });
         let result;
         try {
-          const context = state.messages.filter(m => m.id !== incoming.id && !m.deleted)
+          const context = state.messages.filter(m => m.id !== incoming.id && !m.deleted && !BOILERPLATE.test(m.text))
             .slice(-16).map(m => ({role: m.sender === "jazz" ? "assistant" : "user", content: m.text}));
           result =
             early ||
@@ -487,7 +531,7 @@ export async function createJazzWhatsApp({
                   context,
                   (chunk) =>
                     state.messages.some(m => m.id === incoming.id) && emit("message.delta", { id: incoming.id, text: chunk }),
-                  state.assistantMode,
+                  replyMode,
                 )
               : await assistantReply(
                   text,
@@ -501,15 +545,16 @@ export async function createJazzWhatsApp({
           if (!state.messages.some(m => m.id === incoming.id)) return null;
           incoming.status = "read";
           emit("message.updated", { message: incoming });
+          if (result.model && state.assistantMode === replyMode) state.assistantModel = result.model;
           const msg = message(
             "jazz",
             result.assistant || "Jazz returned no reply.",
-            {},
+            {model: result.model || null},
           );
           await save();
           return msg;
         });
-        return reply(200, { message: incoming, assistant: outgoing });
+        return reply(200, { message: incoming, assistant: outgoing, assistantMode: state.assistantMode, assistantModel: state.assistantModel, apiVersion: "1.0.3" });
       }
       const body = req.method === "POST" ? await parseJson(req) : {};
       return await lock(async () => {
@@ -585,7 +630,10 @@ export async function createJazzWhatsApp({
             call.status = "active";
             if (call.reminderId)
               await changeReminder(call.reminderId, "acknowledged");
-          } else call.status = body.action === "decline" ? "declined" : "ended";
+          } else {
+            call.status = body.action === "decline" ? "declined" : "ended";
+            if (call.reminderId) await changeReminder(call.reminderId, "acknowledged");
+          }
           call.updatedAt = new Date(clock()).toISOString();
           await save();
           emit("call.updated", { call });
@@ -596,6 +644,15 @@ export async function createJazzWhatsApp({
           await save();
           emit("chat.cleared", {});
           return reply(200, { ok: true });
+        }
+        if (route === "/delete-messages" && req.method === "POST") {
+          if (!Array.isArray(body.ids) || !body.ids.length || body.ids.length > 500 || body.ids.some(id => typeof id !== "string")) throw new Error("Select 1–500 messages");
+          const ids = new Set(body.ids);
+          state.messages = state.messages.filter(m => !ids.has(m.id));
+          for (const m of state.messages) if (ids.has(m.replyTo)) delete m.replyTo;
+          await save();
+          emit("messages.deleted", {ids: [...ids]});
+          return reply(200, {ok: true, ids: [...ids]});
         }
         if (route === "/message-action" && req.method === "POST") {
           const msg = state.messages.find((m) => m.id === body.id);

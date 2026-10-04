@@ -99,3 +99,16 @@ The API must remain running and reachable. A WebSocket foreground connection alo
 Voice is turn-based with short silence detection, not a WebRTC full-duplex call. Local Whisper/Piper must be installed for the fully self-hosted speech path. The optional Android recognizer prefers offline speech but availability depends on the installed recognizer and language packs. Photos are shared and stored; this implementation does not add an image-understanding model. Human contacts/groups and video calls are outside this AI-only version.
 
 The approved chat/phone app icon was not present among the supplied files; `res/drawable/jazz_icon.xml` is a replaceable purple chat/phone placeholder. The supplied glowing voice-circle image was used as the call-screen reference.
+
+
+### Version 1.0.3
+
+Update both the Android APK and API source, then restart the API. Check `GET /api/jazzwhatsapp/version` returns `apiVersion: "1.0.3"`. The client warns about older servers and prevents chat actions against incompatible APIs.
+
+Chat menu supports Clear chat and Select messages, including Select all and bulk delete. Clear does not cancel scheduled reminders. In-flight model replies are discarded if their source message was cleared/deleted. Existing automatic Jazz quotes and deleted placeholders are removed on API startup.
+
+Natural mode requests such as "Could you please turn on evil mode" and "Change to normal mode" verify the configured Ollama model before changing the persistent account mode. Defaults are Qwen 0.6b for normal and Dolphin Phi 2.7b for the existing Ethical Hack Lab mode. Missing/unavailable models produce an error without switching. The header reports the selected model. Short messages and emojis go through conversation handling; recurring introduction text is removed from context and retried once with a direct-answer prompt.
+
+A due reminder sends a plain message first, then an actionable Done/Snooze card after up to 30 seconds, then calls after the configured unanswered delay (120 seconds by default). Promises to do a task acknowledge it; they do not mark it completed. Acknowledgements, answered/declined/missed reminder calls receive a follow-up after 10 minutes until completion/cancellation. Driving/call-back replies snooze 10 minutes and end the active reminder call. Completion phrases include "done Jazz", "I drunk water", and "I bought the medicine". Negations and future intentions keep the task open. Ambiguous replies with multiple pending reminders require a quoted reply or a uniquely matching task. This is phrase-based recognition; arbitrary wording is not guaranteed.
+
+Tablet chat uses the existing server device/script handlers and their PC-side control connections. Mobile unlock requires a session-scoped confirmation within 60 seconds. Other device controls retain their existing backend requirements; the tablet does not create a new phone control bridge.

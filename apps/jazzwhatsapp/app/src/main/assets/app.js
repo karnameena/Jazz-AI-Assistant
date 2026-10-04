@@ -26,6 +26,21 @@ let page = "home",
   messageBusy = false,
   photoTarget = "user",
   callStarted = Date.now();
+let chatGeneration = 0;
+const selectedMessages = new Set();
+let selectingMessages = false;
+function requireCompatibleBackend() {
+  if (state.apiVersion !== "1.0.3") throw new Error(`App 1.0.3 needs backend 1.0.3. Server reports ${state.apiVersion || "an older version"}. Apply the update patch and restart Jazz API.`);
+}
+function removeMessages(ids) {
+  chatGeneration++;
+  const removed = new Set(ids);
+  state.messages = state.messages.filter(m => !removed.has(m.id));
+  for (const m of state.messages) if (removed.has(m.replyTo)) delete m.replyTo;
+  if (removed.has(replyTo?.id)) replyTo = null;
+  selectedMessages.clear();
+  selectingMessages = false;
+}
 const pending = new Map();
 function api(route, body = null) {
   return new Promise((resolve, reject) => {
@@ -260,14 +275,15 @@ function reminderCards() {
       );
 }
 function renderChat() {
-  root.innerHTML = `<header class="topbar">${act("chats", icon("back"), "iconbtn")}<button data-action="jazzProfile" style="display:flex;align-items:center;gap:10px;flex:1;text-align:left">${avatar()}<div><h3>${esc(state.jazzProfile.name)}</h3><small>${typing ? "typing…" : connection === "Connected" ? (state.assistantMode === "evil" ? "Evil mode · online" : "Normal mode · online") : "connecting…"}</small></div></button>${act("callJazz", icon("call"), "iconbtn")}${act("chatMenu", icon("more"), "iconbtn")}</header>${connection !== "Connected" ? `<div class="connectionBanner">${esc(connection)}</div>` : ""}<main class="chatwall" id="messages"><div class="day">Today</div>${state.messages.filter(m => !m.deleted).map(bubble).join("")}${typing ? '<div class="bubble"><div class="muted">Jazz is typing…</div></div>' : ""}</main><div class="composerwrap">${replyTo ? `<div class="replybar"><div><b>Replying to ${replyTo.sender === "jazz" ? esc(state.jazzProfile.name) : "you"}</b><p>${esc(replyTo.text.slice(0, 80))}</p></div>${act("cancelReply", "×")}</div>` : ""}<form id="composer" class="composer"><div class="inputbox">${act("emoji", "☺", "iconbtn")}<textarea id="message" rows="1" placeholder="Message" aria-label="Message"></textarea>${act("attachment", icon("clip"), "iconbtn")}${act("photoMessage", icon("camera"), "iconbtn")}</div><button type="submit" class="sendbtn" aria-label="Send">${icon("send")}</button>${act("dictate", icon("mic"), "iconbtn")}</form></div>`;
+  root.innerHTML = `<header class="topbar">${act("chats", icon("back"), "iconbtn")}<button data-action="jazzProfile" style="display:flex;align-items:center;gap:10px;flex:1;text-align:left">${avatar()}<div><h3>${esc(state.jazzProfile.name)}</h3><small>${typing ? "typing…" : connection === "Connected" ? (state.assistantMode === "evil" ? `Evil mode · ${esc(state.assistantModel || "online")}` : `Normal mode · ${esc(state.assistantModel || "online")}`) : "connecting…"}</small></div></button>${act("callJazz", icon("call"), "iconbtn")}${act("chatMenu", icon("more"), "iconbtn")}</header>${connection !== "Connected" ? `<div class="connectionBanner">${esc(connection)}</div>` : ""}${state.apiVersion !== "1.0.3" ? `<div class="connectionBanner">App 1.0.3 · server ${esc(state.apiVersion || "older version")}. Apply the backend update and restart Jazz.</div>` : ""}${selectingMessages ? `<div class="selectionbar">${act("cancelSelection", "Cancel")}<b>${selectedMessages.size} selected</b>${act("selectAllMessages", "Select all")}${act("deleteSelected", "Delete selected")}</div>` : ""}<main class="chatwall" id="messages"><div class="day">Today</div>${state.messages.filter(m => !m.deleted).map(bubble).join("")}${typing ? '<div class="bubble"><div class="muted">Jazz is typing…</div></div>' : ""}</main><div class="composerwrap">${replyTo ? `<div class="replybar"><div><b>Replying to ${replyTo.sender === "jazz" ? esc(state.jazzProfile.name) : "you"}</b><p>${esc(replyTo.text.slice(0, 80))}</p></div>${act("cancelReply", "×")}</div>` : ""}<form id="composer" class="composer"><div class="inputbox">${act("emoji", "☺", "iconbtn")}<textarea id="message" rows="1" placeholder="Message" aria-label="Message"></textarea>${act("attachment", icon("clip"), "iconbtn")}${act("photoMessage", icon("camera"), "iconbtn")}</div><button type="submit" class="sendbtn" aria-label="Send">${icon("send")}</button>${act("dictate", icon("mic"), "iconbtn")}</form></div>`;
   requestAnimationFrame(
     () => ($("#messages").scrollTop = $("#messages").scrollHeight),
   );
 }
 function bubble(m) {
   const parent = state.messages.find((p) => p.id === m.replyTo);
-  return `<article class="bubble ${m.sender === "user" ? "sent" : ""}" data-message="${m.id}" tabindex="0">${parent ? `<div class="quote"><b>${parent.sender === "jazz" ? esc(state.jazzProfile.name) : "You"}</b>${esc(parent.text.slice(0, 130))}</div>` : ""}${m.image ? `<img class="attachment" src="${esc(m.image)}" alt="Shared image">` : ""}<div class="text">${esc(m.text)}</div><span class="meta">${time(m.createdAt)}${m.sender === "user" ? `<span class="ticks ${m.status === "read" ? "read" : ""}">✓✓</span>` : ""}</span>${m.type === "reminder" ? `<div class="reminderActions"><button data-reminder="${m.reminderId}" data-status="completed">✓ Done</button><button data-reminder="${m.reminderId}" data-status="snoozed">◷ Snooze</button></div>` : ""}${m.reaction ? `<div class="reaction">${esc(m.reaction)}</div>` : ""}</article>`;
+  const reminderClosed = state.reminders.some(r => r.id === m.reminderId && ["completed", "cancelled"].includes(r.status));
+  return `<article class="bubble ${m.sender === "user" ? "sent" : ""} ${selectedMessages.has(m.id) ? "selectedMessage" : ""}" data-message="${m.id}" tabindex="0">${selectingMessages ? `<span class="selectionmark">${selectedMessages.has(m.id) ? "☑" : "☐"}</span>` : ""}${parent ? `<div class="quote"><b>${parent.sender === "jazz" ? esc(state.jazzProfile.name) : "You"}</b>${esc(parent.text.slice(0, 130))}</div>` : ""}${m.image ? `<img class="attachment" src="${esc(m.image)}" alt="Shared image">` : ""}<div class="text">${esc(m.text)}</div><span class="meta">${time(m.createdAt)}${m.sender === "user" ? `<span class="ticks ${m.status === "read" ? "read" : ""}">✓✓</span>` : ""}</span>${m.type === "reminder" && reminderClosed ? `<div class="reminderActions">✅ Reminder closed</div>` : m.type === "reminder" ? `<div class="reminderActions"><button data-reminder="${m.reminderId}" data-status="completed">✓ Done</button><button data-reminder="${m.reminderId}" data-status="snoozed">◷ Snooze</button></div>` : ""}${m.reaction ? `<div class="reaction">${esc(m.reaction)}</div>` : ""}</article>`;
 }
 function renderLogin() {
   root.innerHTML = `<main class="login"><div class="logo">${icon("chat")}</div><div class="eyebrow">SAME JAZZ. CLOSER TO YOU.</div><h1>Welcome, Mama.</h1><p>Your chat, reminders, and voice calls in one place.</p><form class="form" id="login"><div><label for="base">Jazz API server</label><input id="base" name="base" value="${esc(boot.base)}" placeholder="http://192.168.1.10:8797" type="url" required></div><div><label for="username">Username</label><input id="username" name="username" placeholder="guna" autocomplete="username" pattern="[A-Za-z0-9_]{3,40}" required></div><div><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" minlength="8" required></div><button class="cta" type="submit">Connect to Jazz ${icon("send")}</button><p id="loginError" class="muted"></p></form><p class="fineprint">Use your existing app account. First-time account creation must be enabled on your Jazz server. Your phone and server need to be able to reach each other.</p></main>`;
@@ -298,7 +314,10 @@ function closeSheet() {
 }
 async function sync() {
   try {
-    Object.assign(state, await api("/sync"));
+    const generation = chatGeneration;
+    const data = await api("/sync");
+    if (generation !== chatGeneration) return;
+    Object.assign(state, data);
     render();
     Native.connect();
   } catch (e) {
@@ -308,6 +327,8 @@ async function sync() {
 }
 async function send(text) {
   if (messageBusy || !text.trim()) return;
+  try { requireCompatibleBackend(); } catch (e) { toast(e.message); return; }
+  const generation = chatGeneration;
   const quote = replyTo;
   replyTo = null;
   messageBusy = true;
@@ -319,6 +340,9 @@ async function send(text) {
       clientId: crypto.randomUUID(),
       escalationDelaySeconds: Number(localStorage.getItem("escalation") || 120),
     });
+    if (generation !== chatGeneration) return;
+    if (data.assistantMode) state.assistantMode = data.assistantMode;
+    if (data.assistantModel) state.assistantModel = data.assistantModel;
     if (data.message && !state.messages.some((m) => m.id === data.message.id))
       state.messages.push(data.message);
     if (
@@ -404,7 +428,7 @@ let streamingText = "",
 let longTimer;
 root.addEventListener("pointerdown", (e) => {
   const m = e.target.closest("[data-message]");
-  if (m && !e.target.closest("button"))
+  if (!selectingMessages && m && !e.target.closest("button"))
     longTimer = setTimeout(() => messageMenu(m.dataset.message), 500);
 });
 root.addEventListener("pointerup", () => clearTimeout(longTimer));
@@ -412,7 +436,7 @@ root.addEventListener("pointermove", () => clearTimeout(longTimer));
 root.addEventListener("contextmenu", (e) => {
   e.preventDefault();
   const m = e.target.closest("[data-message]");
-  if (m) messageMenu(m.dataset.message);
+  if (m && !selectingMessages) messageMenu(m.dataset.message);
 });
 function messageMenu(id) {
   const m = state.messages.find((m) => m.id === id);
@@ -432,6 +456,13 @@ function messageMenu(id) {
   );
 }
 document.addEventListener("click", async (e) => {
+  const article = e.target.closest("[data-message]");
+  if (selectingMessages && article) {
+    e.preventDefault();
+    selectedMessages.has(article.dataset.message) ? selectedMessages.delete(article.dataset.message) : selectedMessages.add(article.dataset.message);
+    render();
+    return;
+  }
   const b = e.target.closest("button");
   if (!b) return;
   if (b.type !== "submit") e.preventDefault();
@@ -587,11 +618,43 @@ document.addEventListener("click", async (e) => {
         );
         closeSheet();
         break;
+      case "selectMessages":
+        selectingMessages = true;
+        selectedMessages.clear();
+        closeSheet();
+        render();
+        break;
+      case "selectAllMessages":
+        for (const m of state.messages) selectedMessages.add(m.id);
+        render();
+        break;
+      case "cancelSelection":
+        selectedMessages.clear();
+        selectingMessages = false;
+        render();
+        break;
+      case "deleteSelected":
+        requireCompatibleBackend();
+        if (!selectedMessages.size) {toast("Select messages first"); break;}
+        sheet('<h2>Delete selected messages?</h2><p>' + selectedMessages.size + ' messages will be removed.</p>' + act("confirmDeleteSelected", "Delete messages", "row"));
+        break;
+      case "confirmDeleteSelected":
+        requireCompatibleBackend();
+        const ids = [...selectedMessages];
+        for (let i = 0; i < ids.length; i += 500) await api("/delete-messages", {ids: ids.slice(i, i + 500)});
+        removeMessages(ids);
+        closeSheet();
+        render();
+        break;
       case "clearChat":
         sheet('<h2>Clear chat?</h2><p>Remove all conversation messages. Scheduled reminders remain active.</p>' + act("confirmClearChat", "Clear all messages", "row"));
         break;
       case "confirmClearChat":
+        requireCompatibleBackend();
         await api("/clear-chat", {});
+        chatGeneration++;
+        selectedMessages.clear();
+        selectingMessages = false;
         state.messages = [];
         replyTo = null;
         closeSheet();
@@ -603,7 +666,8 @@ document.addEventListener("click", async (e) => {
             act("jazzProfile", "Jazz profile", "row") +
             act("newReminder", "Set reminder", "row") +
             act("callJazz", "Voice call", "row") +
-            act("clearChat", "Clear chat", "row"),
+            act("clearChat", "Clear chat", "row") +
+            act("selectMessages", "Select messages", "row"),
         );
         break;
       case "server":
@@ -749,11 +813,18 @@ window.onNativeEvent = (raw) => {
         }, 85);
       break;
     case "chat.cleared":
+      chatGeneration++;
+      selectedMessages.clear();
+      selectingMessages = false;
       state.messages = [];
       replyTo = null;
       streamingText = "";
       clearTimeout(streamingTimer);
       streamingTimer = null;
+      render();
+      break;
+    case "messages.deleted":
+      removeMessages(event.ids);
       render();
       break;
     case "message.deleted":
@@ -764,6 +835,7 @@ window.onNativeEvent = (raw) => {
       break;
     case "mode.updated":
       state.assistantMode = event.assistantMode;
+      state.assistantModel = event.assistantModel;
       if (page === "chat") render();
       break;
     case "message.new":

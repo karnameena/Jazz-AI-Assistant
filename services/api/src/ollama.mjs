@@ -127,7 +127,7 @@ export async function ensureOllamaReady() {
   return status;
 }
 
-async function resolveModel(mode = "normal") {
+export async function resolveModel(mode = "normal") {
   const config = ollamaConfig();
   let installed = cachedInstalledModels;
   if (!installed) {
@@ -187,7 +187,7 @@ function invalidateModelOnTransportFailure() {
   warmedModels.clear();
 }
 
-export async function callOllama(message, systemInstruction) {
+export async function callOllama(message, systemInstruction, history = []) {
   const config = ollamaConfig();
   const routed = extractModeAndMessage(message);
   const model = await resolveModel(routed.mode);
@@ -197,7 +197,7 @@ export async function callOllama(message, systemInstruction) {
     response = await fetchWithTimeout(`${config.url}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(chatPayload(model, systemInstruction, normalizedMessage, false, routed.mode))
+      body: JSON.stringify(chatPayload(model, systemInstruction, normalizedMessage, false, routed.mode, history))
     }, Number(process.env.JAZZ_OLLAMA_TIMEOUT_MS || 120000));
   } catch (error) {
     invalidateModelOnTransportFailure();
@@ -258,4 +258,10 @@ export async function streamOllama(message, systemInstruction, onText, history =
   }
   if (!emitted) throw new Error("Ollama completed without text");
   return model;
+}
+
+export async function verifyModeModel(mode) {
+  const status = await getOllamaStatus();
+  if (!status.ok) throw new Error("Ollama is unavailable. Start Ollama and try again.");
+  return resolveModel(mode);
 }

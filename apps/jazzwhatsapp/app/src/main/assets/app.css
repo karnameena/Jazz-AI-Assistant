@@ -857,3 +857,5 @@ small,
     transition: none !important;
   }
 }
+
+.selectionbar{display:flex;align-items:center;gap:12px;padding:12px;background:#152b32;color:#77dfcc}.selectionbar button{padding:8px;border-radius:8px;background:#25444b}.selectedMessage{outline:2px solid #00af91;background:#25444b!important}.selectionmark{display:block;color:#77dfcc;font-size:24px}

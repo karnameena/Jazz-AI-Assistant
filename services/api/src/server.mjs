@@ -3,7 +3,7 @@ import http from "node:http";
 import { devices, getDevice, sendAndroidCommand, sendAndroidScript } from "./device-bridge.mjs";
 import { findScriptForMessage, getScript, listScripts } from "./script-registry.mjs";
 import { handleAndroidIntent } from "./android-intents.mjs";
-import { callOllama, ensureOllamaReady, getOllamaStatus, streamOllama } from "./ollama.mjs";
+import { callOllama, ensureOllamaReady, getOllamaStatus, streamOllama, verifyModeModel } from "./ollama.mjs";
 import { getTtsStatus, streamPiperRaw, synthesizeWithPiper } from "./tts.mjs";
 import { debugUnderstanding, normalizeUtterance } from "./utterance-normalizer.mjs";
 import { jazzSystemPrompt, localPersonalityReply } from "./jazz-personality.mjs";
@@ -397,7 +397,7 @@ async function streamAssistantReply(message, res, source = "typed", conversation
     return;
   }
 
-  const preparedMessage = interpreted.message;
+  const preparedMessage = assistantMode ? String(message).trim() : interpreted.message;
   const local = await localAssistantReply(preparedMessage);
   if (local) {
     sendSse(res, "meta", { mode: local.mode || "local-assistant", version: VERSION });
@@ -419,7 +419,7 @@ async function streamAssistantReply(message, res, source = "typed", conversation
   try {
     if (provider === "ollama") {
       sendSse(res, "meta", { mode: "ollama", streaming: true, version: VERSION });
-      const model = await streamOllama((assistantMode ? `[JAZZ_MODE:${assistantMode.toUpperCase()}] ` : "") + String(preparedMessage).trim(), prompt + (assistantMode ? "\nAnswer the latest question directly. Avoid repeating introductions or previous replies." : ""), emit, Array.isArray(conversationContext) ? conversationContext : []);
+      const model = await streamOllama((assistantMode ? `[JAZZ_MODE:${assistantMode.toUpperCase()}] ` : "") + String(preparedMessage).trim(), prompt + (assistantMode ? "\nAnswer the latest user message directly, including short messages and emojis. Speak naturally in English. Do not repeat your identity, introduction, or capability list. Use a brief friendly reply with suitable emojis when appropriate. Do not claim an action or reminder completion without a tool result." : ""), emit, Array.isArray(conversationContext) ? conversationContext : []);
       sendSse(res, "done", { assistant: fullText.trim(), mode: "ollama", model });
       res.end();
       return;
@@ -437,7 +437,7 @@ async function streamAssistantReply(message, res, source = "typed", conversation
         console.warn(`[Jazz] Gemini stream failed; using Ollama — ${error instanceof Error ? error.message : String(error)}`);
         fullText = "";
         sendSse(res, "meta", { mode: "ollama-fallback", streaming: true, version: VERSION });
-        const model = await streamOllama((assistantMode ? `[JAZZ_MODE:${assistantMode.toUpperCase()}] ` : "") + String(preparedMessage).trim(), prompt + (assistantMode ? "\nAnswer the latest question directly. Avoid repeating introductions or previous replies." : ""), emit, Array.isArray(conversationContext) ? conversationContext : []);
+        const model = await streamOllama((assistantMode ? `[JAZZ_MODE:${assistantMode.toUpperCase()}] ` : "") + String(preparedMessage).trim(), prompt + (assistantMode ? "\nAnswer the latest user message directly, including short messages and emojis. Speak naturally in English. Do not repeat your identity, introduction, or capability list. Use a brief friendly reply with suitable emojis when appropriate. Do not claim an action or reminder completion without a tool result." : ""), emit, Array.isArray(conversationContext) ? conversationContext : []);
         sendSse(res, "done", { assistant: fullText.trim(), mode: "ollama-fallback", model });
         res.end();
         return;
@@ -470,18 +470,24 @@ async function streamTtsReply(text, res) {
 }
 
 await initVoipReminders({ synthesize: synthesizeWithPiper });
-const jazzWhatsApp = await createJazzWhatsApp({ assistantReply, streamReply: async (text, source, context, onText, mode) => {
+const jazzWhatsApp = await createJazzWhatsApp({ assistantReply, resolveMode: verifyModeModel, streamReply: async (text, source, context, onText, mode) => {
   let result = { assistant: "" };
   const response = { writableEnded: false, write(frame) {
     const dataLine = frame.split("\n").find(line => line.startsWith("data: "));
     if (!dataLine) return;
     const data = JSON.parse(dataLine.slice(6));
     if (frame.startsWith("event: text")) onText(data.text || "");
-    if (frame.startsWith("event: done")) result = { assistant: data.assistant || "" };
+    if (frame.startsWith("event: done")) result = { assistant: data.assistant || "", model: data.model || null };
   }, end() { this.writableEnded = true; } };
   await streamAssistantReply(text, response, source, context, mode);
+  if (/here to understand what you mean|brain and conversation layer|own personal AI assistant and technical partner/i.test(result.assistant) && !/^(?:hey jazz[, ]*)?(?:who|what) are you(?: to me)?[?.! ]*$/i.test(text)) {
+    const retry = await callOllama(`[JAZZ_MODE:${mode === "evil" ? "EVIL" : "NORMAL"}] ${text}`, "You are Jazz. Reply in English to Mama's latest message directly. Do not introduce yourself or list capabilities. Use brief natural conversation with appropriate emojis. Recent messages provide context only.", context);
+    result = {assistant: retry.text, model: retry.model};
+    if (/here to understand what you mean|brain and conversation layer|own personal AI assistant and technical partner/i.test(result.assistant)) result.assistant = "Mama, the local model keeps repeating its introduction instead of answering. Please check the selected Ollama model. Your message was received.";
+  }
   return result;
 } });
+console.log("[JazzWhatsApp] client API 1.0.3 ready: bulk delete, verified model modes, reminder follow-ups");
 const jazzWhatsAppTimer = setInterval(() => void jazzWhatsApp.tick().catch(error => console.warn("[JazzWhatsApp] scheduler:", error.message)), 1000);
 jazzWhatsAppTimer.unref();
 

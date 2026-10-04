@@ -10,9 +10,10 @@ test("real Jazz API retains old routes and streams app chat through the same bra
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "jazz-api-live-"));
   let llmCalls = 0;
   let lastInput;
+  let evilAvailable = true;
   const ollama = http.createServer(async (req, res) => {
     if (req.url === "/api/tags") {
-      res.end(JSON.stringify({ models: [{ name: "qwen3:0.6b" }, { name: "dolphin-phi:2.7b-v2.6-q2_K" }] }));
+      res.end(JSON.stringify({ models: [{ name: "qwen3:0.6b" }, ...(evilAvailable ? [{ name: "dolphin-phi:2.7b-v2.6-q2_K" }] : [])] }));
       return;
     }
     let raw = "";
@@ -20,6 +21,10 @@ test("real Jazz API retains old routes and streams app chat through the same bra
     const input = JSON.parse(raw || "{}");
     if (input.messages) lastInput = input;
     if (input.messages?.some((m) => m.role === "user" && m.content)) llmCalls++;
+    if (input.messages?.at(-1).content === "Why is the sky blue?" && input.messages[0].content.includes("PERSONALITY AND VOICE")) {
+      res.end(JSON.stringify({message: {content: "Hey Mama — I’m here to understand what you mean"}, done: true}) + "\n");
+      return;
+    }
     if (input.stream) {
       res.write(
         JSON.stringify({ message: { content: "Hello from " }, done: false }) +
@@ -107,9 +112,9 @@ test("real Jazz API retains old routes and streams app chat through the same bra
     });
     assert.equal(reply.code, 200);
     assert.match(reply.text, /Hello from shared Jazz/);
-    assert.doesNotMatch(reply.text, /qwen3/);
+    assert.equal(JSON.parse(reply.text).assistant.model, "qwen3:0.6b");
     assert.equal(JSON.parse(reply.text).assistant.replyTo, undefined);
-    await request("/api/jazzwhatsapp/message", {text: "Turn on evil mode"});
+    await request("/api/jazzwhatsapp/message", {text: "Could you please turn on evil mode"});
     await request("/api/jazzwhatsapp/message", {text: "Explain defensive security testing"});
     assert.equal(lastInput.model, "dolphin-phi:2.7b-v2.6-q2_K");
     assert.equal(lastInput.messages.at(-1).content, "Explain defensive security testing");
@@ -117,6 +122,15 @@ test("real Jazz API retains old routes and streams app chat through the same bra
     await request("/api/jazzwhatsapp/message", {text: "Change to normal mode"});
     await request("/api/jazzwhatsapp/message", {text: "Give React interview tips"});
     assert.equal(lastInput.model, "qwen3:0.6b");
+    const repaired = await request("/api/jazzwhatsapp/message", {text: "Why is the sky blue?"});
+    assert.match(JSON.parse(repaired.text).assistant.text, /shared Jazz/);
+    assert.doesNotMatch(JSON.parse(repaired.text).assistant.text, /here to understand/);
+    await request("/api/jazzwhatsapp/message", {text: "😎"});
+    assert.equal(lastInput.messages.at(-1).content, "😎");
+    evilAvailable = false;
+    const missingMode = await request("/api/jazzwhatsapp/message", {text: "Please turn on evil mode"});
+    assert.match(JSON.parse(missingMode.text).assistant.text, /couldn't switch models/);
+    assert.equal(JSON.parse(missingMode.text).assistantMode, "normal");
     const removeId = JSON.parse(reply.text).message.id;
     await request("/api/jazzwhatsapp/message-action", {id: removeId, action: "delete"});
     let snapshot = JSON.parse((await request("/api/jazzwhatsapp/sync")).text);
@@ -124,6 +138,9 @@ test("real Jazz API retains old routes and streams app chat through the same bra
     await request("/api/jazzwhatsapp/clear-chat", {});
     snapshot = JSON.parse((await request("/api/jazzwhatsapp/sync")).text);
     assert.deepEqual(snapshot.messages, []);
+    assert.equal(snapshot.apiVersion, "1.0.3");
+    const unlock = await request("/api/jazzwhatsapp/message", {text: "Hey Jazz unlock my mobile"});
+    assert.match(JSON.parse(unlock.text).assistant.text, /Say “confirm” within 60 seconds/);
     const count = llmCalls;
     const action = await request("/api/jazzwhatsapp/message", {
       text: "Open Instagram",

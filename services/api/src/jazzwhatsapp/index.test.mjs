@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import http from "node:http";
 import { WebSocket } from "ws";
-import { createJazzWhatsApp, interpretAcknowledgement } from "./index.mjs";
+import { createJazzWhatsApp, interpretAcknowledgement, parseModeCommand } from "./index.mjs";
 import {
   initVoipReminders,
   listVoipReminders,
@@ -26,6 +26,16 @@ test("completion does not mistake intent or negation for completed work", () => 
     assert.equal(interpretAcknowledgement(text), "acknowledged");
 });
 
+
+test("natural mode commands and reminder language distinguish intent from completion", () => {
+  for (const text of ["Could you please turn on evil mode", "Hey Jazz, switch to evil mode 😈", "enable evil mode please"]) assert.equal(parseModeCommand(text), "evil");
+  assert.equal(parseModeCommand("Could you please change to normal mode"), "normal");
+  assert.equal(parseModeCommand("Don't turn on evil mode"), null);
+  for (const text of ["done Jazz", "Finished Jazz", "I drunk water", "Jazz I bought that medicine for mom", "I done that medicine", "I got it for mom"]) assert.equal(interpretAcknowledgement(text), "completed", text);
+  for (const text of ["Okay Jazz definitely I am gonna buy medicine", "I will do it", "not done", "got it", "I should buy medicine", "Have you finished the medicine?"]) assert.equal(interpretAcknowledgement(text), "acknowledged", text);
+  assert.equal(interpretAcknowledgement("Jazz right now I am driving I will call you back"), "snoozed");
+});
+
 test("authenticated chat, shared reminder delivery, escalation, acknowledgement, snooze and restart", async () => {
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), "jazzwhatsapp-test-"));
   const cwd = process.cwd();
@@ -37,12 +47,15 @@ test("authenticated chat, shared reminder delivery, escalation, acknowledgement,
       throw new Error("App reminders must not use Asterisk");
     },
   });
+  let pauseReply, markPaused;
+  const paused = new Promise(resolve => {markPaused = resolve;});
   let app = await createJazzWhatsApp({
     directory: path.join(temp, "app"),
     clock: () => now,
-    assistantReply: async (text, source, context) => ({
-      assistant: `Reply: ${text} (${source}); context ${Array.isArray(context)}`,
-    }),
+    assistantReply: async (text, source, context) => {
+      if (text === "delayed reply") {markPaused(); await new Promise(resolve => {pauseReply = resolve;});}
+      return {assistant: `Reply: ${text} (${source}); context ${Array.isArray(context)}`};
+    },
   });
   const parse = async (req) => {
     let body = "";
@@ -224,6 +237,37 @@ test("authenticated chat, shared reminder delivery, escalation, acknowledgement,
       "completed",
     );
     await request("/call-action", { id: call3.id, action: "end" });
+    const natural = await make("Drink water");
+    await updateReminder(natural.id, {scheduledAt: new Date(now - 1).toISOString()});
+    await app.tick();
+    const plain = app.publicState().messages.find(m => m.reminderId === natural.id);
+    assert.equal(plain.type, "reminder-text");
+    now += 31000;
+    await app.tick();
+    assert.ok(app.publicState().messages.some(m => m.reminderId === natural.id && m.type === "reminder"));
+    await request("/message", {text: "Okay Jazz I will do it", replyTo: plain.id});
+    assert.equal(listVoipReminders().find(r => r.id === natural.id).status, "acknowledged");
+    const beforeFollowup = app.publicState().messages.length;
+    now += 600001;
+    await app.tick();
+    assert.ok(app.publicState().messages.length > beforeFollowup);
+    assert.equal(listVoipReminders().find(r => r.id === natural.id).status, "message_sent");
+    await request("/message", {text: "Jazz right now I am driving I will call you back", replyTo: plain.id});
+    assert.equal(listVoipReminders().find(r => r.id === natural.id).status, "scheduled");
+    assert.equal(Date.parse(listVoipReminders().find(r => r.id === natural.id).scheduledAt), now + 600000);
+    now += 600001;
+    await app.tick();
+    await request("/message", {text: "I drunk water", replyTo: plain.id});
+    assert.equal(listVoipReminders().find(r => r.id === natural.id).status, "completed");
+    const ids = app.publicState().messages.slice(-2).map(m => m.id);
+    await request("/delete-messages", {ids});
+    assert.ok(!app.publicState().messages.some(m => ids.includes(m.id)));
+    const inFlight = request("/message", {text: "delayed reply"});
+    await paused;
+    await request("/clear-chat", {});
+    pauseReply();
+    await inFlight;
+    assert.deepEqual(app.publicState().messages, [], "Clear must discard a delayed model reply");
     const r4 = await make("Restart reminder");
     await updateReminder(r4.id, {
       scheduledAt: new Date(now - 1).toISOString(),
