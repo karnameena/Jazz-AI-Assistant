@@ -12,6 +12,7 @@ let ariSocket = null;
 let ariSocketReady = null;
 let reminders = [];
 let initialized = false;
+let persistenceQueue = Promise.resolve();
 
 function loadEnvFile() {
   const envPath = process.env.JAZZ_VOIP_ENV || path.join(process.cwd(), "services", "voip", ".env");
@@ -52,11 +53,16 @@ function storePath() {
 }
 
 async function persist() {
-  const file = storePath();
-  await fsp.mkdir(path.dirname(file), { recursive: true });
-  const temp = `${file}.tmp`;
-  await fsp.writeFile(temp, JSON.stringify(reminders, null, 2), "utf8");
-  await fsp.rename(temp, file);
+  const snapshot = JSON.stringify(reminders, null, 2);
+  const operation = persistenceQueue.then(async () => {
+    const file = storePath();
+    await fsp.mkdir(path.dirname(file), { recursive: true });
+    const temp = `${file}.tmp`;
+    await fsp.writeFile(temp, snapshot, "utf8");
+    await fsp.rename(temp, file);
+  });
+  persistenceQueue = operation.catch(() => {});
+  return operation;
 }
 
 async function load() {
@@ -102,6 +108,13 @@ function parseClock(hourRaw, minuteRaw, meridiemRaw) {
 export function parseReminderCommand(message, now = new Date()) {
   const raw = String(message || "").trim();
   const text = raw.replace(/^(?:hey\s+jazz[, ]*)/i, "").trim();
+  const relative = text.match(/^remind\s+me\s+in\s+(\d+)\s+(seconds?|minutes?|mins?|hours?)\s+to\s+(.+)$/i);
+  if (relative) {
+    const multiplier = /^hour/i.test(relative[2]) ? 3600000 : /^sec/i.test(relative[2]) ? 1000 : 60000;
+    const delay = Number(relative[1]) * multiplier;
+    if (delay <= 0 || delay > 365 * 86400000) return null;
+    return { title: relative[3].trim(), scheduledAt: new Date(now.getTime() + delay).toISOString(), delivery: "voip" };
+  }
   const patterns = [
     /^(?:call\s+me\s+and\s+)?remind\s+me\s+(today|tomorrow)?\s*(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s+(?:to|that)\s+(.+)$/i,
     /^remind\s+me\s+(?:to|that)\s+(.+?)\s+(today|tomorrow)?\s*(?:at\s+)(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i,
@@ -223,7 +236,7 @@ async function ensureAriSocket() {
   return ariSocketReady;
 }
 
-async function updateReminder(id, patch) {
+export async function updateReminder(id, patch) {
   const index = reminders.findIndex(item => item.id === id);
   if (index < 0) return null;
   reminders[index] = { ...reminders[index], ...patch, updatedAt: new Date().toISOString() };
@@ -320,7 +333,7 @@ async function fireReminder(id) {
 }
 
 function schedule(reminder) {
-  if (!reminder || reminder.status !== "scheduled") return;
+  if (!reminder || reminder.status !== "scheduled" || reminder.delivery === "jazzwhatsapp") return;
   const due = new Date(reminder.scheduledAt).getTime();
   if (!Number.isFinite(due)) return;
   const delay = due - Date.now();
@@ -352,7 +365,7 @@ export function listVoipReminders() {
   return reminders.map(item => ({ ...item }));
 }
 
-export async function createVoipReminder({ title, scheduledAt, delivery = "voip" }) {
+export async function createVoipReminder({ title, scheduledAt, delivery = "voip", escalationDelaySeconds = 120 }) {
   const cleanTitle = String(title || "").trim();
   const instant = new Date(scheduledAt);
   if (!cleanTitle) throw new Error("Reminder title is required.");
@@ -363,6 +376,7 @@ export async function createVoipReminder({ title, scheduledAt, delivery = "voip"
     title: cleanTitle,
     scheduledAt: instant.toISOString(),
     delivery,
+    escalationDelaySeconds: Math.min(3600, Math.max(15, Number(escalationDelaySeconds) || 120)),
     status: "scheduled",
     attempts: 0,
     createdAt: new Date().toISOString(),
@@ -377,9 +391,9 @@ export async function createVoipReminder({ title, scheduledAt, delivery = "voip"
 export async function handleVoipReminderCommand(message) {
   const parsed = parseReminderCommand(message);
   if (!parsed) return null;
-  const item = await createVoipReminder(parsed);
+  const item = await createVoipReminder({ ...parsed, delivery: process.env.JAZZ_REMINDER_DELIVERY === "jazzwhatsapp" ? "jazzwhatsapp" : "voip" });
   return {
-    assistant: `Got it, Mama ⏰📞 I’ll call you on ${formatScheduled(item.scheduledAt)} and remind you: **${item.title}**.`,
+    assistant: item.delivery === "jazzwhatsapp" ? `Got it, Mama. I’ll message you on ${formatScheduled(item.scheduledAt)}: **${item.title}**. If you don’t acknowledge it, I’ll call you in JazzWhatsApp.` : `Got it, Mama ⏰📞 I’ll call you on ${formatScheduled(item.scheduledAt)} and remind you: **${item.title}**.`,
     mode: "voip-reminder",
     reminder: item
   };

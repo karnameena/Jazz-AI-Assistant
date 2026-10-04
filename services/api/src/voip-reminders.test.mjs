@@ -37,3 +37,10 @@ test("parses call-me reminder phrasing", () => {
 test("does not guess when time is missing", () => {
   assert.equal(parseReminderCommand("remind me to take medicine", now), null);
 });
+
+test("parses relative minutes without guessing a clock time", () => {
+  const result = parseReminderCommand("remind me in 10 minutes to drink water", now);
+  assert.equal(result.title, "drink water");
+  assert.equal(result.scheduledAt, "2026-09-28T09:40:00.000Z");
+  assert.equal(parseReminderCommand("remind me in 0 minutes to drink water", now), null);
+});
