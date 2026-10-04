@@ -119,7 +119,7 @@ test("real Jazz API retains old routes and streams app chat through the same bra
     assert.equal(lastInput.model, "dolphin-phi:2.7b-v2.6-q2_K");
     assert.equal(lastInput.messages.at(-1).content, "Explain defensive security testing");
     assert.ok(lastInput.messages.some(m => m.role === "assistant"));
-    await request("/api/jazzwhatsapp/message", {text: "Change to normal mode"});
+    await request("/api/jazzwhatsapp/message", {text: "Turn normal mode"});
     await request("/api/jazzwhatsapp/message", {text: "Give React interview tips"});
     assert.equal(lastInput.model, "qwen3:0.6b");
     const repaired = await request("/api/jazzwhatsapp/message", {text: "Why is the sky blue?"});
@@ -138,7 +138,7 @@ test("real Jazz API retains old routes and streams app chat through the same bra
     await request("/api/jazzwhatsapp/clear-chat", {});
     snapshot = JSON.parse((await request("/api/jazzwhatsapp/sync")).text);
     assert.deepEqual(snapshot.messages, []);
-    assert.equal(snapshot.apiVersion, "1.0.3");
+    assert.equal(snapshot.apiVersion, "1.0.4");
     const unlock = await request("/api/jazzwhatsapp/message", {text: "Hey Jazz unlock my mobile"});
     assert.match(JSON.parse(unlock.text).assistant.text, /Say “confirm” within 60 seconds/);
     const count = llmCalls;

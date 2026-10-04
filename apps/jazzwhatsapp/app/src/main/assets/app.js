@@ -30,7 +30,7 @@ let chatGeneration = 0;
 const selectedMessages = new Set();
 let selectingMessages = false;
 function requireCompatibleBackend() {
-  if (state.apiVersion !== "1.0.3") throw new Error(`App 1.0.3 needs backend 1.0.3. Server reports ${state.apiVersion || "an older version"}. Apply the update patch and restart Jazz API.`);
+  if (state.apiVersion !== "1.0.4") throw new Error(`App 1.0.4 needs backend 1.0.4. Server reports ${state.apiVersion || "an older version"}. Apply the update patch and restart Jazz API.`);
 }
 function removeMessages(ids) {
   chatGeneration++;
@@ -275,7 +275,7 @@ function reminderCards() {
       );
 }
 function renderChat() {
-  root.innerHTML = `<header class="topbar">${act("chats", icon("back"), "iconbtn")}<button data-action="jazzProfile" style="display:flex;align-items:center;gap:10px;flex:1;text-align:left">${avatar()}<div><h3>${esc(state.jazzProfile.name)}</h3><small>${typing ? "typing…" : connection === "Connected" ? (state.assistantMode === "evil" ? `Evil mode · ${esc(state.assistantModel || "online")}` : `Normal mode · ${esc(state.assistantModel || "online")}`) : "connecting…"}</small></div></button>${act("callJazz", icon("call"), "iconbtn")}${act("chatMenu", icon("more"), "iconbtn")}</header>${connection !== "Connected" ? `<div class="connectionBanner">${esc(connection)}</div>` : ""}${state.apiVersion !== "1.0.3" ? `<div class="connectionBanner">App 1.0.3 · server ${esc(state.apiVersion || "older version")}. Apply the backend update and restart Jazz.</div>` : ""}${selectingMessages ? `<div class="selectionbar">${act("cancelSelection", "Cancel")}<b>${selectedMessages.size} selected</b>${act("selectAllMessages", "Select all")}${act("deleteSelected", "Delete selected")}</div>` : ""}<main class="chatwall" id="messages"><div class="day">Today</div>${state.messages.filter(m => !m.deleted).map(bubble).join("")}${typing ? '<div class="bubble"><div class="muted">Jazz is typing…</div></div>' : ""}</main><div class="composerwrap">${replyTo ? `<div class="replybar"><div><b>Replying to ${replyTo.sender === "jazz" ? esc(state.jazzProfile.name) : "you"}</b><p>${esc(replyTo.text.slice(0, 80))}</p></div>${act("cancelReply", "×")}</div>` : ""}<form id="composer" class="composer"><div class="inputbox">${act("emoji", "☺", "iconbtn")}<textarea id="message" rows="1" placeholder="Message" aria-label="Message"></textarea>${act("attachment", icon("clip"), "iconbtn")}${act("photoMessage", icon("camera"), "iconbtn")}</div><button type="submit" class="sendbtn" aria-label="Send">${icon("send")}</button>${act("dictate", icon("mic"), "iconbtn")}</form></div>`;
+  root.innerHTML = `<header class="topbar">${act("chats", icon("back"), "iconbtn")}<button data-action="jazzProfile" style="display:flex;align-items:center;gap:10px;flex:1;text-align:left">${avatar()}<div><h3>${esc(state.jazzProfile.name)}</h3><small>${typing ? "typing…" : connection === "Connected" ? "online" : "connecting…"}</small></div></button>${act("callJazz", icon("call"), "iconbtn")}${act("chatMenu", icon("more"), "iconbtn")}</header>${connection !== "Connected" ? `<div class="connectionBanner">${esc(connection)}</div>` : ""}${state.apiVersion !== "1.0.4" ? `<div class="connectionBanner">App 1.0.4 · server ${esc(state.apiVersion || "older version")}. Apply the backend update and restart Jazz.</div>` : ""}${selectingMessages ? `<div class="selectionbar">${act("cancelSelection", "Cancel")}<b>${selectedMessages.size} selected</b>${act("selectAllMessages", "Select all")}${act("deleteSelected", "Delete selected")}</div>` : ""}<main class="chatwall" id="messages"><div class="day">Today</div>${state.messages.filter(m => !m.deleted).map(bubble).join("")}${typing ? '<div class="bubble"><div class="muted">Jazz is typing…</div></div>' : ""}</main><div class="composerwrap">${replyTo ? `<div class="replybar"><div><b>Replying to ${replyTo.sender === "jazz" ? esc(state.jazzProfile.name) : "you"}</b><p>${esc(replyTo.text.slice(0, 80))}</p></div>${act("cancelReply", "×")}</div>` : ""}<form id="composer" class="composer"><div class="inputbox">${act("emoji", "☺", "iconbtn")}<textarea id="message" rows="1" placeholder="Message" aria-label="Message"></textarea>${act("attachment", icon("clip"), "iconbtn")}${act("photoMessage", icon("camera"), "iconbtn")}</div><button type="submit" class="sendbtn" aria-label="Send">${icon("send")}</button>${act("dictate", icon("mic"), "iconbtn")}</form></div>`;
   requestAnimationFrame(
     () => ($("#messages").scrollTop = $("#messages").scrollHeight),
   );
@@ -304,11 +304,19 @@ function renderCall() {
   root.innerHTML = `<main class="callScreen"><div class="callTop">${act("home", icon("back"), "iconbtn")}<span>JazzWhatsApp voice call</span>${icon("shield")}</div><div class="callTitle"><h1>${esc(state.jazzProfile.name)}</h1><p id="callTime">${ringing ? "Incoming voice call" : "Connecting…"}</p></div><div class="orbStage"><div class="orb" id="orb">${state.jazzProfile.avatar ? `<img class="orbAvatar" src="${esc(state.jazzProfile.avatar)}" alt="Jazz">` : `<svg viewBox="0 0 130 80"><defs><linearGradient id="wave" x1="0" x2="1"><stop stop-color="#356cff"/><stop offset="1" stop-color="#53fff1"/></linearGradient></defs><path d="M5 47 Q30 5 65 40 T125 27" fill="none" stroke="url(#wave)" stroke-width="3"/><path d="M5 50 Q30 15 65 43 T125 31" fill="none" stroke="#44d6f5" stroke-width="1" opacity=".6"/></svg>`}</div></div><div class="voiceStatus"><div class="bars">${"<i></i>".repeat(5)}</div><span id="voiceStatus">${ringing ? "Jazz is calling you" : "Connecting to Jazz"}</span></div><p class="transcript" id="transcript">${ringing ? esc(currentCall.title || "Your reminder is waiting.") : "A moment to connect. Then, just talk."}</p><div class="callControls">${ringing ? `<div class="callControl">${act("declineCall", icon("call"), "danger")}Decline</div><div class="callControl">${act("answerCall", icon("call"), "answer")}Answer</div>` : `<div class="callControl">${act("mute", icon("mic"), muted ? "active" : "")}Mute</div><div class="callControl">${act("speaker", icon("speaker"), speaker ? "active" : "")}Speaker</div><div class="callControl">${act("interrupt", icon("chat"))}Interrupt</div><div class="callControl">${act("endCall", icon("call"), "danger")}End call</div>`}</div><p class="callhint">${ringing ? "Answer to hear your reminder and continue talking." : "Private server connection · Microphone on only during your call"}</p></main>`;
 }
 function sheet(html) {
+  $("#modal").classList.remove("dropdownOverlay");
   $("#modal").innerHTML =
     `<div class="sheet">${act("closeModal", "×", "close iconbtn")}${html}</div>`;
   $("#modal").classList.remove("hidden");
 }
+function chatMenu() {
+  $("#modal").innerHTML = `<div class="chatDropdown" role="menu" aria-label="Jazz conversation settings">${act("jazzProfile", "Jazz profile", "row")}${act("newReminder", "Set reminder", "row")}${act("callJazz", "Voice call", "row")}${act("clearChat", "Clear chat", "row")}${act("selectMessages", "Select messages", "row")}${act("settings", "Settings", "row")}</div>`;
+  $("#modal").classList.add("dropdownOverlay");
+  $("#modal").classList.remove("hidden");
+}
+$("#modal").addEventListener("click", e => {if (e.target === $("#modal")) closeSheet();});
 function closeSheet() {
+  $("#modal").classList.remove("dropdownOverlay");
   $("#modal").classList.add("hidden");
   $("#modal").innerHTML = "";
 }
@@ -661,14 +669,7 @@ document.addEventListener("click", async (e) => {
         render();
         break;
       case "chatMenu":
-        sheet(
-          "<h2>Jazz conversation</h2>" +
-            act("jazzProfile", "Jazz profile", "row") +
-            act("newReminder", "Set reminder", "row") +
-            act("callJazz", "Voice call", "row") +
-            act("clearChat", "Clear chat", "row") +
-            act("selectMessages", "Select messages", "row"),
-        );
+        chatMenu();
         break;
       case "server":
         sheet(

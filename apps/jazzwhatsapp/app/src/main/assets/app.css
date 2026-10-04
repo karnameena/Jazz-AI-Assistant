@@ -859,3 +859,5 @@ small,
 }
 
 .selectionbar{display:flex;align-items:center;gap:12px;padding:12px;background:#152b32;color:#77dfcc}.selectionbar button{padding:8px;border-radius:8px;background:#25444b}.selectedMessage{outline:2px solid #00af91;background:#25444b!important}.selectionmark{display:block;color:#77dfcc;font-size:24px}
+
+#modal.dropdownOverlay{background:transparent;backdrop-filter:none;align-items:flex-start;justify-content:flex-end;padding:0}.chatDropdown{position:fixed;top:56px;right:8px;width:min(280px,calc(100vw - 24px));padding:6px 0;background:#20282d;border-radius:8px;box-shadow:0 8px 28px #0008;max-height:calc(100dvh - 72px);overflow:auto}.chatDropdown .row{display:block;width:100%;text-align:left;padding:15px 20px;border:0;border-radius:0;margin:0;font-size:16px}.chatDropdown .row:hover,.chatDropdown .row:focus-visible{background:#2b373d}

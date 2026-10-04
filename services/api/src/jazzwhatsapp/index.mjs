@@ -1,3 +1,4 @@
+import { sanitizeJazzReply } from "./reply-quality.mjs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -22,7 +23,7 @@ export function interpretAcknowledgement(text) {
 export function parseModeCommand(text) {
   const value = String(text).toLowerCase().replace(/[^a-z ]/g, " ").replace(/\s+/g, " ").trim();
   if (/\b(don t|do not|dont|never)\b/.test(value)) return null;
-  const match = value.match(/^(?:(?:hey|hi|ok|okay) )?(?:jazz )?(?:(?:could|can|would) you )?(?:please )?(?:turn on|switch to|change to|enable|activate|set)(?: the)? (evil|normal) mode(?: (?:please|jazz))?$/);
+  const match = value.match(/^(?:(?:hey|hi|ok|okay) )?(?:jazz )?(?:(?:could|can|would) you )?(?:please )?(?:turn on|turn|switch to|change to|enable|activate|set)(?: the)? (evil|normal) mode(?: (?:please|jazz))?$/);
   if (match) return match[1];
   if (/^(?:jazz )?(?:turn off|disable) evil mode$/.test(value)) return "normal";
   return null;
@@ -80,7 +81,7 @@ export async function createJazzWhatsApp({
       if (socket.readyState === 1) socket.send(event);
   };
   const publicState = () => ({
-    apiVersion: "1.0.3",
+    apiVersion: "1.0.4",
     capabilities: ["clear-chat", "bulk-delete", "model-modes", "reminder-followup"],
     assistantMode: state.assistantMode,
     assistantModel: state.assistantModel || null,
@@ -148,13 +149,26 @@ export async function createJazzWhatsApp({
             ).toISOString(),
             messageSentAt: null,
             callStartedAt: null,
+            nextCallAt: null,
+            missedAttempts: 0,
           }
-        : { status: action, acknowledgedAt: new Date(clock()).toISOString(), nextTextAt: action === "acknowledged" ? new Date(clock() + 600000).toISOString() : null };
+        : { status: action, acknowledgedAt: new Date(clock()).toISOString(), nextTextAt: action === "acknowledged" ? new Date(clock() + 600000).toISOString() : null, nextCallAt: null, missedAttempts: 0 };
     await updateReminder(id, patch);
     cancelCalls(id, action === "snoozed");
     emit("reminder.updated", { reminder: { ...item, ...patch } });
     await save();
     return { ...item, ...patch };
+  }
+  async function ringReminder(reminder, dueKey) {
+    let call = state.calls.find(c => c.reminderId === reminder.id && c.dueKey === dueKey);
+    if (!call) {
+      call = {id: crypto.randomUUID(), direction: "incoming", status: "ringing", reminderId: reminder.id, dueKey, title: reminder.title, createdAt: new Date(clock()).toISOString()};
+      state.calls.push(call);
+      await save();
+    }
+    if (call.status !== "ringing") return;
+    await updateReminder(reminder.id, {status: "calling", callStartedAt: call.createdAt, nextCallAt: null, nextTextAt: null});
+    emit("call.incoming", {call});
   }
   async function tick() {
     return lock(async () => {
@@ -188,6 +202,9 @@ export async function createJazzWhatsApp({
             reminder: listVoipReminders().find((r) => r.id === reminder.id),
           });
         }
+        if (reminder.status === "acknowledged" && reminder.nextCallAt && Date.parse(reminder.nextCallAt) <= clock()) {
+          await ringReminder(reminder, `retry:${reminder.nextCallAt}`);
+        }
         if (reminder.status === "acknowledged" && reminder.nextTextAt && Date.parse(reminder.nextTextAt) <= clock()) {
           const msg = message("jazz", `😊 Mama, checking in: have you finished ${reminder.title}?`, {reminderId: reminder.id, type: "reminder"});
           await updateReminder(reminder.id, {status: "message_sent", messageSentAt: msg.createdAt, messageId: msg.id, actionCardSent: true, nextTextAt: null});
@@ -204,29 +221,7 @@ export async function createJazzWhatsApp({
           clock() - Date.parse(reminder.messageSentAt) >=
             reminder.escalationDelaySeconds * 1000
         ) {
-          let call = state.calls.find(
-            (c) =>
-              c.reminderId === reminder.id &&
-              c.dueKey === reminder.messageSentAt,
-          );
-          if (!call) {
-            call = {
-              id: crypto.randomUUID(),
-              direction: "incoming",
-              status: "ringing",
-              reminderId: reminder.id,
-              dueKey: reminder.messageSentAt,
-              title: reminder.title,
-              createdAt: new Date(clock()).toISOString(),
-            };
-            state.calls.push(call);
-            await save();
-          }
-          await updateReminder(reminder.id, {
-            status: "calling",
-            callStartedAt: call.createdAt,
-          });
-          emit("call.incoming", { call });
+          await ringReminder(reminder, reminder.messageSentAt);
         }
       }
       for (const call of state.calls)
@@ -235,7 +230,15 @@ export async function createJazzWhatsApp({
           clock() - Date.parse(call.createdAt) > 45000
         ) {
           call.status = "missed";
-          if (call.reminderId) await changeReminder(call.reminderId, "acknowledged");
+          if (call.reminderId) {
+            const reminder = listVoipReminders().find(r => r.id === call.reminderId);
+            if (reminder && !["completed", "cancelled", "scheduled"].includes(reminder.status)) {
+              const attempts = (reminder.missedAttempts || 0) + 1;
+              const delayMinutes = attempts <= 2 ? 5 : 15;
+              await updateReminder(reminder.id, {status: "acknowledged", missedAttempts: attempts, nextTextAt: null, nextCallAt: new Date(clock() + delayMinutes * 60000).toISOString()});
+              emit("reminder.updated", {reminder: listVoipReminders().find(r => r.id === reminder.id)});
+            }
+          }
           emit("call.ended", { call });
           await save();
         }
@@ -300,7 +303,7 @@ export async function createJazzWhatsApp({
       return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
     };
     try {
-      if (route === "/version" && req.method === "GET") return reply(200, {ok: true, apiVersion: "1.0.3"});
+      if (route === "/version" && req.method === "GET") return reply(200, {ok: true, apiVersion: "1.0.4"});
       if (route === "/auth" && req.method === "POST") {
         const ip = req.socket.remoteAddress;
         const entry = attempts.get(ip) || { count: 0, time: clock() };
@@ -502,6 +505,7 @@ export async function createJazzWhatsApp({
                 : "You have no outstanding reminders, Mama.",
             };
           }
+          if (!early && replyLike && !parent && !voiceCall && outstanding.length === 0 && interpretAcknowledgement(text) === "completed") early = {assistant: "😊 Got it, Mama. There’s no pending reminder to complete."};
           const parsed = parseReminderCommand(text);
           if (!early && parsed) {
             const reminder = await createVoipReminder({
@@ -520,7 +524,7 @@ export async function createJazzWhatsApp({
         emit("jazz.typing", { active: true });
         let result;
         try {
-          const context = state.messages.filter(m => m.id !== incoming.id && !m.deleted && !BOILERPLATE.test(m.text))
+          const context = state.messages.filter(m => m.id !== incoming.id && !m.deleted && !m.reminderId && m.type !== "control" && !BOILERPLATE.test(m.text) && sanitizeJazzReply(m.text) === m.text)
             .slice(-16).map(m => ({role: m.sender === "jazz" ? "assistant" : "user", content: m.text}));
           result =
             early ||
@@ -549,12 +553,12 @@ export async function createJazzWhatsApp({
           const msg = message(
             "jazz",
             result.assistant || "Jazz returned no reply.",
-            {model: result.model || null},
+            {model: result.model || null, type: early ? "control" : "chat"},
           );
           await save();
           return msg;
         });
-        return reply(200, { message: incoming, assistant: outgoing, assistantMode: state.assistantMode, assistantModel: state.assistantModel, apiVersion: "1.0.3" });
+        return reply(200, { message: incoming, assistant: outgoing, assistantMode: state.assistantMode, assistantModel: state.assistantModel, apiVersion: "1.0.4" });
       }
       const body = req.method === "POST" ? await parseJson(req) : {};
       return await lock(async () => {

@@ -262,6 +262,23 @@ test("authenticated chat, shared reminder delivery, escalation, acknowledgement,
     const ids = app.publicState().messages.slice(-2).map(m => m.id);
     await request("/delete-messages", {ids});
     assert.ok(!app.publicState().messages.some(m => ids.includes(m.id)));
+    const retryReminder = await make("Retry medicine");
+    await updateReminder(retryReminder.id, {scheduledAt: new Date(now - 1).toISOString()});
+    await app.tick();
+    now += 16000; await app.tick();
+    for (const minutes of [5, 5, 15, 15]) {
+      const ringing = app.publicState().calls.findLast(c => c.reminderId === retryReminder.id && c.status === "ringing");
+      assert.ok(ringing);
+      now += 46000; await app.tick();
+      const item = listVoipReminders().find(r => r.id === retryReminder.id);
+      assert.equal(Date.parse(item.nextCallAt), now + minutes * 60000);
+      now += minutes * 60000 - 1; await app.tick();
+      assert.ok(!app.publicState().calls.some(c => c.reminderId === retryReminder.id && c.status === "ringing"));
+      now++; await app.tick();
+    }
+    await request("/reminder-action", {id: retryReminder.id, action: "completed"});
+    now += 900001; await app.tick();
+    assert.ok(!app.publicState().calls.some(c => c.reminderId === retryReminder.id && c.status === "ringing"));
     const inFlight = request("/message", {text: "delayed reply"});
     await paused;
     await request("/clear-chat", {});

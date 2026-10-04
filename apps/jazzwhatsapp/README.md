@@ -112,3 +112,12 @@ Natural mode requests such as "Could you please turn on evil mode" and "Change t
 A due reminder sends a plain message first, then an actionable Done/Snooze card after up to 30 seconds, then calls after the configured unanswered delay (120 seconds by default). Promises to do a task acknowledge it; they do not mark it completed. Acknowledgements, answered/declined/missed reminder calls receive a follow-up after 10 minutes until completion/cancellation. Driving/call-back replies snooze 10 minutes and end the active reminder call. Completion phrases include "done Jazz", "I drunk water", and "I bought the medicine". Negations and future intentions keep the task open. Ambiguous replies with multiple pending reminders require a quoted reply or a uniquely matching task. This is phrase-based recognition; arbitrary wording is not guaranteed.
 
 Tablet chat uses the existing server device/script handlers and their PC-side control connections. Mobile unlock requires a session-scoped confirmation within 60 seconds. Other device controls retain their existing backend requirements; the tablet does not create a new phone control bridge.
+
+
+### Version 1.0.4
+
+Update both source and APK. `GET /api/jazzwhatsapp/version` must return 1.0.4.
+The chat three-dot menu is now an upper-right dropdown. The header displays online/typing/connection status, without model names.
+"Turn normal mode" and "Turn evil mode" are recognized in addition to the existing polite commands.
+Model context excludes scheduler notifications and control replies. Generated app prose is checked before delivery to remove copied reminder templates and P.S./P.P.S. filler; fenced code is preserved. If filtering leaves an empty reply, it is retried once. This is a targeted guard, not a guarantee of model accuracy.
+Missed reminder calls now retry directly 5 minutes after the first miss, 5 minutes after the second, then 15 minutes after each subsequent miss. Each interval starts when the preceding call is marked missed (after about 45 seconds ringing). The missed-attempt count and next-call time persist in the shared reminder store. Completion/cancellation stops retries; snooze overrides the retry time. Explicit acknowledgement/answered calls retain the existing 10-minute text follow-up. Earlier version 1.0.3's missed-call 10-minute text schedule is superseded.
