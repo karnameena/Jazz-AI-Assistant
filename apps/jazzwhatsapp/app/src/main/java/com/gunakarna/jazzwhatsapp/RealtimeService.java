@@ -35,7 +35,7 @@ public class RealtimeService extends Service {
       1,
       new Notification.Builder(this, "connection")
         .setSmallIcon(R.drawable.jazz_icon)
-        .setContentTitle("JazzWhatsApp")
+        .setContentTitle("Jazz Ai")
         .setContentText("Listening for Jazz messages and calls")
         .setContentIntent(Notifications.open(this))
         .setOngoing(true)
@@ -88,6 +88,10 @@ public class RealtimeService extends Service {
               );
               if (type.equals("call.ended") || type.equals("call.updated")) {
                 JSONObject call = data.optJSONObject("call");
+                String active = VoiceService.activeCall();
+                if (call != null && active != null && call.optString("id").equals(new JSONObject(active).optString("id")) &&
+                    java.util.Arrays.asList("ended", "cancelled", "missed", "declined").contains(call.optString("status")))
+                  stopService(new Intent(RealtimeService.this, VoiceService.class));
                 if (
                   call != null && !call.optString("status").equals("ringing")
                 ) Notifications.stopRinging(

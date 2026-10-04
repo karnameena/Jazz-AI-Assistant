@@ -16,6 +16,7 @@ public class MainActivity extends Activity {
 
   protected WebView web;
   private String photoTarget = "user";
+  private byte[] downloadBytes;
   private boolean loaded = false;
   private SpeechRecognizer dictation;
   protected JSONObject call;
@@ -48,13 +49,33 @@ public class MainActivity extends Activity {
           return true;
         }
 
+        public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest request) {
+          Uri uri = request.getUrl();
+          String asset = uri.getPath() == null ? "" : uri.getPath().substring(1);
+          if ("https".equals(uri.getScheme()) && "jazz.invalid".equals(uri.getHost()) &&
+              java.util.Arrays.asList("index.html", "app.js", "app.css", "wallpaper.svg").contains(asset)) {
+            try { return new WebResourceResponse(asset.endsWith(".js") ? "text/javascript" : asset.endsWith(".css") ? "text/css" : asset.endsWith(".svg") ? "image/svg+xml" : "text/html", "UTF-8", getAssets().open(asset)); } catch (IOException ignored) {}
+          }
+          return new WebResourceResponse("text/plain", "UTF-8", new ByteArrayInputStream(new byte[0]));
+        }
         public void onPageFinished(WebView v, String url) {
           loaded = true;
         }
       }
     );
+    web.setWebChromeClient(new WebChromeClient() {
+      public void onPermissionRequest(PermissionRequest request) {
+        runOnUiThread(() -> {
+          if ("https".equals(request.getOrigin().getScheme()) && "jazz.invalid".equals(request.getOrigin().getHost()) && request.getOrigin().getPort() == -1 &&
+              checkSelfPermission("android.permission.CAMERA") == PackageManager.PERMISSION_GRANTED &&
+              java.util.Arrays.asList(request.getResources()).contains(PermissionRequest.RESOURCE_VIDEO_CAPTURE))
+            request.grant(new String[] {PermissionRequest.RESOURCE_VIDEO_CAPTURE});
+          else request.deny();
+        });
+      }
+    });
     setContentView(web);
-    web.loadUrl("file:///android_asset/index.html");
+    web.loadUrl("https://jazz.invalid/index.html");
     androidx.core.content.ContextCompat.registerReceiver(
       this,
       events,
@@ -143,6 +164,12 @@ public class MainActivity extends Activity {
         if (call != null) {
           o.put("call", call);
           o.put("autoAnswer", autoAnswer);
+        }
+        String active = VoiceService.activeCall();
+        o.put("voiceRunning", active != null);
+        if (active != null) {
+          if (call == null) o.put("activeCall", new JSONObject(active));
+          else if (call.optString("id").equals(new JSONObject(active).optString("id"))) { call.put("status", "active"); o.put("call", call); o.put("autoAnswer", false); }
         }
         o.put("callMode", MainActivity.this instanceof CallActivity);
       } catch (Exception ignored) {}
@@ -239,6 +266,8 @@ public class MainActivity extends Activity {
       runOnUiThread(() -> {
         try {
           JSONObject c = new JSONObject(raw);
+          String active = VoiceService.activeCall();
+          if (active != null && new JSONObject(active).optString("id").equals(c.optString("id"))) return;
           if (
             checkSelfPermission("android.permission.RECORD_AUDIO") !=
             PackageManager.PERMISSION_GRANTED
@@ -285,6 +314,7 @@ public class MainActivity extends Activity {
           }
           Intent voice = new Intent(MainActivity.this, VoiceService.class)
             .putExtra("id", c.optString("id"))
+            .putExtra("call", c.toString())
             .putExtra(
               "opening",
               c.has("title")
@@ -306,7 +336,7 @@ public class MainActivity extends Activity {
     public void callScreen(String raw) {
       runOnUiThread(() ->
         startActivity(
-          new Intent(MainActivity.this, CallActivity.class).putExtra(
+          new Intent(MainActivity.this, CallActivity.class).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP).putExtra(
             "call",
             raw
           )
@@ -378,6 +408,25 @@ public class MainActivity extends Activity {
             .addCategory(Intent.CATEGORY_OPENABLE),
           50
         );
+      });
+    }
+
+    @JavascriptInterface
+    public boolean camera() { return checkSelfPermission("android.permission.CAMERA") == PackageManager.PERMISSION_GRANTED; }
+
+    @JavascriptInterface
+    public void requestCamera() { runOnUiThread(() -> requestPermissions(new String[] {"android.permission.CAMERA"}, 44)); }
+
+    @JavascriptInterface
+    public void downloadImage(String raw) {
+      runOnUiThread(() -> {
+        try {
+          if (raw.length() > 1200000 || !raw.matches("data:image/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+")) throw new Exception("Invalid image");
+          String mime = raw.substring(5, raw.indexOf(";"));
+          downloadBytes = android.util.Base64.decode(raw.substring(raw.indexOf(",") + 1), android.util.Base64.DEFAULT);
+          startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+            .setType(mime).putExtra(Intent.EXTRA_TITLE, "Jazz-image-" + System.currentTimeMillis() + (mime.endsWith("jpeg") ? ".jpg" : mime.endsWith("png") ? ".png" : ".webp")), 51);
+        } catch (Exception e) { dispatch(Api.json("type", "error", "error", "Could not save image").toString()); }
       });
     }
 
@@ -510,6 +559,7 @@ public class MainActivity extends Activity {
     int[] results
   ) {
     super.onRequestPermissionsResult(code, permissions, results);
+    if (code == 44) dispatch(Api.json("type", "cameraPermission", "granted", String.valueOf(results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED)).toString());
     if (code == 42) dispatch(
       Api.json(
         "type",
@@ -524,15 +574,29 @@ public class MainActivity extends Activity {
 
   protected void onActivityResult(int code, int result, Intent data) {
     super.onActivityResult(code, result, data);
+    if (code == 51) {
+      byte[] bytes = downloadBytes; downloadBytes = null;
+      if (result == RESULT_OK && data != null && bytes != null) {
+        try (OutputStream output = getContentResolver().openOutputStream(data.getData())) {
+          if (output == null) throw new IOException();
+          output.write(bytes);
+          dispatch(Api.json("type", "savedImage").toString());
+        } catch (Exception e) { dispatch(Api.json("type", "error", "error", "Could not save image").toString()); }
+      }
+    }
     if (code == 50 && result == RESULT_OK && data != null) {
       try (
         InputStream input = getContentResolver().openInputStream(data.getData())
       ) {
         BitmapFactory.Options options = new BitmapFactory.Options();
-        options.inSampleSize = 4;
+        options.inJustDecodeBounds = true;
+        try (InputStream bounds = getContentResolver().openInputStream(data.getData())) { BitmapFactory.decodeStream(bounds, null, options); }
+        options.inSampleSize = 1;
+        while (Math.max(options.outWidth, options.outHeight) / options.inSampleSize > 2048) options.inSampleSize *= 2;
+        options.inJustDecodeBounds = false;
         Bitmap source = BitmapFactory.decodeStream(input, null, options);
         if (source == null) throw new Exception("Unsupported image");
-        int max = 512;
+        int max = photoTarget.equals("message") ? 1280 : 512;
         float ratio = Math.min(
           1f,
           (float) max / Math.max(source.getWidth(), source.getHeight())
@@ -544,7 +608,9 @@ public class MainActivity extends Activity {
           true
         );
         ByteArrayOutputStream output = new ByteArrayOutputStream();
-        image.compress(Bitmap.CompressFormat.JPEG, 85, output);
+        int quality = 85;
+        do { output.reset(); image.compress(Bitmap.CompressFormat.JPEG, quality, output); quality -= 10; } while (output.size() > 850000 && quality >= 35);
+        if (output.size() > 850000) throw new Exception("Image too large");
         dispatch(
           Api.json(
             "type",
@@ -574,6 +640,16 @@ public class MainActivity extends Activity {
 
   public void onBackPressed() {
     web.evaluateJavascript("window.goBack()", null);
+  }
+
+  protected void onPause() {
+    if (loaded) dispatch(Api.json("type", "cameraPaused").toString());
+    super.onPause();
+  }
+
+  protected void onResume() {
+    super.onResume();
+    if (loaded) dispatch(Api.json("type", "cameraResumed").toString());
   }
 
   protected void onDestroy() {

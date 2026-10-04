@@ -861,3 +861,17 @@ small,
 .selectionbar{display:flex;align-items:center;gap:12px;padding:12px;background:#152b32;color:#77dfcc}.selectionbar button{padding:8px;border-radius:8px;background:#25444b}.selectedMessage{outline:2px solid #00af91;background:#25444b!important}.selectionmark{display:block;color:#77dfcc;font-size:24px}
 
 #modal.dropdownOverlay{background:transparent;backdrop-filter:none;align-items:flex-start;justify-content:flex-end;padding:0}.chatDropdown{position:fixed;top:56px;right:8px;width:min(280px,calc(100vw - 24px));padding:6px 0;background:#20282d;border-radius:8px;box-shadow:0 8px 28px #0008;max-height:calc(100dvh - 72px);overflow:auto}.chatDropdown .row{display:block;width:100%;text-align:left;padding:15px 20px;border:0;border-radius:0;margin:0;font-size:16px}.chatDropdown .row:hover,.chatDropdown .row:focus-visible{background:#2b373d}
+
+.returnCall {width:100%; padding:10px; background:#005c4b; color:#d9fff4; display:flex; align-items:center; justify-content:center; gap:10px;}
+.imageAttachment {display:block; width:100%; padding:0; background:transparent;}
+.imageViewer {position:absolute; inset:0; background:#060b0f; display:flex; flex-direction:column;}
+.imageViewer header {display:flex; align-items:center; gap:16px; padding:14px; background:#202c33;}
+.imageViewer header b {flex:1;}
+.imageViewer>img {width:100%; min-height:0; flex:1; object-fit:contain;}
+.cameraStage {width:min(100%,420px); margin:8px auto; display:flex; flex-direction:column; gap:8px;}
+.cameraStage video {width:100%; height:220px; object-fit:contain; border-radius:16px; background:#000;}
+.cameraStage small {color:#8696a0; text-align:center;}
+.callScreen:has(.cameraStage) {overflow:auto;}
+.callScreen:has(.cameraStage) .orbStage {height:100px; min-height:100px; flex:none;}
+.callScreen:has(.cameraStage) .orb {width:90px; height:90px;}
+.composer .sendbtn {background:#00a884; color:#fff; flex-shrink:0;}

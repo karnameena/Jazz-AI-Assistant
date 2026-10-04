@@ -47,11 +47,13 @@ test("authenticated chat, shared reminder delivery, escalation, acknowledgement,
       throw new Error("App reminders must not use Asterisk");
     },
   });
+  let seenImage;
   let pauseReply, markPaused;
   const paused = new Promise(resolve => {markPaused = resolve;});
   let app = await createJazzWhatsApp({
     directory: path.join(temp, "app"),
     clock: () => now,
+    visionReply: async (question, image) => { seenImage = {question, image}; return {assistant: "A test image answer", model: "test-vision"}; },
     assistantReply: async (text, source, context) => {
       if (text === "delayed reply") {markPaused(); await new Promise(resolve => {pauseReply = resolve;});}
       return {assistant: `Reply: ${text} (${source}); context ${Array.isArray(context)}`};
@@ -93,6 +95,26 @@ test("authenticated chat, shared reminder delivery, escalation, acknowledgement,
     );
     assert.equal(auth.status, 200);
     token = auth.data.token;
+    const attachment = await request("/image", {image: "data:image/jpeg;base64,YQ=="});
+    assert.equal(attachment.status, 201);
+    const imageReply = await request("/message", {text: "Tell me about that picture"});
+    assert.equal(imageReply.data.assistant.text, "A test image answer");
+    assert.equal(seenImage.image, "data:image/jpeg;base64,YQ==");
+    await request("/message", {text: "What colour is it?"});
+    assert.equal(seenImage.question, "What colour is it?");
+    await request("/message", {text: "What colour is it?", replyTo: attachment.data.message.id});
+    assert.equal(seenImage.question, "What colour is it?");
+    const activeCameraCall = (await request("/call", {})).data.call;
+    assert.equal((await request("/call", {})).data.call.id, activeCameraCall.id);
+    const frame = await request("/image", {image: "data:image/jpeg;base64,Yg==", callId: activeCameraCall.id});
+    await request("/message", {text: "What do you see?", source: "voice", callId: activeCameraCall.id});
+    assert.equal(seenImage.image, "data:image/jpeg;base64,Yg==");
+    await request("/call-action", {id: activeCameraCall.id, action: "end"});
+    await request("/message-action", {id: frame.data.message.id, action: "delete"});
+    await request("/message-action", {id: attachment.data.message.id, action: "delete"});
+    assert.equal((await request("/message", {text: "Describe it", imageId: attachment.data.message.id})).status, 400);
+    await request("/clear-chat", {});
+
     assert.equal(
       (
         await request(
@@ -159,7 +181,7 @@ test("authenticated chat, shared reminder delivery, escalation, acknowledgement,
       .calls.find((c) => c.reminderId === reminder.id);
     assert.equal(incoming.status, "ringing");
     await app.tick();
-    assert.equal(app.publicState().calls.length, 1);
+    assert.equal(app.publicState().calls.filter(c => c.reminderId === reminder.id).length, 1);
     const done = await request("/message", {
       text: "Done",
       replyTo: due.id,
@@ -262,11 +284,13 @@ test("authenticated chat, shared reminder delivery, escalation, acknowledgement,
     const ids = app.publicState().messages.slice(-2).map(m => m.id);
     await request("/delete-messages", {ids});
     assert.ok(!app.publicState().messages.some(m => ids.includes(m.id)));
+    for (const call of app.publicState().calls.filter(c => ["ringing", "active"].includes(c.status))) await request("/call-action", {id: call.id, action: "end"});
+    for (const r of listVoipReminders().filter(r => !["completed", "cancelled"].includes(r.status))) await request("/reminder-action", {id: r.id, action: "cancelled"});
     const retryReminder = await make("Retry medicine");
     await updateReminder(retryReminder.id, {scheduledAt: new Date(now - 1).toISOString()});
     await app.tick();
     now += 16000; await app.tick();
-    for (const minutes of [5, 5, 15, 15]) {
+    for (const minutes of [5, 5, 15]) {
       const ringing = app.publicState().calls.findLast(c => c.reminderId === retryReminder.id && c.status === "ringing");
       assert.ok(ringing);
       now += 46000; await app.tick();
@@ -276,6 +300,15 @@ test("authenticated chat, shared reminder delivery, escalation, acknowledgement,
       assert.ok(!app.publicState().calls.some(c => c.reminderId === retryReminder.id && c.status === "ringing"));
       now++; await app.tick();
     }
+    now += 46000; await app.tick();
+    const exhausted = listVoipReminders().find(r => r.id === retryReminder.id);
+    assert.equal(exhausted.missedAttempts, 4);
+    assert.equal(exhausted.nextCallAt, null);
+    assert.equal(exhausted.retryExhausted, true);
+    assert.ok(app.publicState().messages.some(m => m.reminderId === retryReminder.id && /Please answer my call or message/.test(m.text)));
+    now += 900001; await app.tick();
+    assert.ok(!app.publicState().calls.some(c => c.reminderId === retryReminder.id && c.status === "ringing"));
+    assert.equal(listVoipReminders().find(r => r.id === retryReminder.id).status, "acknowledged");
     await request("/reminder-action", {id: retryReminder.id, action: "completed"});
     now += 900001; await app.tick();
     assert.ok(!app.publicState().calls.some(c => c.reminderId === retryReminder.id && c.status === "ringing"));
@@ -291,12 +324,19 @@ test("authenticated chat, shared reminder delivery, escalation, acknowledgement,
     });
     await app.tick();
     app.close();
+    const statePath = path.join(temp, "app", "state.json");
+    const oldState = JSON.parse(await fs.readFile(statePath, "utf8"));
+    oldState.messages.push({id: "legacy-ps", sender: "jazz", text: "P.P.S. I will be available for any other tasks you have in the future."});
+    oldState.messages.push({id: "legacy-prose", sender: "jazz", text: "Useful answer. P.P.S. I will be available."});
+    await fs.writeFile(statePath, JSON.stringify(oldState));
     app = await createJazzWhatsApp({
       directory: path.join(temp, "app"),
       clock: () => now,
       assistantReply: async () => ({ assistant: "Hello" }),
     });
     await app.tick();
+    assert.ok(!app.publicState().messages.some(m => m.id === "legacy-ps"));
+    assert.equal(app.publicState().messages.find(m => m.id === "legacy-prose").text, "Useful answer.");
     assert.equal(
       app.publicState().messages.filter((m) => m.reminderId === r4.id).length,
       1,

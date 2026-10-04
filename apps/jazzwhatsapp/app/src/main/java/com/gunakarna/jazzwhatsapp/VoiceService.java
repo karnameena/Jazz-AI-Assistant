@@ -22,6 +22,11 @@ public class VoiceService extends Service {
   private AudioRecord recorder;
   private volatile boolean running, muted;
   private boolean speaking, ttsReady;
+  private String callJson = "{}";
+  public static String activeCall() {
+    VoiceService service = instance;
+    return service != null && service.running ? service.callJson : null;
+  }
   private String callId = "",
     opening = "";
   private long epoch = 0;
@@ -85,7 +90,10 @@ public class VoiceService extends Service {
       stopSelf();
       return START_NOT_STICKY;
     }
+    if (running && callId.equals(i.getStringExtra("id"))) return START_NOT_STICKY;
     callId = i.getStringExtra("id");
+    callJson = i.getStringExtra("call");
+    if (callJson == null) callJson = Api.json("id", callId, "status", "active").toString();
     opening = i.getStringExtra("opening");
     running = true;
     startForeground(
@@ -93,7 +101,11 @@ public class VoiceService extends Service {
       new Notification.Builder(this, "voice")
         .setSmallIcon(R.drawable.jazz_icon)
         .setContentTitle("Jazz AI • voice call")
-        .setContentText("Microphone active during your call")
+        .setContentText("Tap to return to your call")
+        .setContentIntent(PendingIntent.getActivity(this, callId.hashCode(),
+          new Intent(this, CallActivity.class).putExtra("call", callJson)
+            .setAction("resume:" + callId).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP),
+          PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE))
         .setOngoing(true)
         .addAction(0, "End call", Notifications.action(this, callId, "end"))
         .build()

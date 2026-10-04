@@ -114,7 +114,7 @@ public final class Notifications {
     Notification.Builder b = new Notification.Builder(c, "calls")
       .setSmallIcon(R.drawable.jazz_icon)
       .setContentTitle("Jazz AI")
-      .setContentText("Incoming reminder voice call")
+      .setContentText("Incoming voice call")
       .setCategory(Notification.CATEGORY_CALL)
       .setOngoing(true)
       .setContentIntent(show)

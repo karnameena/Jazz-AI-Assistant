@@ -1,3 +1,4 @@
+import { answerImage } from "./jazzwhatsapp/vision.mjs";
 import { sanitizeJazzReply } from "./jazzwhatsapp/reply-quality.mjs";
 import { createJazzWhatsApp } from "./jazzwhatsapp/index.mjs";
 import http from "node:http";
@@ -471,7 +472,7 @@ async function streamTtsReply(text, res) {
 }
 
 await initVoipReminders({ synthesize: synthesizeWithPiper });
-const jazzWhatsApp = await createJazzWhatsApp({ assistantReply, resolveMode: verifyModeModel, streamReply: async (text, source, context, onText, mode) => {
+const jazzWhatsApp = await createJazzWhatsApp({ assistantReply, visionReply: answerImage, resolveMode: verifyModeModel, streamReply: async (text, source, context, onText, mode) => {
   let result = { assistant: "" };
   const response = { writableEnded: false, write(frame) {
     const dataLine = frame.split("\n").find(line => line.startsWith("data: "));
@@ -489,7 +490,7 @@ const jazzWhatsApp = await createJazzWhatsApp({ assistantReply, resolveMode: ver
   }
   return result;
 } });
-console.log("[JazzWhatsApp] client API 1.0.4 ready: bulk delete, verified model modes, reminder follow-ups");
+console.log("[JazzWhatsApp] client API 1.0.5 ready: bulk delete, verified model modes, reminder follow-ups");
 const jazzWhatsAppTimer = setInterval(() => void jazzWhatsApp.tick().catch(error => console.warn("[JazzWhatsApp] scheduler:", error.message)), 1000);
 jazzWhatsAppTimer.unref();
 

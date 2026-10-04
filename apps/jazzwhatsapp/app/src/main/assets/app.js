@@ -27,10 +27,61 @@ let page = "home",
   photoTarget = "user",
   callStarted = Date.now();
 let chatGeneration = 0;
+let previewImage = null, cameraStream = null, cameraStarting = false, cameraWanted = false, cameraForeground = true;
+currentCall = boot.activeCall || null;
+function stopCamera() { cameraWanted = false; cameraStream?.getTracks().forEach(t => t.stop()); cameraStream = null; }
+function updateComposer() {
+  const button = $("#composerButton"), input = $("#message");
+  if (!button || !input) return;
+  const hasText = !!input.value.trim();
+  button.type = hasText ? "submit" : "button";
+  button.dataset.action = hasText ? "" : "dictate";
+  button.setAttribute("aria-label", hasText ? "Send" : "Voice message");
+  button.innerHTML = icon(hasText ? "send" : "mic");
+}
+async function startCamera() {
+  if (cameraStarting || cameraStream) { if (cameraStream && $("#cameraPreview")) $("#cameraPreview").srcObject = cameraStream; return; }
+  if (!cameraForeground || page !== "call" || currentCall?.status !== "active") return;
+  cameraWanted = true;
+  if (!Native.camera()) { Native.requestCamera(); return; }
+  cameraStarting = true;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({video: {facingMode: "environment", width: {ideal: 1280}}, audio: false});
+    if (!cameraWanted || page !== "call") { stream.getTracks().forEach(t => t.stop()); return; }
+    cameraStream = stream;
+    if ($("#cameraPreview")) $("#cameraPreview").srcObject = stream;
+  } catch (e) { toast("Camera unavailable. Allow camera access or attach a photo instead."); }
+  finally { cameraStarting = false; }
+}
+async function shareFrame() {
+  const video = $("#cameraPreview");
+  if (!video?.videoWidth || !cameraStream) { toast("Wait for the camera preview first."); return; }
+  const canvas = document.createElement("canvas"), scale = Math.min(1, 1280 / Math.max(video.videoWidth, video.videoHeight));
+  canvas.width = Math.round(video.videoWidth * scale); canvas.height = Math.round(video.videoHeight * scale);
+  canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+  const {message} = await api("/image", {image: canvas.toDataURL("image/jpeg", 0.75), text: "Camera frame shared with Jazz", callId: currentCall.id});
+  mergeMessage(message);
+  currentCall.imageMessageId = message.id;
+  toast("Frame shared. Ask Jazz what you want to know about it.");
+}
+function resumeBanner() {
+  const active = currentCall?.status === "active" ? currentCall : state.calls.find(c => c.status === "active");
+  if (!active) return "";
+  currentCall = active;
+  return act("resumeCall", icon("call") + " Return to call", "returnCall");
+}
+function showImage(id) {
+  previewImage = state.messages.find(m => m.id === id && m.image);
+  if (!previewImage) return;
+  $("#modal").classList.remove("dropdownOverlay");
+  $("#modal").innerHTML = `<div class="imageViewer"><header>${act("closeModal", icon("back"), "iconbtn")}<b>Image</b>${act("downloadImage", icon("download"), "iconbtn")} ${act("askImage", "Ask Jazz")}</header><img src="${esc(previewImage.image)}" alt="Shared image preview"></div>`;
+  $("#modal").classList.remove("hidden");
+}
+document.addEventListener("input", e => { if (e.target.id === "message") updateComposer(); });
 const selectedMessages = new Set();
 let selectingMessages = false;
 function requireCompatibleBackend() {
-  if (state.apiVersion !== "1.0.4") throw new Error(`App 1.0.4 needs backend 1.0.4. Server reports ${state.apiVersion || "an older version"}. Apply the update patch and restart Jazz API.`);
+  if (state.apiVersion !== "1.0.5") throw new Error(`App 1.0.5 needs backend 1.0.5. Server reports ${state.apiVersion || "an older version"}. Apply the update patch and restart Jazz API.`);
 }
 function removeMessages(ids) {
   chatGeneration++;
@@ -114,6 +165,8 @@ function empty(i, title, text) {
   return `<div class="empty">${icon(i)}<h3>${title}</h3><p>${text}</p></div>`;
 }
 function show(p) {
+  if (p !== "call") stopCamera();
+  closeSheet();
   page = p;
   render();
 }
@@ -131,7 +184,7 @@ function render() {
     case "home":
       root.innerHTML =
         headerBar(
-          'Jazz<span style="color:#61ead5">WhatsApp</span>',
+          'Jazz <span style="color:#61ead5">Ai</span>',
           false,
           act("settings", icon("settings"), "iconbtn"),
         ) +
@@ -162,6 +215,7 @@ function render() {
     case "chat":
       renderChat();
       if ($("#message")) $("#message").value = savedDraft;
+      updateComposer();
       return;
     case "reminders":
       root.innerHTML =
@@ -234,7 +288,7 @@ function render() {
             "escalation",
             "bell",
             "Reminder call delay",
-            `${localStorage.getItem("escalation") || 120} seconds without a reply`,
+            `120 seconds without a reply`,
           ],
           ["logout", "shield", "Sign out", "This device only"],
         ]
@@ -244,7 +298,7 @@ function render() {
           )
           .join(
             "",
-          )}<p class="privacy">JazzWhatsApp 1.0 · Dark theme<br>Calls use your internet connection, not a cellular provider.</p></main>`;
+          )}<p class="privacy">Jazz Ai 1.0.5 · Dark theme<br>Calls use your internet connection, not a cellular provider.</p></main>`;
       break;
   }
 }
@@ -275,7 +329,7 @@ function reminderCards() {
       );
 }
 function renderChat() {
-  root.innerHTML = `<header class="topbar">${act("chats", icon("back"), "iconbtn")}<button data-action="jazzProfile" style="display:flex;align-items:center;gap:10px;flex:1;text-align:left">${avatar()}<div><h3>${esc(state.jazzProfile.name)}</h3><small>${typing ? "typing…" : connection === "Connected" ? "online" : "connecting…"}</small></div></button>${act("callJazz", icon("call"), "iconbtn")}${act("chatMenu", icon("more"), "iconbtn")}</header>${connection !== "Connected" ? `<div class="connectionBanner">${esc(connection)}</div>` : ""}${state.apiVersion !== "1.0.4" ? `<div class="connectionBanner">App 1.0.4 · server ${esc(state.apiVersion || "older version")}. Apply the backend update and restart Jazz.</div>` : ""}${selectingMessages ? `<div class="selectionbar">${act("cancelSelection", "Cancel")}<b>${selectedMessages.size} selected</b>${act("selectAllMessages", "Select all")}${act("deleteSelected", "Delete selected")}</div>` : ""}<main class="chatwall" id="messages"><div class="day">Today</div>${state.messages.filter(m => !m.deleted).map(bubble).join("")}${typing ? '<div class="bubble"><div class="muted">Jazz is typing…</div></div>' : ""}</main><div class="composerwrap">${replyTo ? `<div class="replybar"><div><b>Replying to ${replyTo.sender === "jazz" ? esc(state.jazzProfile.name) : "you"}</b><p>${esc(replyTo.text.slice(0, 80))}</p></div>${act("cancelReply", "×")}</div>` : ""}<form id="composer" class="composer"><div class="inputbox">${act("emoji", "☺", "iconbtn")}<textarea id="message" rows="1" placeholder="Message" aria-label="Message"></textarea>${act("attachment", icon("clip"), "iconbtn")}${act("photoMessage", icon("camera"), "iconbtn")}</div><button type="submit" class="sendbtn" aria-label="Send">${icon("send")}</button>${act("dictate", icon("mic"), "iconbtn")}</form></div>`;
+  root.innerHTML = `<header class="topbar">${act("chats", icon("back"), "iconbtn")}<button data-action="jazzProfile" style="display:flex;align-items:center;gap:10px;flex:1;text-align:left">${avatar()}<div><h3>${esc(state.jazzProfile.name)}</h3><small>${typing ? "typing…" : connection === "Connected" ? "online" : "connecting…"}</small></div></button>${act("videoJazz", icon("video"), "iconbtn")}${act("callJazz", icon("call"), "iconbtn")}${act("chatMenu", icon("more"), "iconbtn")}</header>${resumeBanner()}${connection !== "Connected" ? `<div class="connectionBanner">${esc(connection)}</div>` : ""}${state.apiVersion !== "1.0.5" ? `<div class="connectionBanner">App 1.0.5 · server ${esc(state.apiVersion || "older version")}. Apply the backend update and restart Jazz.</div>` : ""}${selectingMessages ? `<div class="selectionbar">${act("cancelSelection", "Cancel")}<b>${selectedMessages.size} selected</b>${act("selectAllMessages", "Select all")}${act("deleteSelected", "Delete selected")}</div>` : ""}<main class="chatwall" id="messages"><div class="day">Today</div>${state.messages.filter(m => !m.deleted).map(bubble).join("")}${typing ? '<div class="bubble"><div class="muted">Jazz is typing…</div></div>' : ""}</main><div class="composerwrap">${replyTo ? `<div class="replybar"><div><b>Replying to ${replyTo.sender === "jazz" ? esc(state.jazzProfile.name) : "you"}</b><p>${esc(replyTo.text.slice(0, 80))}</p></div>${act("cancelReply", "×")}</div>` : ""}<form id="composer" class="composer"><div class="inputbox">${act("emoji", "☺", "iconbtn")}<textarea id="message" rows="1" placeholder="Message" aria-label="Message"></textarea>${act("attachment", icon("clip"), "iconbtn")}${act("photoMessage", icon("camera"), "iconbtn")}</div><button type="button" id="composerButton" data-action="dictate" class="sendbtn" aria-label="Voice message">${icon("mic")}</button></form></div>`;
   requestAnimationFrame(
     () => ($("#messages").scrollTop = $("#messages").scrollHeight),
   );
@@ -283,7 +337,7 @@ function renderChat() {
 function bubble(m) {
   const parent = state.messages.find((p) => p.id === m.replyTo);
   const reminderClosed = state.reminders.some(r => r.id === m.reminderId && ["completed", "cancelled"].includes(r.status));
-  return `<article class="bubble ${m.sender === "user" ? "sent" : ""} ${selectedMessages.has(m.id) ? "selectedMessage" : ""}" data-message="${m.id}" tabindex="0">${selectingMessages ? `<span class="selectionmark">${selectedMessages.has(m.id) ? "☑" : "☐"}</span>` : ""}${parent ? `<div class="quote"><b>${parent.sender === "jazz" ? esc(state.jazzProfile.name) : "You"}</b>${esc(parent.text.slice(0, 130))}</div>` : ""}${m.image ? `<img class="attachment" src="${esc(m.image)}" alt="Shared image">` : ""}<div class="text">${esc(m.text)}</div><span class="meta">${time(m.createdAt)}${m.sender === "user" ? `<span class="ticks ${m.status === "read" ? "read" : ""}">✓✓</span>` : ""}</span>${m.type === "reminder" && reminderClosed ? `<div class="reminderActions">✅ Reminder closed</div>` : m.type === "reminder" ? `<div class="reminderActions"><button data-reminder="${m.reminderId}" data-status="completed">✓ Done</button><button data-reminder="${m.reminderId}" data-status="snoozed">◷ Snooze</button></div>` : ""}${m.reaction ? `<div class="reaction">${esc(m.reaction)}</div>` : ""}</article>`;
+  return `<article class="bubble ${m.sender === "user" ? "sent" : ""} ${selectedMessages.has(m.id) ? "selectedMessage" : ""}" data-message="${m.id}" tabindex="0">${selectingMessages ? `<span class="selectionmark">${selectedMessages.has(m.id) ? "☑" : "☐"}</span>` : ""}${parent ? `<div class="quote"><b>${parent.sender === "jazz" ? esc(state.jazzProfile.name) : "You"}</b>${esc(parent.text.slice(0, 130))}</div>` : ""}${m.image ? `<button class="imageAttachment" data-image="${m.id}" aria-label="Preview image"><img class="attachment" src="${esc(m.image)}" alt="Shared image"></button>` : ""}<div class="text">${esc(m.text)}</div><span class="meta">${time(m.createdAt)}${m.sender === "user" ? `<span class="ticks ${m.status === "read" ? "read" : ""}">✓✓</span>` : ""}</span>${m.type === "reminder" && reminderClosed ? `<div class="reminderActions">✅ Reminder closed</div>` : m.type === "reminder" ? `<div class="reminderActions"><button data-reminder="${m.reminderId}" data-status="completed">✓ Done</button><button data-reminder="${m.reminderId}" data-status="snoozed">◷ Snooze</button></div>` : ""}${m.reaction ? `<div class="reaction">${esc(m.reaction)}</div>` : ""}</article>`;
 }
 function renderLogin() {
   root.innerHTML = `<main class="login"><div class="logo">${icon("chat")}</div><div class="eyebrow">SAME JAZZ. CLOSER TO YOU.</div><h1>Welcome, Mama.</h1><p>Your chat, reminders, and voice calls in one place.</p><form class="form" id="login"><div><label for="base">Jazz API server</label><input id="base" name="base" value="${esc(boot.base)}" placeholder="http://192.168.1.10:8797" type="url" required></div><div><label for="username">Username</label><input id="username" name="username" placeholder="guna" autocomplete="username" pattern="[A-Za-z0-9_]{3,40}" required></div><div><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" minlength="8" required></div><button class="cta" type="submit">Connect to Jazz ${icon("send")}</button><p id="loginError" class="muted"></p></form><p class="fineprint">Use your existing app account. First-time account creation must be enabled on your Jazz server. Your phone and server need to be able to reach each other.</p></main>`;
@@ -301,7 +355,8 @@ function renderCall() {
     return;
   }
   const ringing = currentCall.status === "ringing";
-  root.innerHTML = `<main class="callScreen"><div class="callTop">${act("home", icon("back"), "iconbtn")}<span>JazzWhatsApp voice call</span>${icon("shield")}</div><div class="callTitle"><h1>${esc(state.jazzProfile.name)}</h1><p id="callTime">${ringing ? "Incoming voice call" : "Connecting…"}</p></div><div class="orbStage"><div class="orb" id="orb">${state.jazzProfile.avatar ? `<img class="orbAvatar" src="${esc(state.jazzProfile.avatar)}" alt="Jazz">` : `<svg viewBox="0 0 130 80"><defs><linearGradient id="wave" x1="0" x2="1"><stop stop-color="#356cff"/><stop offset="1" stop-color="#53fff1"/></linearGradient></defs><path d="M5 47 Q30 5 65 40 T125 27" fill="none" stroke="url(#wave)" stroke-width="3"/><path d="M5 50 Q30 15 65 43 T125 31" fill="none" stroke="#44d6f5" stroke-width="1" opacity=".6"/></svg>`}</div></div><div class="voiceStatus"><div class="bars">${"<i></i>".repeat(5)}</div><span id="voiceStatus">${ringing ? "Jazz is calling you" : "Connecting to Jazz"}</span></div><p class="transcript" id="transcript">${ringing ? esc(currentCall.title || "Your reminder is waiting.") : "A moment to connect. Then, just talk."}</p><div class="callControls">${ringing ? `<div class="callControl">${act("declineCall", icon("call"), "danger")}Decline</div><div class="callControl">${act("answerCall", icon("call"), "answer")}Answer</div>` : `<div class="callControl">${act("mute", icon("mic"), muted ? "active" : "")}Mute</div><div class="callControl">${act("speaker", icon("speaker"), speaker ? "active" : "")}Speaker</div><div class="callControl">${act("interrupt", icon("chat"))}Interrupt</div><div class="callControl">${act("endCall", icon("call"), "danger")}End call</div>`}</div><p class="callhint">${ringing ? "Answer to hear your reminder and continue talking." : "Private server connection · Microphone on only during your call"}</p></main>`;
+  root.innerHTML = `<main class="callScreen"><div class="callTop">${act("home", icon("back"), "iconbtn")}<span>Jazz Ai ${currentCall.cameraMode ? "camera-assisted call" : "voice call"}</span>${icon("shield")}</div><div class="callTitle"><h1>${esc(state.jazzProfile.name)}</h1><p id="callTime">${ringing ? "Incoming voice call" : "Connecting…"}</p></div>${currentCall.cameraMode && !ringing ? `<div class="cameraStage"><video id="cameraPreview" autoplay muted playsinline></video>${act("shareFrame", "Show frame to Jazz", "cta")}<small>Share a frame, then ask Jazz about it. Camera pauses when you leave this screen.</small></div>` : ""}<div class="orbStage"><div class="orb" id="orb">${state.jazzProfile.avatar ? `<img class="orbAvatar" src="${esc(state.jazzProfile.avatar)}" alt="Jazz">` : `<svg viewBox="0 0 130 80"><defs><linearGradient id="wave" x1="0" x2="1"><stop stop-color="#356cff"/><stop offset="1" stop-color="#53fff1"/></linearGradient></defs><path d="M5 47 Q30 5 65 40 T125 27" fill="none" stroke="url(#wave)" stroke-width="3"/><path d="M5 50 Q30 15 65 43 T125 31" fill="none" stroke="#44d6f5" stroke-width="1" opacity=".6"/></svg>`}</div></div><div class="voiceStatus"><div class="bars">${"<i></i>".repeat(5)}</div><span id="voiceStatus">${ringing ? "Jazz is calling you" : "Connecting to Jazz"}</span></div><p class="transcript" id="transcript">${ringing ? esc(currentCall.title || "Your reminder is waiting.") : "A moment to connect. Then, just talk."}</p><div class="callControls">${ringing ? `<div class="callControl">${act("declineCall", icon("call"), "danger")}Decline</div><div class="callControl">${act("answerCall", icon("call"), "answer")}Answer</div>` : `<div class="callControl">${act("mute", icon("mic"), muted ? "active" : "")}Mute</div><div class="callControl">${act("speaker", icon("speaker"), speaker ? "active" : "")}Speaker</div><div class="callControl">${act("interrupt", icon("chat"))}Interrupt</div><div class="callControl">${act("endCall", icon("call"), "danger")}End call</div>`}</div><p class="callhint">${ringing ? "Answer to hear your reminder and continue talking." : "Private server connection · Microphone on only during your call"}</p></main>`;
+  if (currentCall?.cameraMode && currentCall.status === "active") startCamera();
 }
 function sheet(html) {
   $("#modal").classList.remove("dropdownOverlay");
@@ -341,12 +396,14 @@ async function send(text) {
   replyTo = null;
   messageBusy = true;
   if ($("#message")) $("#message").value = "";
+  updateComposer();
   try {
     const data = await api("/message", {
       text,
       replyTo: quote?.id,
+      imageId: quote?.image ? quote.id : undefined,
       clientId: crypto.randomUUID(),
-      escalationDelaySeconds: Number(localStorage.getItem("escalation") || 120),
+      escalationDelaySeconds: 120,
     });
     if (generation !== chatGeneration) return;
     if (data.assistantMode) state.assistantMode = data.assistantMode;
@@ -364,6 +421,7 @@ async function send(text) {
     if ($("#message")) $("#message").value = text;
   } finally {
     messageBusy = false;
+    updateComposer();
   }
 }
 let afterMicrophone = null;
@@ -376,13 +434,15 @@ function ensureMicrophone(action) {
   toast("Microphone access is needed for a Jazz call.");
   return false;
 }
-async function callJazz() {
-  if (!ensureMicrophone(callJazz)) return;
+async function callJazz(cameraMode = false) {
+  const existing = currentCall?.status === "active" || currentCall?.status === "ringing" ? currentCall : state.calls.find(c => ["active", "ringing"].includes(c.status));
+  if (existing) { currentCall = {...existing, cameraMode: cameraMode || existing.cameraMode}; Native.callScreen(JSON.stringify(currentCall)); return; }
+  if (!ensureMicrophone(() => callJazz(cameraMode))) return;
   try {
     const { call } = await api("/call", {});
-    currentCall = call;
+    currentCall = {...call, cameraMode: !!cameraMode};
     callStarted = Date.now();
-    Native.callScreen(JSON.stringify(call));
+    Native.callScreen(JSON.stringify(currentCall));
   } catch (e) {
     toast(e.message);
   }
@@ -394,7 +454,7 @@ async function answer() {
       id: currentCall.id,
       action: "answer",
     });
-    currentCall = call;
+    currentCall = {...call, cameraMode: currentCall?.cameraMode};
     callStarted = Date.now();
     renderCall();
     Native.voice(JSON.stringify(call));
@@ -408,7 +468,10 @@ async function end(action) {
   } catch (e) {
     toast(e.message);
   }
+  stopCamera();
   Native.endVoice();
+  const endedId = currentCall?.id;
+  state.calls = state.calls.map(c => c.id === endedId ? {...c, status: action === "decline" ? "declined" : "ended"} : c);
   currentCall = null;
   show("calls");
   sync();
@@ -475,6 +538,7 @@ document.addEventListener("click", async (e) => {
   if (!b) return;
   if (b.type !== "submit") e.preventDefault();
   try {
+    if (b.dataset.image) { showImage(b.dataset.image); return; }
     if (b.dataset.react) {
       await api("/message-action", {
         id: b.dataset.react,
@@ -540,6 +604,23 @@ document.addEventListener("click", async (e) => {
       case "closeModal":
         closeSheet();
         break;
+      case "resumeCall":
+        if (currentCall) Native.callScreen(JSON.stringify(currentCall));
+        break;
+      case "videoJazz":
+        callJazz(true);
+        break;
+      case "shareFrame":
+        await shareFrame();
+        break;
+      case "downloadImage":
+        if (previewImage) Native.downloadImage(previewImage.image);
+        break;
+      case "askImage":
+        replyTo = previewImage;
+        show("chat");
+        $("#message").focus();
+        break;
       case "callJazz":
         callJazz();
         break;
@@ -598,7 +679,7 @@ document.addEventListener("click", async (e) => {
         break;
       case "newReminder":
         sheet(
-          `<h2>Make a little room for later.</h2><form class="form" id="newReminder"><div><label>Remind me to</label><input name="title" placeholder="Buy medicine for Mom" maxlength="500" required></div><div><label>Date and time (your phone’s timezone)</label><input name="scheduledAt" type="datetime-local" required></div><div><label>Call if I don’t reply within</label><select name="escalationDelaySeconds">${[30, 60, 120, 300, 600].map((s) => `<option value="${s}" ${s === Number(localStorage.getItem("escalation") || 120) ? "selected" : ""}>${s < 60 ? s + " seconds" : s / 60 + " minutes"}</option>`).join("")}</select></div><button class="cta" type="submit">Set reminder</button></form>`,
+          `<h2>Make a little room for later.</h2><form class="form" id="newReminder"><div><label>Remind me to</label><input name="title" placeholder="Buy medicine for Mom" maxlength="500" required></div><div><label>Date and time (your phone’s timezone)</label><input name="scheduledAt" type="datetime-local" required></div><div><label>Call if I don’t reply within</label><select name="escalationDelaySeconds">${[120].map((s) => `<option value="${s}" ${s === Number(localStorage.getItem("escalation") || 120) ? "selected" : ""}>${s < 60 ? s + " seconds" : s / 60 + " minutes"}</option>`).join("")}</select></div><button class="cta" type="submit">Set reminder</button></form>`,
         );
         break;
       case "emoji":
@@ -683,7 +764,7 @@ document.addEventListener("click", async (e) => {
         break;
       case "escalation":
         sheet(
-          `<h2>No-reply call delay</h2><form id="escalation" class="form"><select name="delay">${[30, 60, 120, 300, 600].map((s) => `<option value="${s}">${s} seconds</option>`).join("")}</select><button type="submit" class="cta">Save</button></form>`,
+          `<h2>No-reply call delay</h2><form id="escalation" class="form"><select name="delay">${[120].map((s) => `<option value="${s}">${s} seconds</option>`).join("")}</select><button type="submit" class="cta">Save</button></form>`,
         );
         break;
       case "logout":
@@ -702,6 +783,7 @@ document.addEventListener("click", async (e) => {
   if (b.dataset.insert) {
     const input = $("#message");
     input.value += b.dataset.insert;
+    updateComposer();
     closeSheet();
     input.focus();
   }
@@ -782,6 +864,23 @@ function mergeMessage(m) {
 window.onNativeEvent = (raw) => {
   const event = typeof raw === "string" ? JSON.parse(raw) : raw;
   switch (event.type) {
+    case "cameraPaused":
+      const wantedCamera = cameraWanted;
+      cameraForeground = false;
+      stopCamera();
+      cameraWanted = wantedCamera;
+      break;
+    case "cameraResumed":
+      cameraForeground = true;
+      if (cameraWanted && page === "call" && currentCall?.cameraMode) startCamera();
+      break;
+    case "cameraPermission":
+      if (event.granted === "true" && cameraWanted) startCamera();
+      else { cameraWanted = false; toast("Allow camera access to use camera-assisted calls."); }
+      break;
+    case "savedImage":
+      toast("Image saved");
+      break;
     case "microphonePermission":
       if (event.granted === "true" && afterMicrophone) {
         const action = afterMicrophone;
@@ -871,11 +970,15 @@ window.onNativeEvent = (raw) => {
       if (event.answer === "true") answer();
       break;
     case "call.incoming":
+      if (!state.calls.some(c => c.id === event.call.id)) state.calls.push(event.call);
       if (page !== "call" && page !== "login")
         toast("Jazz is calling. Open the call notification to answer.");
       break;
     case "call.ended":
     case "call.updated":
+      const callIndex = state.calls.findIndex(c => c.id === event.call?.id);
+      if (callIndex >= 0) state.calls[callIndex] = event.call;
+      else if (event.call) state.calls.push(event.call);
       if (
         currentCall?.id === event.call?.id &&
         ["cancelled", "missed", "ended", "declined"].includes(event.call.status)
@@ -886,6 +989,7 @@ window.onNativeEvent = (raw) => {
       }
       break;
     case "call.localEnded":
+      state.calls = state.calls.map(c => c.id === event.id ? {...c, status: "ended"} : c);
       if (currentCall?.id === event.id) {
         Native.endVoice();
         currentCall = null;
@@ -915,6 +1019,7 @@ window.onNativeEvent = (raw) => {
       if (event.text) {
         show("chat");
         $("#message").value = event.text;
+        updateComposer();
         $("#message").focus();
       } else toast("Listening…");
       break;
@@ -954,11 +1059,12 @@ setInterval(() => {
 }, 1000);
 if (boot.call) {
   currentCall = boot.call;
+  callStarted = Date.parse(currentCall.updatedAt || currentCall.createdAt) || Date.now();
   page = "call";
   render();
-  if (boot.autoAnswer) answer();
+  if (boot.autoAnswer && !boot.voiceRunning) answer();
   else if (currentCall.status === "active")
-    Native.voice(JSON.stringify(currentCall));
+    if (!boot.voiceRunning) Native.voice(JSON.stringify(currentCall));
   api("/sync")
     .then((data) => {
       Object.assign(state, data);

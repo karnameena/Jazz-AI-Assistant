@@ -10,7 +10,7 @@ public final class Api {
 
   public static final OkHttpClient client = new OkHttpClient.Builder()
     .connectTimeout(10, TimeUnit.SECONDS)
-    .readTimeout(90, TimeUnit.SECONDS)
+    .readTimeout(150, TimeUnit.SECONDS)
     .pingInterval(20, TimeUnit.SECONDS)
     .build();
 

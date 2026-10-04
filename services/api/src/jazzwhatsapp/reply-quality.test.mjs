@@ -8,3 +8,9 @@ test('removes generated reminder copies and postscript filler, preserving normal
   const code='Example:\n```text\nP.S. preserve this literal\n```';
   assert.equal(sanitizeJazzReply(code), code);
 });
+
+test('strips inline postscripts without altering code literals', () => {
+  assert.equal(sanitizeJazzReply('The answer is 42. P.P.S. I will be available for any other tasks you have in the future.'), 'The answer is 42.');
+  assert.equal(sanitizeJazzReply('Thanks Mama.\nI will be available for any other tasks you have in the future.'), 'Thanks Mama.');
+  assert.equal(sanitizeJazzReply('```js\nconst s = "P.P.S. do not alter";\n```'), '```js\nconst s = "P.P.S. do not alter";\n```');
+});

@@ -32,6 +32,7 @@ const BOILERPLATE = /(?:here to understand what you mean|brain and conversation 
 export async function createJazzWhatsApp({
   assistantReply,
   streamReply,
+  visionReply,
   resolveMode = async mode => mode,
   directory = path.resolve(".jazz/jazzwhatsapp"),
   clock = Date.now,
@@ -57,7 +58,7 @@ export async function createJazzWhatsApp({
     };
   }
   state.assistantMode ||= "normal";
-  state.messages = state.messages.filter(m => !m.deleted);
+  state.messages = state.messages.filter(m => !m.deleted).map(m => m.sender === "jazz" && !m.reminderId ? {...m, text: sanitizeJazzReply(m.text)} : m).filter(m => m.text || m.image);
   for (const m of state.messages) if (m.sender === "jazz") delete m.replyTo;
   const confirmations = new Map();
   const sockets = new Set();
@@ -81,8 +82,8 @@ export async function createJazzWhatsApp({
       if (socket.readyState === 1) socket.send(event);
   };
   const publicState = () => ({
-    apiVersion: "1.0.4",
-    capabilities: ["clear-chat", "bulk-delete", "model-modes", "reminder-followup"],
+    apiVersion: "1.0.5",
+    capabilities: ["clear-chat", "bulk-delete", "model-modes", "reminder-followup", "image-questions", "call-resume"],
     assistantMode: state.assistantMode,
     assistantModel: state.assistantModel || null,
     messages: state.messages,
@@ -118,7 +119,7 @@ export async function createJazzWhatsApp({
   };
   const cancelCalls = (reminderId, endActive = false) => {
     for (const call of state.calls)
-      if (call.reminderId === reminderId && call.status === "ringing") {
+      if (call.reminderId === reminderId && (call.status === "ringing" || endActive && call.status === "active")) {
         call.status = "cancelled";
         emit("call.ended", { call });
       }
@@ -151,6 +152,7 @@ export async function createJazzWhatsApp({
             callStartedAt: null,
             nextCallAt: null,
             missedAttempts: 0,
+            retryExhausted: false,
           }
         : { status: action, acknowledgedAt: new Date(clock()).toISOString(), nextTextAt: action === "acknowledged" ? new Date(clock() + 600000).toISOString() : null, nextCallAt: null, missedAttempts: 0 };
     await updateReminder(id, patch);
@@ -162,6 +164,7 @@ export async function createJazzWhatsApp({
   async function ringReminder(reminder, dueKey) {
     let call = state.calls.find(c => c.reminderId === reminder.id && c.dueKey === dueKey);
     if (!call) {
+      if (state.calls.some(c => ["ringing", "active"].includes(c.status))) return;
       call = {id: crypto.randomUUID(), direction: "incoming", status: "ringing", reminderId: reminder.id, dueKey, title: reminder.title, createdAt: new Date(clock()).toISOString()};
       state.calls.push(call);
       await save();
@@ -202,12 +205,12 @@ export async function createJazzWhatsApp({
             reminder: listVoipReminders().find((r) => r.id === reminder.id),
           });
         }
-        if (reminder.status === "acknowledged" && reminder.nextCallAt && Date.parse(reminder.nextCallAt) <= clock()) {
+        if (!reminder.retryExhausted && reminder.status === "acknowledged" && reminder.nextCallAt && Date.parse(reminder.nextCallAt) <= clock()) {
           await ringReminder(reminder, `retry:${reminder.nextCallAt}`);
         }
         if (reminder.status === "acknowledged" && reminder.nextTextAt && Date.parse(reminder.nextTextAt) <= clock()) {
           const msg = message("jazz", `😊 Mama, checking in: have you finished ${reminder.title}?`, {reminderId: reminder.id, type: "reminder"});
-          await updateReminder(reminder.id, {status: "message_sent", messageSentAt: msg.createdAt, messageId: msg.id, actionCardSent: true, nextTextAt: null});
+          await updateReminder(reminder.id, {status: reminder.retryExhausted ? "acknowledged" : "message_sent", messageSentAt: msg.createdAt, messageId: msg.id, actionCardSent: true, nextTextAt: reminder.retryExhausted ? new Date(clock() + 900000).toISOString() : null});
           emit("reminder.updated", {reminder: listVoipReminders().find(r => r.id === reminder.id)});
           await save();
         }
@@ -217,7 +220,7 @@ export async function createJazzWhatsApp({
           await save();
         }
         if (
-          reminder.status === "message_sent" &&
+          !reminder.retryExhausted && reminder.status === "message_sent" &&
           clock() - Date.parse(reminder.messageSentAt) >=
             reminder.escalationDelaySeconds * 1000
         ) {
@@ -235,7 +238,8 @@ export async function createJazzWhatsApp({
             if (reminder && !["completed", "cancelled", "scheduled"].includes(reminder.status)) {
               const attempts = (reminder.missedAttempts || 0) + 1;
               const delayMinutes = attempts <= 2 ? 5 : 15;
-              await updateReminder(reminder.id, {status: "acknowledged", missedAttempts: attempts, nextTextAt: null, nextCallAt: new Date(clock() + delayMinutes * 60000).toISOString()});
+              await updateReminder(reminder.id, {status: "acknowledged", missedAttempts: attempts, retryExhausted: attempts >= 4, nextTextAt: attempts >= 4 ? new Date(clock() + 900000).toISOString() : null, nextCallAt: attempts >= 4 ? null : new Date(clock() + delayMinutes * 60000).toISOString()});
+              if (attempts >= 4) message("jazz", "Mama, where are you? Please answer my call or message 😊 Tell me when you’ve finished, or snooze if you need more time.", {reminderId: reminder.id, type: "reminder"});
               emit("reminder.updated", {reminder: listVoipReminders().find(r => r.id === reminder.id)});
             }
           }
@@ -303,7 +307,7 @@ export async function createJazzWhatsApp({
       return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
     };
     try {
-      if (route === "/version" && req.method === "GET") return reply(200, {ok: true, apiVersion: "1.0.4"});
+      if (route === "/version" && req.method === "GET") return reply(200, {ok: true, apiVersion: "1.0.5"});
       if (route === "/auth" && req.method === "POST") {
         const ip = req.socket.remoteAddress;
         const entry = attempts.get(ip) || { count: 0, time: clock() };
@@ -391,7 +395,7 @@ export async function createJazzWhatsApp({
         const text = String(body.text || "").trim();
         if (!text || text.length > 16000)
           return reply(400, { error: "Message must be 1–16000 characters" });
-        let incoming, early, replyMode;
+        let incoming, early, replyMode, imageMessage;
         await lock(async () => {
           if (body.clientId) {
             incoming = state.messages.find((m) => m.clientId === body.clientId);
@@ -519,6 +523,16 @@ export async function createJazzWhatsApp({
             };
           }
           replyMode = state.assistantMode;
+          const quoted = state.messages.find(m => m.id === body.replyTo);
+          const imageId = body.imageId || (quoted?.image ? quoted.id : quoted?.imageContextId);
+          const voiceImageId = body.source === "voice" && state.calls.find(c => c.id === body.callId && c.status === "active")?.imageMessageId;
+          imageMessage = state.messages.find(m => m.id === (imageId || voiceImageId) && m.image);
+          if (body.imageId && !imageMessage) throw new Error("That image was deleted. Please attach it again.");
+          if (!imageMessage && /\b(image|photo|picture|screenshot|what do you see|what is in (?:this|that))\b/i.test(text)) imageMessage = state.messages.findLast(m => m.image && !m.deleted);
+          if (!imageMessage && /\b(it|this|that|these|those|what colou?r|explain further|more details)\b/i.test(text)) {
+            const lastAnswer = state.messages.findLast(m => m.sender === "jazz" && m.type === "chat");
+            imageMessage = state.messages.find(m => m.id === lastAnswer?.imageContextId && m.image);
+          }
         });
         if (early?.duplicate) return reply(200, early);
         emit("jazz.typing", { active: true });
@@ -528,7 +542,9 @@ export async function createJazzWhatsApp({
             .slice(-16).map(m => ({role: m.sender === "jazz" ? "assistant" : "user", content: m.text}));
           result =
             early ||
-            (streamReply
+            (imageMessage
+              ? visionReply ? await visionReply(text, imageMessage.image, context.filter(m => m.role === "user").slice(-4)) : {assistant: "Mama, image questions need a local vision model. Install moondream in Ollama and restart the updated Jazz API."}
+              : streamReply
               ? await streamReply(
                   text,
                   body.source === "voice" ? "voice" : "typed",
@@ -549,33 +565,39 @@ export async function createJazzWhatsApp({
           if (!state.messages.some(m => m.id === incoming.id)) return null;
           incoming.status = "read";
           emit("message.updated", { message: incoming });
-          if (result.model && state.assistantMode === replyMode) state.assistantModel = result.model;
+          if (result.model && !imageMessage && state.assistantMode === replyMode) state.assistantModel = result.model;
           const msg = message(
             "jazz",
-            result.assistant || "Jazz returned no reply.",
-            {model: result.model || null, type: early ? "control" : "chat"},
+            sanitizeJazzReply(result.assistant) || "Mama, Jazz returned no usable reply. Please try again.",
+            {model: result.model || null, type: early ? "control" : "chat", ...(imageMessage && !early ? {imageContextId: imageMessage.id} : {})},
           );
           await save();
           return msg;
         });
-        return reply(200, { message: incoming, assistant: outgoing, assistantMode: state.assistantMode, assistantModel: state.assistantModel, apiVersion: "1.0.4" });
+        return reply(200, { message: incoming, assistant: outgoing, assistantMode: state.assistantMode, assistantModel: state.assistantModel, apiVersion: "1.0.5" });
       }
       const body = req.method === "POST" ? await parseJson(req) : {};
       return await lock(async () => {
         if (route === "/image" && req.method === "POST") {
           if (
             typeof body.image !== "string" ||
-            body.image.length > 700000 ||
+            body.image.length > 1200000 ||
             !/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(
               body.image,
             )
           )
             throw new Error("Choose a smaller image");
+          if (body.callId && getCall(body.callId).status !== "active") throw new Error("Call is no longer active");
           const msg = message(
             "user",
             String(body.text || "Shared image").slice(0, 500),
             { image: body.image },
           );
+          if (body.callId) {
+            const call = getCall(body.callId);
+            if (call.status !== "active") throw new Error("Call is no longer active");
+            call.imageMessageId = msg.id;
+          }
           await save();
           return reply(201, { message: msg });
         }
@@ -612,8 +634,8 @@ export async function createJazzWhatsApp({
             reminder: await changeReminder(body.id, body.action, body.minutes),
           });
         if (route === "/call" && req.method === "POST") {
-          if (state.calls.some((c) => ["ringing", "active"].includes(c.status)))
-            throw new Error("A call is already in progress");
+          const existing = state.calls.find(c => ["ringing", "active"].includes(c.status));
+          if (existing) return reply(200, {call: existing});
           const call = {
             id: crypto.randomUUID(),
             direction: "outgoing",
