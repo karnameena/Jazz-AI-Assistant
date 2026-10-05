@@ -13,6 +13,9 @@ import java.io.*;
 import org.json.*;
 
 public class MainActivity extends Activity {
+  public static volatile boolean chatVisible;
+  private boolean resumed;
+
 
   protected WebView web;
   private String photoTarget = "user";
@@ -60,6 +63,7 @@ public class MainActivity extends Activity {
         }
         public void onPageFinished(WebView v, String url) {
           loaded = true;
+          web.evaluateJavascript("Native.chatVisible(typeof page !== 'undefined' && page === 'chat')", null);
         }
       }
     );
@@ -147,6 +151,9 @@ public class MainActivity extends Activity {
   }
 
   public class Bridge {
+    @JavascriptInterface public void enqueue(String raw) { Outbox.enqueue(MainActivity.this, raw); }
+    @JavascriptInterface public void chatVisible(boolean value) { chatVisible = resumed && value; }
+    @JavascriptInterface public void notificationSettings() { runOnUiThread(() -> startActivity(new Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS"))); }
 
     @JavascriptInterface
     public String boot() {
@@ -191,7 +198,9 @@ public class MainActivity extends Activity {
               data.remove("token");
               runOnUiThread(() -> startConnection());
             }
+            if (error == null && route.equals("/clear-chat")) Outbox.clear(MainActivity.this);
             if (error == null && route.equals("/logout")) {
+              Outbox.clear(MainActivity.this);
               Api.prefs(MainActivity.this).edit().remove("token").apply();
               stopService(new Intent(MainActivity.this, RealtimeService.class));
             }
@@ -216,7 +225,8 @@ public class MainActivity extends Activity {
           ) throw new Exception();
           String clean = url.replaceAll("/+$", "");
           if (!clean.equals(Api.base(MainActivity.this))) {
-            Api.prefs(MainActivity.this).edit().remove("token").apply();
+            Outbox.clear(MainActivity.this);
+              Api.prefs(MainActivity.this).edit().remove("token").apply();
             stopService(new Intent(MainActivity.this, RealtimeService.class));
           }
           Api.prefs(MainActivity.this)
@@ -643,12 +653,15 @@ public class MainActivity extends Activity {
   }
 
   protected void onPause() {
+    resumed = false; chatVisible = false;
     if (loaded) dispatch(Api.json("type", "cameraPaused").toString());
     super.onPause();
   }
 
   protected void onResume() {
     super.onResume();
+    resumed = true;
+    if (loaded) web.evaluateJavascript("Native.chatVisible(typeof page !== 'undefined' && page === 'chat')", null);
     if (loaded) dispatch(Api.json("type", "cameraResumed").toString());
   }
 

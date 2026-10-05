@@ -29,6 +29,49 @@ let page = "home",
 let chatGeneration = 0;
 let previewImage = null, cameraStream = null, cameraStarting = false, cameraWanted = false, cameraForeground = true;
 currentCall = boot.activeCall || null;
+const storageKey = "jazz:" + boot.base;
+const loadLocal = (key, fallback) => { try { return JSON.parse(localStorage.getItem(storageKey + key)) || fallback; } catch { return fallback; } };
+let outbox = loadLocal(":outbox", []), endedCalls = new Set(loadLocal(":endedCalls", [])), flushing = false;
+if (boot.signedIn === "true") Object.assign(state, loadLocal(":cache", {}));
+function persistLocal() {
+  localStorage.setItem(storageKey + ":outbox", JSON.stringify(outbox));
+  localStorage.setItem(storageKey + ":endedCalls", JSON.stringify([...endedCalls]));
+  localStorage.setItem(storageKey + ":cache", JSON.stringify(state));
+}
+function reconcile(data) {
+  Object.assign(state, data);
+  if (currentCall) { const remote = state.calls.find(c => c.id === currentCall.id); if (remote && !["active", "ringing"].includes(remote.status)) { currentCall = null; Native.endVoice(); } }
+  state.calls = state.calls.map(c => endedCalls.has(c.id) ? {...c, status: "ended"} : c);
+  if (currentCall && endedCalls.has(currentCall.id)) currentCall = null;
+  outbox = outbox.filter(item => !state.messages.some(m => m.status !== "queued" && m.clientId === item.clientId));
+  for (const item of outbox) if (!state.messages.some(m => m.clientId === item.clientId)) state.messages.push(item);
+  persistLocal();
+}
+async function flushOutbox() {
+  if (flushing || connection !== "Connected") return;
+  flushing = true;
+  try {
+    for (const id of [...endedCalls]) {
+      await api("/call-action", {id, action:"end"});
+      endedCalls.delete(id); persistLocal();
+    }
+    if (window.Native?.enqueue) {
+      for (const item of outbox) Native.enqueue(JSON.stringify({text:item.text,replyTo:item.replyTo,imageId:item.imageId,clientId:item.clientId,escalationDelaySeconds:120}));
+      return;
+    }
+    while (outbox.length && connection === "Connected") {
+      const item = outbox[0];
+      const data = await api("/message", {text:item.text, replyTo:item.replyTo, imageId:item.imageId, clientId:item.clientId, escalationDelaySeconds:120});
+      state.messages = state.messages.filter(m => m.id !== item.id);
+      if (data.message) mergeMessage(data.message);
+      if (data.assistant) mergeMessage(data.assistant);
+      outbox.shift(); persistLocal();
+      if (page === "chat") render();
+    }
+  } catch (error) {
+    if (/Sign in again/.test(error.message)) toast("Sign in again to deliver queued messages.");
+  } finally { flushing = false; }
+}
 function stopCamera() { cameraWanted = false; cameraStream?.getTracks().forEach(t => t.stop()); cameraStream = null; }
 function updateComposer() {
   const button = $("#composerButton"), input = $("#message");
@@ -65,8 +108,9 @@ async function shareFrame() {
   toast("Frame shared. Ask Jazz what you want to know about it.");
 }
 function resumeBanner() {
-  const active = currentCall?.status === "active" ? currentCall : state.calls.find(c => c.status === "active");
+  const active = currentCall?.status === "active" ? currentCall : state.calls.find(c => c.status === "active" && !endedCalls.has(c.id));
   if (!active) return "";
+  if (endedCalls.has(active.id)) return "";
   currentCall = active;
   return act("resumeCall", icon("call") + " Return to call", "returnCall");
 }
@@ -81,7 +125,7 @@ document.addEventListener("input", e => { if (e.target.id === "message") updateC
 const selectedMessages = new Set();
 let selectingMessages = false;
 function requireCompatibleBackend() {
-  if (state.apiVersion !== "1.0.5") throw new Error(`App 1.0.5 needs backend 1.0.5. Server reports ${state.apiVersion || "an older version"}. Apply the update patch and restart Jazz API.`);
+  if (state.apiVersion !== "1.0.6") throw new Error(`App 1.0.6 needs backend 1.0.6. Server reports ${state.apiVersion || "an older version"}. Apply the update patch and restart Jazz API.`);
 }
 function removeMessages(ids) {
   chatGeneration++;
@@ -171,6 +215,7 @@ function show(p) {
   render();
 }
 function render() {
+  if (window.Native?.chatVisible) Native.chatVisible(page === "chat");
   if (page === "login") {
     renderLogin();
     return;
@@ -290,6 +335,7 @@ function render() {
             "Reminder call delay",
             `120 seconds without a reply`,
           ],
+          ["notificationAccess", "bell", "Read phone notifications", "Enable access for WhatsApp, Instagram and SMS summaries"],
           ["logout", "shield", "Sign out", "This device only"],
         ]
           .map(
@@ -298,7 +344,7 @@ function render() {
           )
           .join(
             "",
-          )}<p class="privacy">Jazz Ai 1.0.5 · Dark theme<br>Calls use your internet connection, not a cellular provider.</p></main>`;
+          )}<p class="privacy">Jazz Ai 1.0.6 · Dark theme<br>Calls use your internet connection, not a cellular provider.</p></main>`;
       break;
   }
 }
@@ -329,7 +375,7 @@ function reminderCards() {
       );
 }
 function renderChat() {
-  root.innerHTML = `<header class="topbar">${act("chats", icon("back"), "iconbtn")}<button data-action="jazzProfile" style="display:flex;align-items:center;gap:10px;flex:1;text-align:left">${avatar()}<div><h3>${esc(state.jazzProfile.name)}</h3><small>${typing ? "typing…" : connection === "Connected" ? "online" : "connecting…"}</small></div></button>${act("videoJazz", icon("video"), "iconbtn")}${act("callJazz", icon("call"), "iconbtn")}${act("chatMenu", icon("more"), "iconbtn")}</header>${resumeBanner()}${connection !== "Connected" ? `<div class="connectionBanner">${esc(connection)}</div>` : ""}${state.apiVersion !== "1.0.5" ? `<div class="connectionBanner">App 1.0.5 · server ${esc(state.apiVersion || "older version")}. Apply the backend update and restart Jazz.</div>` : ""}${selectingMessages ? `<div class="selectionbar">${act("cancelSelection", "Cancel")}<b>${selectedMessages.size} selected</b>${act("selectAllMessages", "Select all")}${act("deleteSelected", "Delete selected")}</div>` : ""}<main class="chatwall" id="messages"><div class="day">Today</div>${state.messages.filter(m => !m.deleted).map(bubble).join("")}${typing ? '<div class="bubble"><div class="muted">Jazz is typing…</div></div>' : ""}</main><div class="composerwrap">${replyTo ? `<div class="replybar"><div><b>Replying to ${replyTo.sender === "jazz" ? esc(state.jazzProfile.name) : "you"}</b><p>${esc(replyTo.text.slice(0, 80))}</p></div>${act("cancelReply", "×")}</div>` : ""}<form id="composer" class="composer"><div class="inputbox">${act("emoji", "☺", "iconbtn")}<textarea id="message" rows="1" placeholder="Message" aria-label="Message"></textarea>${act("attachment", icon("clip"), "iconbtn")}${act("photoMessage", icon("camera"), "iconbtn")}</div><button type="button" id="composerButton" data-action="dictate" class="sendbtn" aria-label="Voice message">${icon("mic")}</button></form></div>`;
+  root.innerHTML = `<header class="topbar">${act("chats", icon("back"), "iconbtn")}<button data-action="jazzProfile" style="display:flex;align-items:center;gap:10px;flex:1;text-align:left">${avatar()}<div><h3>${esc(state.jazzProfile.name)}</h3><small>${typing ? "typing…" : connection === "Connected" ? "online" : "connecting…"}</small></div></button>${act("videoJazz", icon("video"), "iconbtn")}${act("callJazz", icon("call"), "iconbtn")}${act("chatMenu", icon("more"), "iconbtn")}</header>${resumeBanner()}${connection !== "Connected" ? `<div class="connectionBanner">${esc(connection)}</div>` : ""}${state.apiVersion !== "1.0.6" ? `<div class="connectionBanner">App 1.0.6 · server ${esc(state.apiVersion || "older version")}. Apply the backend update and restart Jazz.</div>` : ""}${selectingMessages ? `<div class="selectionbar">${act("cancelSelection", "Cancel")}<b>${selectedMessages.size} selected</b>${act("selectAllMessages", "Select all")}${act("deleteSelected", "Delete selected")}</div>` : ""}<main class="chatwall" id="messages"><div class="day">Today</div>${state.messages.filter(m => !m.deleted).map(bubble).join("")}${typing ? '<div class="bubble"><div class="muted">Jazz is typing…</div></div>' : ""}</main><div class="composerwrap">${replyTo ? `<div class="replybar"><div><b>Replying to ${replyTo.sender === "jazz" ? esc(state.jazzProfile.name) : "you"}</b><p>${esc(replyTo.text.slice(0, 80))}</p></div>${act("cancelReply", "×")}</div>` : ""}<form id="composer" class="composer"><div class="inputbox">${act("emoji", "☺", "iconbtn")}<textarea id="message" rows="1" placeholder="Message" aria-label="Message"></textarea>${act("attachment", icon("clip"), "iconbtn")}${act("photoMessage", icon("camera"), "iconbtn")}</div><button type="button" id="composerButton" data-action="dictate" class="sendbtn" aria-label="Voice message">${icon("mic")}</button></form></div>`;
   requestAnimationFrame(
     () => ($("#messages").scrollTop = $("#messages").scrollHeight),
   );
@@ -337,7 +383,7 @@ function renderChat() {
 function bubble(m) {
   const parent = state.messages.find((p) => p.id === m.replyTo);
   const reminderClosed = state.reminders.some(r => r.id === m.reminderId && ["completed", "cancelled"].includes(r.status));
-  return `<article class="bubble ${m.sender === "user" ? "sent" : ""} ${selectedMessages.has(m.id) ? "selectedMessage" : ""}" data-message="${m.id}" tabindex="0">${selectingMessages ? `<span class="selectionmark">${selectedMessages.has(m.id) ? "☑" : "☐"}</span>` : ""}${parent ? `<div class="quote"><b>${parent.sender === "jazz" ? esc(state.jazzProfile.name) : "You"}</b>${esc(parent.text.slice(0, 130))}</div>` : ""}${m.image ? `<button class="imageAttachment" data-image="${m.id}" aria-label="Preview image"><img class="attachment" src="${esc(m.image)}" alt="Shared image"></button>` : ""}<div class="text">${esc(m.text)}</div><span class="meta">${time(m.createdAt)}${m.sender === "user" ? `<span class="ticks ${m.status === "read" ? "read" : ""}">✓✓</span>` : ""}</span>${m.type === "reminder" && reminderClosed ? `<div class="reminderActions">✅ Reminder closed</div>` : m.type === "reminder" ? `<div class="reminderActions"><button data-reminder="${m.reminderId}" data-status="completed">✓ Done</button><button data-reminder="${m.reminderId}" data-status="snoozed">◷ Snooze</button></div>` : ""}${m.reaction ? `<div class="reaction">${esc(m.reaction)}</div>` : ""}</article>`;
+  return `<article class="bubble ${m.sender === "user" ? "sent" : ""} ${m.image ? "imageBubble" : ""} ${selectedMessages.has(m.id) ? "selectedMessage" : ""}" data-message="${m.id}" tabindex="0">${selectingMessages ? `<span class="selectionmark">${selectedMessages.has(m.id) ? "☑" : "☐"}</span>` : ""}${parent ? `<div class="quote"><b>${parent.sender === "jazz" ? esc(state.jazzProfile.name) : "You"}</b>${esc(parent.text.slice(0, 130))}</div>` : ""}${m.image ? `<button class="imageAttachment" data-image="${m.id}" aria-label="Preview image"><img class="attachment" src="${esc(m.image)}" alt="Shared image"></button>` : ""}<div class="text">${m.image && m.text === "Shared image" ? "" : esc(m.text)}</div><span class="meta">${time(m.createdAt)}${m.sender === "user" ? `<span class="ticks ${m.status === "read" ? "read" : ""}">${m.status === "queued" ? "✓" : "✓✓"}</span>` : ""}</span>${m.type === "reminder" && reminderClosed ? `<div class="reminderActions">✅ Reminder closed</div>` : m.type === "reminder" ? `<div class="reminderActions"><button data-reminder="${m.reminderId}" data-status="completed">✓ Done</button><button data-reminder="${m.reminderId}" data-status="snoozed">◷ Snooze</button></div>` : ""}${m.reaction ? `<div class="reaction">${esc(m.reaction)}</div>` : ""}</article>`;
 }
 function renderLogin() {
   root.innerHTML = `<main class="login"><div class="logo">${icon("chat")}</div><div class="eyebrow">SAME JAZZ. CLOSER TO YOU.</div><h1>Welcome, Mama.</h1><p>Your chat, reminders, and voice calls in one place.</p><form class="form" id="login"><div><label for="base">Jazz API server</label><input id="base" name="base" value="${esc(boot.base)}" placeholder="http://192.168.1.10:8797" type="url" required></div><div><label for="username">Username</label><input id="username" name="username" placeholder="guna" autocomplete="username" pattern="[A-Za-z0-9_]{3,40}" required></div><div><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" minlength="8" required></div><button class="cta" type="submit">Connect to Jazz ${icon("send")}</button><p id="loginError" class="muted"></p></form><p class="fineprint">Use your existing app account. First-time account creation must be enabled on your Jazz server. Your phone and server need to be able to reach each other.</p></main>`;
@@ -380,49 +426,24 @@ async function sync() {
     const generation = chatGeneration;
     const data = await api("/sync");
     if (generation !== chatGeneration) return;
-    Object.assign(state, data);
+    reconcile(data);
     render();
     Native.connect();
+    flushOutbox();
   } catch (e) {
-    toast(e.message);
+    if (e.message === "Sign in again") toast(e.message);
     if (e.message === "Sign in again") show("login");
   }
 }
 async function send(text) {
-  if (messageBusy || !text.trim()) return;
-  try { requireCompatibleBackend(); } catch (e) { toast(e.message); return; }
-  const generation = chatGeneration;
-  const quote = replyTo;
-  replyTo = null;
-  messageBusy = true;
+  if (!text.trim()) return;
+  const clientId = crypto.randomUUID();
+  const item = {id: "local:" + clientId, clientId, sender:"user", text:text.trim(), status:"queued", createdAt:new Date().toISOString(), replyTo:replyTo?.id, imageId:replyTo?.image ? replyTo.id : undefined};
+  outbox.push(item); state.messages.push(item); replyTo = null;
   if ($("#message")) $("#message").value = "";
-  updateComposer();
-  try {
-    const data = await api("/message", {
-      text,
-      replyTo: quote?.id,
-      imageId: quote?.image ? quote.id : undefined,
-      clientId: crypto.randomUUID(),
-      escalationDelaySeconds: 120,
-    });
-    if (generation !== chatGeneration) return;
-    if (data.assistantMode) state.assistantMode = data.assistantMode;
-    if (data.assistantModel) state.assistantModel = data.assistantModel;
-    if (data.message && !state.messages.some((m) => m.id === data.message.id))
-      state.messages.push(data.message);
-    if (
-      data.assistant &&
-      !state.messages.some((m) => m.id === data.assistant.id)
-    )
-      state.messages.push(data.assistant);
-    render();
-  } catch (e) {
-    toast(e.message);
-    if ($("#message")) $("#message").value = text;
-  } finally {
-    messageBusy = false;
-    updateComposer();
-  }
+  persistLocal();
+  if (window.Native?.enqueue) Native.enqueue(JSON.stringify({text:item.text, replyTo:item.replyTo, imageId:item.imageId, clientId:item.clientId, escalationDelaySeconds:120}));
+  render(); await flushOutbox();
 }
 let afterMicrophone = null;
 function ensureMicrophone(action) {
@@ -463,18 +484,12 @@ async function answer() {
   }
 }
 async function end(action) {
-  try {
-    await api("/call-action", { id: currentCall.id, action });
-  } catch (e) {
-    toast(e.message);
-  }
-  stopCamera();
-  Native.endVoice();
-  const endedId = currentCall?.id;
-  state.calls = state.calls.map(c => c.id === endedId ? {...c, status: action === "decline" ? "declined" : "ended"} : c);
-  currentCall = null;
-  show("calls");
-  sync();
+  const id = currentCall?.id;
+  if (!id) return;
+  endedCalls.add(id); stopCamera(); Native.endVoice();
+  state.calls = state.calls.map(c => c.id === id ? {...c, status:"ended"} : c);
+  currentCall = null; persistLocal(); show("chat");
+  try { await api("/call-action", {id, action}); endedCalls.delete(id); persistLocal(); } catch { /* retry on reconnect */ }
 }
 async function reminderAction(id, action, minutes) {
   try {
@@ -584,7 +599,10 @@ document.addEventListener("click", async (e) => {
       return;
     }
     const a = b.dataset.action;
-    if (!a) return;
+    if (!a) {
+    if (b.dataset.insert) { const input = $("#message"); if (input) { input.value += b.dataset.insert; updateComposer(); } }
+    return;
+    }
     if (
       [
         "home",
@@ -664,6 +682,9 @@ document.addEventListener("click", async (e) => {
       case "fullScreen":
         Native.fullScreenSettings();
         break;
+      case "notificationAccess":
+        Native.notificationSettings();
+        break;
       case "battery":
         Native.batterySettings();
         break;
@@ -684,7 +705,7 @@ document.addEventListener("click", async (e) => {
         break;
       case "emoji":
         sheet(
-          `<h2>A little expression</h2><div class="emojis">${["😊", "👍", "❤️", "🙏", "🎉"].map((x) => `<button data-insert="${x}">${x}</button>`).join("")}</div>`,
+          `<h2>A little expression</h2><div class="emojis">${["😀","😃","😄","😁","😆","🥹","😅","😂","🤣","🥲","😊","😇","🙂","🙃","😉","😌","😍","🥰","😘","😎","🤔","😈","😭","😴","👍","👎","👏","🙌","🙏","❤️","💚","💙","🔥","🎉","💻","📱","💧","💊","🚗","🏠","🍎","☕","🌸","🐶","⚽","🎵","✅","⏰"].map((x) => `<button data-insert="${x}">${x}</button>`).join("")}</div>`,
         );
         break;
       case "attachment":
@@ -741,6 +762,7 @@ document.addEventListener("click", async (e) => {
       case "confirmClearChat":
         requireCompatibleBackend();
         await api("/clear-chat", {});
+        outbox = []; persistLocal();
         chatGeneration++;
         selectedMessages.clear();
         selectingMessages = false;
@@ -769,6 +791,7 @@ document.addEventListener("click", async (e) => {
         break;
       case "logout":
         await api("/logout", {});
+        outbox = []; state.messages = []; persistLocal();
         show("login");
         break;
     }
@@ -857,6 +880,8 @@ document.addEventListener("submit", async (e) => {
   }
 });
 function mergeMessage(m) {
+  if (m.clientId) outbox = outbox.filter(item => item.clientId !== m.clientId);
+  state.messages = state.messages.filter(item => !(item.status === "queued" && item.clientId === m.clientId));
   const i = state.messages.findIndex((item) => item.id === m.id);
   if (i < 0) state.messages.push(m);
   else state.messages[i] = m;
@@ -871,6 +896,7 @@ window.onNativeEvent = (raw) => {
       cameraWanted = wantedCamera;
       break;
     case "cameraResumed":
+      if (boot.signedIn === "true") sync();
       cameraForeground = true;
       if (cameraWanted && page === "call" && currentCall?.cameraMode) startCamera();
       break;
@@ -890,11 +916,16 @@ window.onNativeEvent = (raw) => {
       break;
     case "connection":
       connection = event.status;
+      if (connection === "Connected") { sync(); flushOutbox(); }
       if (page !== "call" && page !== "login") render();
       break;
     case "sync":
-      Object.assign(state, event);
+      reconcile(event);
+      flushOutbox();
       if (page !== "call" && page !== "login") render();
+      break;
+    case "outbox.delivered":
+      sync();
       break;
     case "message.delta":
       streamingText += event.text;
@@ -947,6 +978,7 @@ window.onNativeEvent = (raw) => {
         $("#streaming")?.remove();
       }
       mergeMessage(event.message);
+      persistLocal();
       if (page === "chat") render();
       break;
     case "jazz.typing":
@@ -960,7 +992,7 @@ window.onNativeEvent = (raw) => {
       if (page === "reminders") render();
       break;
     case "profile.updated":
-      Object.assign(state, event);
+      reconcile(event);
       if (page !== "call") render();
       break;
     case "openCall":
@@ -976,6 +1008,7 @@ window.onNativeEvent = (raw) => {
       break;
     case "call.ended":
     case "call.updated":
+      if (event.call && endedCalls.has(event.call.id)) event.call.status = "ended";
       const callIndex = state.calls.findIndex(c => c.id === event.call?.id);
       if (callIndex >= 0) state.calls[callIndex] = event.call;
       else if (event.call) state.calls.push(event.call);
@@ -989,6 +1022,8 @@ window.onNativeEvent = (raw) => {
       }
       break;
     case "call.localEnded":
+      endedCalls.add(event.id);
+      persistLocal();
       state.calls = state.calls.map(c => c.id === event.id ? {...c, status: "ended"} : c);
       if (currentCall?.id === event.id) {
         Native.endVoice();
@@ -1067,7 +1102,7 @@ if (boot.call) {
     if (!boot.voiceRunning) Native.voice(JSON.stringify(currentCall));
   api("/sync")
     .then((data) => {
-      Object.assign(state, data);
+      reconcile(data);
       if (page === "call") renderCall();
     })
     .catch((e) => toast(e.message));

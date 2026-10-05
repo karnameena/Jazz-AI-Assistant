@@ -42,6 +42,7 @@ public class RealtimeService extends Service {
         .build()
     );
     connect();
+    handler.postDelayed(new Runnable() { public void run() { if (!stopped) { Outbox.flush(RealtimeService.this); handler.postDelayed(this, 15000); } } }, 15000);
   }
 
   private void connect() {
@@ -58,7 +59,17 @@ public class RealtimeService extends Service {
         new WebSocketListener() {
           public void onOpen(WebSocket ws, Response response) {
             retry = 0;
+            MessageNotificationListener.refresh();
+            for (String key : Api.prefs(RealtimeService.this).getAll().keySet()) {
+              if (key.startsWith("pendingEnd:")) {
+                String id = key.substring(11);
+                Api.call(RealtimeService.this, "/call-action", Api.json("id", id, "action", Api.prefs(RealtimeService.this).getString(key, "end")), (data, error) -> {
+                  if (error == null) Api.prefs(RealtimeService.this).edit().remove(key).apply();
+                });
+              }
+            }
             connected(RealtimeService.this, "Connected");
+            Outbox.flush(RealtimeService.this);
           }
 
           public void onMessage(WebSocket ws, String text) {
@@ -82,10 +93,10 @@ public class RealtimeService extends Service {
               if (
                 type.equals("message.new") &&
                 data.getJSONObject("message").optString("sender").equals("jazz")
-              ) Notifications.message(
+              ) { if (!MainActivity.chatVisible || getSystemService(KeyguardManager.class).isKeyguardLocked()) Notifications.message(
                 RealtimeService.this,
                 data.getJSONObject("message")
-              );
+              ); }
               if (type.equals("call.ended") || type.equals("call.updated")) {
                 JSONObject call = data.optJSONObject("call");
                 String active = VoiceService.activeCall();

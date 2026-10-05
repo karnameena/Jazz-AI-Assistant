@@ -58,6 +58,7 @@ export async function createJazzWhatsApp({
     };
   }
   state.assistantMode ||= "normal";
+  state.notificationSnapshots ||= {};
   state.messages = state.messages.filter(m => !m.deleted).map(m => m.sender === "jazz" && !m.reminderId ? {...m, text: sanitizeJazzReply(m.text)} : m).filter(m => m.text || m.image);
   for (const m of state.messages) if (m.sender === "jazz") delete m.replyTo;
   const confirmations = new Map();
@@ -82,7 +83,7 @@ export async function createJazzWhatsApp({
       if (socket.readyState === 1) socket.send(event);
   };
   const publicState = () => ({
-    apiVersion: "1.0.5",
+    apiVersion: "1.0.6",
     capabilities: ["clear-chat", "bulk-delete", "model-modes", "reminder-followup", "image-questions", "call-resume"],
     assistantMode: state.assistantMode,
     assistantModel: state.assistantModel || null,
@@ -307,7 +308,7 @@ export async function createJazzWhatsApp({
       return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
     };
     try {
-      if (route === "/version" && req.method === "GET") return reply(200, {ok: true, apiVersion: "1.0.5"});
+      if (route === "/version" && req.method === "GET") return reply(200, {ok: true, apiVersion: "1.0.6"});
       if (route === "/auth" && req.method === "POST") {
         const ip = req.socket.remoteAddress;
         const entry = attempts.get(ip) || { count: 0, time: clock() };
@@ -393,6 +394,8 @@ export async function createJazzWhatsApp({
       if (route === "/message" && req.method === "POST") {
         const body = await parseJson(req);
         const text = String(body.text || "").trim();
+        if (body.source === "voice" && /^[\s\W]*(?:sound|noise|music|silence|blank audio|inaudible)[\s\W]*$/i.test(text)) return reply(200, {ignored:true});
+        if (body.source === "voice" && !state.calls.some(c => c.id === body.callId && c.status === "active")) return reply(200, {ignored:true});
         if (!text || text.length > 16000)
           return reply(400, { error: "Message must be 1–16000 characters" });
         let incoming, early, replyMode, imageMessage;
@@ -522,6 +525,17 @@ export async function createJazzWhatsApp({
               assistant: `Sure, Mama. I’ll message you at ${new Date(reminder.scheduledAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}: ${reminder.title}`,
             };
           }
+          if (!early && /\b(?:notifications?|unread|messages? (?:arrived|received)|read (?:my |the )?messages)\b/i.test(text)) {
+            const snapshots = Object.values(state.notificationSnapshots).filter(v => clock() - v.updatedAt < 24 * 60 * 60 * 1000);
+            const entries = snapshots.flatMap(v => v.items);
+            const totals = {};
+            for (const item of entries) totals[item.app] = (totals[item.app] || 0) + item.count;
+            early = {assistant: snapshots.length ? entries.length ? `Mama, your current phone notifications show ${Object.entries(totals).map(([app, count]) => `${count} ${app} message${count === 1 ? "" : "s"}`).join(", ")} 😊\n` + entries.slice(0, 12).map(item => `${item.app} — ${item.title}: ${item.text}`).join("\n") : "Mama, your latest notification snapshot has no WhatsApp, Instagram or SMS messages 😊" : "Mama, enable Read phone notifications in Jazz settings on the phone that receives those messages. I don't have a notification snapshot yet."};
+          }
+          if (!early && /\b(?:upcoming reminders?|what(?:'s| is) (?:next|pending)|task status|pending tasks?)\b/i.test(text)) {
+            const reminders = listVoipReminders().filter(r => r.delivery === "jazzwhatsapp" && !["completed", "cancelled"].includes(r.status));
+            early = {assistant: reminders.length ? "Mama, here are your pending reminders 😊\n" + reminders.map(r => `${r.title} — ${r.status}, ${r.scheduledAt}`).join("\n") : "You're all caught up, Mama 😊 No pending reminders. Other task progress is available only when the connected tool reports it."};
+          }
           replyMode = state.assistantMode;
           const quoted = state.messages.find(m => m.id === body.replyTo);
           const imageId = body.imageId || (quoted?.image ? quoted.id : quoted?.imageContextId);
@@ -563,6 +577,7 @@ export async function createJazzWhatsApp({
         }
         const outgoing = await lock(async () => {
           if (!state.messages.some(m => m.id === incoming.id)) return null;
+          if (body.source === "voice" && !state.calls.some(c => c.id === body.callId && c.status === "active")) return null;
           incoming.status = "read";
           emit("message.updated", { message: incoming });
           if (result.model && !imageMessage && state.assistantMode === replyMode) state.assistantModel = result.model;
@@ -574,10 +589,16 @@ export async function createJazzWhatsApp({
           await save();
           return msg;
         });
-        return reply(200, { message: incoming, assistant: outgoing, assistantMode: state.assistantMode, assistantModel: state.assistantModel, apiVersion: "1.0.5" });
+        return reply(200, { message: incoming, assistant: outgoing, assistantMode: state.assistantMode, assistantModel: state.assistantModel, apiVersion: "1.0.6" });
       }
       const body = req.method === "POST" ? await parseJson(req) : {};
       return await lock(async () => {
+        if (route === "/notifications" && req.method === "POST") {
+          const deviceId = String(body.deviceId || "").slice(0, 100);
+          if (!deviceId || !Array.isArray(body.items)) return reply(400, {error:"Invalid notification snapshot"});
+          state.notificationSnapshots[deviceId] = {updatedAt:clock(), items:body.items.slice(0, 100).map(item => ({app:String(item.app || "Messages").slice(0, 40), title:String(item.title || "").slice(0, 200), text:String(item.text || "").slice(0, 1500), count:Math.min(1000, Math.max(1, Number(item.count) || 1))}))};
+          await save(); return reply(200, {ok:true});
+        }
         if (route === "/image" && req.method === "POST") {
           if (
             typeof body.image !== "string" ||
@@ -650,6 +671,7 @@ export async function createJazzWhatsApp({
           const call = getCall(body.id);
           if (!["answer", "decline", "end"].includes(body.action))
             throw new Error("Invalid call action");
+          if (body.action !== "answer" && ["ended", "cancelled", "missed", "declined"].includes(call.status)) return reply(200, {call});
           if (body.action === "answer") {
             if (call.status !== "ringing")
               throw new Error("Call is no longer ringing");

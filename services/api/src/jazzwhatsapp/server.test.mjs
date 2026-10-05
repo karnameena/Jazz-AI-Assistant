@@ -138,7 +138,7 @@ test("real Jazz API retains old routes and streams app chat through the same bra
     await request("/api/jazzwhatsapp/clear-chat", {});
     snapshot = JSON.parse((await request("/api/jazzwhatsapp/sync")).text);
     assert.deepEqual(snapshot.messages, []);
-    assert.equal(snapshot.apiVersion, "1.0.5");
+    assert.equal(snapshot.apiVersion, "1.0.6");
     const unlock = await request("/api/jazzwhatsapp/message", {text: "Hey Jazz unlock my mobile"});
     assert.match(JSON.parse(unlock.text).assistant.text, /Say “confirm” within 60 seconds/);
     const count = llmCalls;

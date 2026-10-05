@@ -14,3 +14,8 @@ test('strips inline postscripts without altering code literals', () => {
   assert.equal(sanitizeJazzReply('Thanks Mama.\nI will be available for any other tasks you have in the future.'), 'Thanks Mama.');
   assert.equal(sanitizeJazzReply('```js\nconst s = "P.P.S. do not alter";\n```'), '```js\nconst s = "P.P.S. do not alter";\n```');
 });
+
+test("removes sound hallucination and repeated prose while preserving repeated code", () => {
+  assert.equal(sanitizeJazzReply("[SOUND]\nHello Mama\n\n[SOUND]\nHello Mama"), "Hello Mama");
+  assert.equal(sanitizeJazzReply("```js\nrun();\nrun();\n```"), "```js\nrun();\nrun();\n```");
+});

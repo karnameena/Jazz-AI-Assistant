@@ -34,6 +34,7 @@ public class VoiceService extends Service {
     java.util.concurrent.Executors.newSingleThreadExecutor();
 
   void emit(String state, double level, String text) {
+    if (!running) return;
     JSONObject event = Api.json(
       "type",
       "voice",
@@ -66,7 +67,7 @@ public class VoiceService extends Service {
         public void onDone(String id) {
           h.post(() -> {
             speaking = false;
-            listen();
+            h.postDelayed(VoiceService.this::listen, 650);
           });
         }
 
@@ -216,7 +217,7 @@ public class VoiceService extends Service {
       recorder = null;
       if (!running || muted || generation != epoch) return;
       if (!heard) {
-        h.postDelayed(this::listen, 200);
+        h.postDelayed(VoiceService.this::listen, 200);
         return;
       }
       byte[] bytes = pcm.toByteArray();
@@ -254,14 +255,14 @@ public class VoiceService extends Service {
               0,
               ""
             );
-            h.postDelayed(this::listen, 3000);
+            h.postDelayed(VoiceService.this::listen, 3000);
           } else send(data.optString("text"));
         })
       );
     } catch (Exception e) {
       h.post(() -> {
         emit("Microphone unavailable", 0, "");
-        if (running && !muted) h.postDelayed(this::listen, 3000);
+        if (running && !muted) h.postDelayed(VoiceService.this::listen, 3000);
       });
     } finally {
       if (recorder != null) {
@@ -274,6 +275,7 @@ public class VoiceService extends Service {
   }
 
   private void androidListen() {
+    if (!running || muted || speaking) return;
     if (!SpeechRecognizer.isRecognitionAvailable(this)) {
       emit("Install an Android speech service or use local STT", 0, "");
       return;
@@ -334,10 +336,12 @@ public class VoiceService extends Service {
   }
 
   private void send(String text) {
-    if (!running || text.isBlank()) {
+    if (!running) return;
+    if (text.isBlank() || text.matches("(?i)^[\\s\\p{Punct}]*(sound|noise|music|silence|inaudible|blank audio)[\\s\\p{Punct}]*$")) {
       listen();
       return;
     }
+    final long generation = epoch;
     emit("Thinking", 0, text);
     JSONObject body = Api.json(
       "text",
@@ -351,11 +355,12 @@ public class VoiceService extends Service {
     );
     Api.call(this, "/message", body, (data, error) ->
       h.post(() -> {
-        if (!running) return;
+        if (!running || generation != epoch) return;
         if (error != null) {
           emit(error, 0, "");
-          h.postDelayed(this::listen, 1000);
+          h.postDelayed(VoiceService.this::listen, 1000);
         } else {
+          if (data.optBoolean("ignored")) { h.postDelayed(VoiceService.this::listen, 700); return; }
           JSONObject answer = data.optJSONObject("assistant");
           speak(
             answer == null
@@ -413,7 +418,7 @@ public class VoiceService extends Service {
                     p.release();
                     player = null;
                     speaking = false;
-                    listen();
+                    h.postDelayed(VoiceService.this::listen, 650);
                   });
                   player.prepare();
                   player.start();
@@ -497,12 +502,16 @@ public class VoiceService extends Service {
     } else {
       emit("Text-to-speech unavailable", 0, text);
       speaking = false;
-      h.postDelayed(this::listen, 1000);
+      h.postDelayed(VoiceService.this::listen, 1000);
     }
   }
 
   public void onDestroy() {
     running = false;
+    Api.prefs(this).edit().putString("pendingEnd:" + callId, "end").apply();
+    JazzConnectionService.finish(callId);
+    RealtimeService.event(this, Api.json("type", "call.localEnded", "id", callId));
+    getSystemService(NotificationManager.class).cancel(3);
     epoch++;
     instance = null;
     h.removeCallbacksAndMessages(null);

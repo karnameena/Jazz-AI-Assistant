@@ -421,7 +421,7 @@ async function streamAssistantReply(message, res, source = "typed", conversation
   try {
     if (provider === "ollama") {
       sendSse(res, "meta", { mode: "ollama", streaming: true, version: VERSION });
-      const model = await streamOllama((assistantMode ? `[JAZZ_MODE:${assistantMode.toUpperCase()}] ` : "") + String(preparedMessage).trim(), prompt + (assistantMode ? "\nAnswer the latest user message directly, including short messages and emojis. Speak naturally in English. Do not repeat your identity, introduction, or capability list. Use a brief friendly reply with suitable emojis when appropriate. Do not claim an action or reminder completion without a tool result. Do not output reminder notification templates or Done/Snooze cards; the scheduler handles those. Do not add P.S., P.P.S. or generic future-availability sign-offs." : ""), emit, Array.isArray(conversationContext) ? conversationContext : []);
+      const model = await streamOllama((assistantMode ? `[JAZZ_MODE:${assistantMode.toUpperCase()}] ` : "") + String(preparedMessage).trim(), prompt + (assistantMode ? "\nAnswer the latest user message directly, including short messages and emojis. Speak naturally in English. Do not repeat your identity, introduction, or capability list. Use a brief friendly reply with suitable emojis when appropriate. Do not claim an action or reminder completion without a tool result. Do not output reminder notification templates or Done/Snooze cards; the scheduler handles those. Do not output sound-effect or stage-direction tags such as [SOUND]. Avoid repeating sentences within an answer. Do not add P.S., P.P.S. or generic future-availability sign-offs." : ""), emit, Array.isArray(conversationContext) ? conversationContext : []);
       sendSse(res, "done", { assistant: fullText.trim(), mode: "ollama", model });
       res.end();
       return;
@@ -439,7 +439,7 @@ async function streamAssistantReply(message, res, source = "typed", conversation
         console.warn(`[Jazz] Gemini stream failed; using Ollama — ${error instanceof Error ? error.message : String(error)}`);
         fullText = "";
         sendSse(res, "meta", { mode: "ollama-fallback", streaming: true, version: VERSION });
-        const model = await streamOllama((assistantMode ? `[JAZZ_MODE:${assistantMode.toUpperCase()}] ` : "") + String(preparedMessage).trim(), prompt + (assistantMode ? "\nAnswer the latest user message directly, including short messages and emojis. Speak naturally in English. Do not repeat your identity, introduction, or capability list. Use a brief friendly reply with suitable emojis when appropriate. Do not claim an action or reminder completion without a tool result. Do not output reminder notification templates or Done/Snooze cards; the scheduler handles those. Do not add P.S., P.P.S. or generic future-availability sign-offs." : ""), emit, Array.isArray(conversationContext) ? conversationContext : []);
+        const model = await streamOllama((assistantMode ? `[JAZZ_MODE:${assistantMode.toUpperCase()}] ` : "") + String(preparedMessage).trim(), prompt + (assistantMode ? "\nAnswer the latest user message directly, including short messages and emojis. Speak naturally in English. Do not repeat your identity, introduction, or capability list. Use a brief friendly reply with suitable emojis when appropriate. Do not claim an action or reminder completion without a tool result. Do not output reminder notification templates or Done/Snooze cards; the scheduler handles those. Do not output sound-effect or stage-direction tags such as [SOUND]. Avoid repeating sentences within an answer. Do not add P.S., P.P.S. or generic future-availability sign-offs." : ""), emit, Array.isArray(conversationContext) ? conversationContext : []);
         sendSse(res, "done", { assistant: fullText.trim(), mode: "ollama-fallback", model });
         res.end();
         return;
@@ -490,7 +490,7 @@ const jazzWhatsApp = await createJazzWhatsApp({ assistantReply, visionReply: ans
   }
   return result;
 } });
-console.log("[JazzWhatsApp] client API 1.0.5 ready: bulk delete, verified model modes, reminder follow-ups");
+console.log("[JazzWhatsApp] client API 1.0.6 ready: bulk delete, verified model modes, reminder follow-ups");
 const jazzWhatsAppTimer = setInterval(() => void jazzWhatsApp.tick().catch(error => console.warn("[JazzWhatsApp] scheduler:", error.message)), 1000);
 jazzWhatsAppTimer.unref();
 

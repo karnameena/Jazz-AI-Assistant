@@ -95,6 +95,13 @@ test("authenticated chat, shared reminder delivery, escalation, acknowledgement,
     );
     assert.equal(auth.status, 200);
     token = auth.data.token;
+    const noiseBefore = app.publicState().messages.length;
+    assert.equal((await request("/message", {text:"[SOUND]", source:"voice",callId:"ended"})).data.ignored, true);
+    assert.equal(app.publicState().messages.length, noiseBefore);
+    assert.equal((await request("/notifications", {deviceId:"testphone",items:[{app:"WhatsApp",title:"Mom",text:"Hello",count:2}]})).status,200);
+    const summary = await request("/message", {text:"Read my notifications"});
+    assert.match(summary.data.assistant.text, /2 WhatsApp messages/);
+    assert.match(summary.data.assistant.text, /Mom: Hello/);
     const attachment = await request("/image", {image: "data:image/jpeg;base64,YQ=="});
     assert.equal(attachment.status, 201);
     const imageReply = await request("/message", {text: "Tell me about that picture"});

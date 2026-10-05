@@ -875,3 +875,10 @@ small,
 .callScreen:has(.cameraStage) .orbStage {height:100px; min-height:100px; flex:none;}
 .callScreen:has(.cameraStage) .orb {width:90px; height:90px;}
 .composer .sendbtn {background:#00a884; color:#fff; flex-shrink:0;}
+
+.imageBubble{padding:4px;max-width:min(82%,360px)}
+.imageBubble .imageAttachment{display:block;width:100%;padding:0;border-radius:12px;overflow:hidden}
+.imageBubble .attachment{display:block;width:100%;max-height:460px;object-fit:contain;border-radius:10px}
+.imageBubble .text:empty{display:none}.imageBubble .meta{padding:3px 8px}
+.emojis{display:grid;grid-template-columns:repeat(8,1fr);gap:5px;max-height:38vh;overflow:auto}
+.emojis button{font-size:27px;padding:8px 2px}
