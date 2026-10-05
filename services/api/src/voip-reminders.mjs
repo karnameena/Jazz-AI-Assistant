@@ -1,50 +1,18 @@
 import crypto from "node:crypto";
-import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 
-const timers = new Map();
-const audioCache = new Map();
-const channelToReminder = new Map();
-const playbackToChannel = new Map();
-let synthesizeReminderSpeech = null;
-let ariSocket = null;
-let ariSocketReady = null;
+// Reminder persistence is shared by the Jazz dashboard and JazzWhatsApp.
+// Legacy Linphone/Asterisk/SIP calling has been removed; JazzWhatsApp owns
+// reminder messages and follow-up call UI through its own scheduler.
 let reminders = [];
 let initialized = false;
 let persistenceQueue = Promise.resolve();
 
-function loadEnvFile() {
-  const envPath = process.env.JAZZ_VOIP_ENV || path.join(process.cwd(), "services", "voip", ".env");
-  if (!fs.existsSync(envPath)) return;
-  const raw = fs.readFileSync(envPath, "utf8");
-  for (const line of raw.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    const index = trimmed.indexOf("=");
-    if (index <= 0) continue;
-    const key = trimmed.slice(0, index).trim();
-    let value = trimmed.slice(index + 1).trim();
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1);
-    if (!(key in process.env)) process.env[key] = value;
-  }
-}
-
-loadEnvFile();
-
 function config() {
   return {
-    enabled: String(process.env.JAZZ_VOIP_ENABLED || "false").toLowerCase() === "true",
-    ariUrl: String(process.env.JAZZ_ASTERISK_ARI_URL || "http://127.0.0.1:8088/ari").replace(/\/$/, ""),
-    user: String(process.env.JAZZ_ASTERISK_ARI_USER || ""),
-    password: String(process.env.JAZZ_ASTERISK_ARI_PASSWORD || ""),
-    endpoint: String(process.env.JAZZ_ASTERISK_ENDPOINT || "PJSIP/7001"),
-    app: String(process.env.JAZZ_ASTERISK_ARI_APP || "jazz-reminder"),
-    audioBaseUrl: String(process.env.JAZZ_VOIP_AUDIO_BASE_URL || "http://127.0.0.1:8797").replace(/\/$/, ""),
-    callerId: String(process.env.JAZZ_VOIP_CALLER_ID || "Jazz <7000>"),
     timezone: String(process.env.JAZZ_TIMEZONE || "Asia/Kolkata"),
     timezoneOffsetMinutes: Number(process.env.JAZZ_TIMEZONE_OFFSET_MINUTES || 330),
-    ringTimeoutSeconds: Math.max(5, Number(process.env.JAZZ_VOIP_RING_TIMEOUT_SECONDS || 35))
   };
 }
 
@@ -70,8 +38,16 @@ async function load() {
     const raw = await fsp.readFile(storePath(), "utf8");
     const parsed = JSON.parse(raw);
     reminders = Array.isArray(parsed) ? parsed : [];
+    // Migrate old reminder records onto the current JazzWhatsApp delivery path.
+    let changed = false;
+    reminders = reminders.map(item => {
+      if (item?.delivery === "jazzwhatsapp") return item;
+      changed = true;
+      return { ...item, delivery: "jazzwhatsapp" };
+    });
+    if (changed) await persist();
   } catch (error) {
-    if (error?.code !== "ENOENT") console.warn(`[Jazz VoIP] Could not load reminders: ${error.message}`);
+    if (error?.code !== "ENOENT") console.warn(`[Jazz Reminders] Could not load reminders: ${error.message}`);
     reminders = [];
   }
 }
@@ -81,7 +57,7 @@ function localParts(now, offsetMinutes) {
   return {
     year: shifted.getUTCFullYear(),
     month: shifted.getUTCMonth(),
-    day: shifted.getUTCDate()
+    day: shifted.getUTCDate(),
   };
 }
 
@@ -113,12 +89,13 @@ export function parseReminderCommand(message, now = new Date()) {
     const multiplier = /^hour/i.test(relative[2]) ? 3600000 : /^sec/i.test(relative[2]) ? 1000 : 60000;
     const delay = Number(relative[1]) * multiplier;
     if (delay <= 0 || delay > 365 * 86400000) return null;
-    return { title: relative[3].trim(), scheduledAt: new Date(now.getTime() + delay).toISOString(), delivery: "voip" };
+    return { title: relative[3].trim(), scheduledAt: new Date(now.getTime() + delay).toISOString(), delivery: "jazzwhatsapp" };
   }
+
   const patterns = [
     /^(?:call\s+me\s+and\s+)?remind\s+me\s+(today|tomorrow)?\s*(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s+(?:to|that)\s+(.+)$/i,
     /^remind\s+me\s+(?:to|that)\s+(.+?)\s+(today|tomorrow)?\s*(?:at\s+)(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i,
-    /^call\s+me\s+(today|tomorrow)?\s*(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s+and\s+remind\s+me\s+(?:to|that)\s+(.+)$/i
+    /^call\s+me\s+(today|tomorrow)?\s*(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s+and\s+remind\s+me\s+(?:to|that)\s+(.+)$/i,
   ];
 
   let title;
@@ -145,7 +122,11 @@ export function parseReminderCommand(message, now = new Date()) {
     dayOffset = 1;
     scheduled = buildInstant({ ...clock, dayOffset, now });
   }
-  return { title: title.trim().replace(/[.?!]+$/, ""), scheduledAt: scheduled.toISOString(), delivery: "voip" };
+  return {
+    title: title.trim().replace(/[.?!]+$/, ""),
+    scheduledAt: scheduled.toISOString(),
+    delivery: "jazzwhatsapp",
+  };
 }
 
 function formatScheduled(iso) {
@@ -156,84 +137,8 @@ function formatScheduled(iso) {
     month: "short",
     hour: "numeric",
     minute: "2-digit",
-    hour12: true
+    hour12: true,
   }).format(new Date(iso));
-}
-
-function basicAuth() {
-  const cfg = config();
-  return `Basic ${Buffer.from(`${cfg.user}:${cfg.password}`).toString("base64")}`;
-}
-
-function ensureVoipConfigured() {
-  const cfg = config();
-  if (!cfg.enabled) throw new Error("VoIP reminders are not enabled. Set JAZZ_VOIP_ENABLED=true in services/voip/.env.");
-  if (!cfg.user || !cfg.password) throw new Error("Asterisk ARI credentials are not configured.");
-  if (!cfg.endpoint) throw new Error("Asterisk reminder endpoint is not configured.");
-  return cfg;
-}
-
-async function ariFetch(relativePath, options = {}) {
-  const cfg = ensureVoipConfigured();
-  const response = await fetch(`${cfg.ariUrl}${relativePath}`, {
-    ...options,
-    headers: {
-      Authorization: basicAuth(),
-      Accept: "application/json",
-      ...(options.body ? { "Content-Type": "application/json" } : {}),
-      ...(options.headers || {})
-    },
-    signal: options.signal || AbortSignal.timeout(10_000)
-  });
-  const text = await response.text();
-  let data = null;
-  try { data = text ? JSON.parse(text) : null; } catch { data = text || null; }
-  if (!response.ok) throw new Error(`Asterisk ARI ${response.status}: ${typeof data === "string" ? data : JSON.stringify(data)}`);
-  return data;
-}
-
-function ariWsUrl() {
-  const cfg = config();
-  const url = new URL(cfg.ariUrl.replace(/^http/i, "ws"));
-  url.pathname = `${url.pathname.replace(/\/$/, "")}/events`;
-  url.searchParams.set("app", cfg.app);
-  url.searchParams.set("api_key", `${cfg.user}:${cfg.password}`);
-  return url.toString();
-}
-
-async function ensureAriSocket() {
-  ensureVoipConfigured();
-  if (ariSocket?.readyState === WebSocket.OPEN) return;
-  if (ariSocketReady) return ariSocketReady;
-  if (typeof WebSocket !== "function") throw new Error("This Node.js runtime does not provide WebSocket support required by Asterisk ARI.");
-
-  ariSocketReady = new Promise((resolve, reject) => {
-    const socket = new WebSocket(ariWsUrl());
-    const timer = setTimeout(() => {
-      try { socket.close(); } catch {}
-      reject(new Error("Timed out connecting to Asterisk ARI events."));
-    }, 5_000);
-
-    socket.addEventListener("open", () => {
-      clearTimeout(timer);
-      ariSocket = socket;
-      console.log("[Jazz VoIP] Asterisk ARI event channel connected.");
-      resolve();
-    });
-    socket.addEventListener("message", event => void handleAriEvent(event.data));
-    socket.addEventListener("close", () => {
-      if (ariSocket === socket) ariSocket = null;
-      ariSocketReady = null;
-      console.warn("[Jazz VoIP] Asterisk ARI event channel closed.");
-    });
-    socket.addEventListener("error", () => {
-      clearTimeout(timer);
-      if (socket.readyState !== WebSocket.OPEN) reject(new Error("Could not connect to Asterisk ARI events."));
-    });
-  }).finally(() => {
-    if (!ariSocket || ariSocket.readyState !== WebSocket.OPEN) ariSocketReady = null;
-  });
-  return ariSocketReady;
 }
 
 export async function updateReminder(id, patch) {
@@ -241,193 +146,76 @@ export async function updateReminder(id, patch) {
   if (index < 0) return null;
   reminders[index] = { ...reminders[index], ...patch, updatedAt: new Date().toISOString() };
   await persist();
-  return reminders[index];
+  return { ...reminders[index] };
 }
 
-async function handleAriEvent(raw) {
-  let event;
-  try { event = JSON.parse(String(raw)); } catch { return; }
-
-  if (event.type === "StasisStart") {
-    const reminderId = Array.isArray(event.args) ? event.args[0] : null;
-    const channelId = event.channel?.id;
-    if (!reminderId || !channelId || !audioCache.has(reminderId)) return;
-    channelToReminder.set(channelId, reminderId);
-    const audio = audioCache.get(reminderId);
-    const mediaUrl = `${config().audioBaseUrl}/api/reminders/${encodeURIComponent(reminderId)}/audio.wav?token=${encodeURIComponent(audio.token)}`;
-    try {
-      const params = new URLSearchParams({ media: `sound:${mediaUrl}` });
-      const playback = await ariFetch(`/channels/${encodeURIComponent(channelId)}/play?${params.toString()}`, { method: "POST" });
-      if (playback?.id) playbackToChannel.set(playback.id, channelId);
-      await updateReminder(reminderId, { status: "playing", answeredAt: new Date().toISOString(), lastError: null });
-    } catch (error) {
-      await updateReminder(reminderId, { status: "failed", lastError: error.message });
-      try { await ariFetch(`/channels/${encodeURIComponent(channelId)}`, { method: "DELETE" }); } catch {}
-    }
-    return;
-  }
-
-  if (event.type === "PlaybackFinished") {
-    const playbackId = event.playback?.id;
-    const channelId = playbackToChannel.get(playbackId);
-    if (!channelId) return;
-    playbackToChannel.delete(playbackId);
-    const reminderId = channelToReminder.get(channelId);
-    channelToReminder.delete(channelId);
-    if (reminderId) {
-      await updateReminder(reminderId, { status: "completed", completedAt: new Date().toISOString(), lastError: null });
-      setTimeout(() => audioCache.delete(reminderId), 60_000).unref?.();
-    }
-    try { await ariFetch(`/channels/${encodeURIComponent(channelId)}`, { method: "DELETE" }); } catch {}
-    return;
-  }
-
-  if (event.type === "ChannelDestroyed") {
-    const channelId = event.channel?.id;
-    const reminderId = channelToReminder.get(channelId);
-    if (!reminderId) return;
-    channelToReminder.delete(channelId);
-    const reminder = reminders.find(item => item.id === reminderId);
-    if (reminder && !["completed", "failed"].includes(reminder.status)) {
-      await updateReminder(reminderId, { status: "failed", lastError: event.cause_txt || "Call ended before reminder playback completed." });
-    }
-  }
-}
-
-async function originate(reminder) {
-  const cfg = ensureVoipConfigured();
-  await ensureAriSocket();
-  const params = new URLSearchParams({
-    endpoint: cfg.endpoint,
-    app: cfg.app,
-    appArgs: reminder.id,
-    callerId: cfg.callerId,
-    timeout: String(cfg.ringTimeoutSeconds)
-  });
-  return ariFetch(`/channels?${params.toString()}`, { method: "POST" });
-}
-
-async function fireReminder(id) {
-  timers.delete(id);
-  const reminder = reminders.find(item => item.id === id);
-  if (!reminder || reminder.status !== "scheduled") return;
-  if (!synthesizeReminderSpeech) {
-    await updateReminder(id, { status: "failed", lastError: "Jazz TTS is not connected to the VoIP scheduler." });
-    return;
-  }
-  try {
-    const text = `Hey Mama. This is Jazz. Reminder: ${reminder.title}.`;
-    const wav = await synthesizeReminderSpeech(text);
-    const token = crypto.randomBytes(18).toString("hex");
-    audioCache.set(id, { token, buffer: wav, createdAt: Date.now() });
-    await updateReminder(id, { status: "calling", attempts: Number(reminder.attempts || 0) + 1, lastAttemptAt: new Date().toISOString(), lastError: null });
-    await originate(reminder);
-    setTimeout(() => {
-      const current = reminders.find(item => item.id === id);
-      if (current && ["calling", "playing"].includes(current.status)) void updateReminder(id, { status: "failed", lastError: "Reminder call timed out before playback completed." });
-    }, (config().ringTimeoutSeconds + 90) * 1000).unref?.();
-  } catch (error) {
-    await updateReminder(id, { status: "failed", lastError: error instanceof Error ? error.message : String(error) });
-    console.warn(`[Jazz VoIP] Reminder ${id} failed: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
-function schedule(reminder) {
-  if (!reminder || reminder.status !== "scheduled" || reminder.delivery === "jazzwhatsapp") return;
-  const due = new Date(reminder.scheduledAt).getTime();
-  if (!Number.isFinite(due)) return;
-  const delay = due - Date.now();
-  if (delay <= 0) {
-    const overdue = Math.abs(delay);
-    if (overdue <= 5 * 60_000) setImmediate(() => void fireReminder(reminder.id));
-    return;
-  }
-  const maxDelay = 2_000_000_000;
-  const timer = setTimeout(() => {
-    if (delay > maxDelay) schedule(reminder);
-    else void fireReminder(reminder.id);
-  }, Math.min(delay, maxDelay));
-  timer.unref?.();
-  timers.set(reminder.id, timer);
-}
-
-export async function initVoipReminders({ synthesize }) {
+export async function initVoipReminders() {
   if (initialized) return;
-  synthesizeReminderSpeech = synthesize;
   await load();
-  for (const reminder of reminders) schedule(reminder);
   initialized = true;
-  console.log(`[Jazz VoIP] reminder scheduler ready; ${reminders.filter(item => item.status === "scheduled").length} scheduled.`);
-  if (config().enabled) void ensureAriSocket().catch(error => console.warn(`[Jazz VoIP] ARI not ready yet: ${error.message}`));
+  console.log(`[Jazz Reminders] JazzWhatsApp reminder store ready; ${reminders.filter(item => item.status === "scheduled").length} scheduled.`);
 }
 
 export function listVoipReminders() {
   return reminders.map(item => ({ ...item }));
 }
 
-export async function createVoipReminder({ title, scheduledAt, delivery = "voip", escalationDelaySeconds = 120 }) {
+export async function createVoipReminder({ title, scheduledAt, delivery = "jazzwhatsapp", escalationDelaySeconds = 120 }) {
   const cleanTitle = String(title || "").trim();
   const instant = new Date(scheduledAt);
   if (!cleanTitle) throw new Error("Reminder title is required.");
   if (!Number.isFinite(instant.getTime())) throw new Error("Reminder scheduled time is invalid.");
   if (instant.getTime() <= Date.now()) throw new Error("Reminder time must be in the future.");
+
   const item = {
     id: crypto.randomUUID(),
     title: cleanTitle,
     scheduledAt: instant.toISOString(),
-    delivery,
+    delivery: "jazzwhatsapp",
     escalationDelaySeconds: Math.min(3600, Math.max(15, Number(escalationDelaySeconds) || 120)),
     status: "scheduled",
     attempts: 0,
     createdAt: new Date().toISOString(),
-    lastError: null
+    lastError: null,
   };
   reminders.push(item);
   await persist();
-  schedule(item);
   return { ...item };
 }
 
 export async function handleVoipReminderCommand(message) {
   const parsed = parseReminderCommand(message);
   if (!parsed) return null;
-  const item = await createVoipReminder({ ...parsed, delivery: process.env.JAZZ_REMINDER_DELIVERY === "jazzwhatsapp" ? "jazzwhatsapp" : "voip" });
+  const item = await createVoipReminder(parsed);
   return {
-    assistant: item.delivery === "jazzwhatsapp" ? `Got it, Mama. I’ll message you on ${formatScheduled(item.scheduledAt)}: **${item.title}**. If you don’t acknowledge it, I’ll call you in JazzWhatsApp.` : `Got it, Mama ⏰📞 I’ll call you on ${formatScheduled(item.scheduledAt)} and remind you: **${item.title}**.`,
-    mode: "voip-reminder",
-    reminder: item
+    assistant: `Got it, Mama. I’ll message you on ${formatScheduled(item.scheduledAt)}: **${item.title}**. If you don’t acknowledge it, I’ll call you in JazzWhatsApp.`,
+    mode: "jazzwhatsapp-reminder",
+    reminder: item,
   };
 }
 
-export function getReminderAudio(id, token) {
-  const item = audioCache.get(String(id));
-  if (!item || !token || token !== item.token) return null;
-  return item.buffer;
+// Compatibility exports while the API is migrated away from the old VoIP naming.
+// They contain no SIP/Asterisk/Linphone implementation.
+export function getReminderAudio() {
+  return null;
 }
 
 export async function callReminderNow(id) {
   const reminder = reminders.find(item => item.id === id);
   if (!reminder) throw new Error("Reminder not found.");
-  await updateReminder(id, { status: "scheduled", scheduledAt: new Date(Date.now() + 500).toISOString(), lastError: null });
-  schedule(reminders.find(item => item.id === id));
-  return reminders.find(item => item.id === id);
+  return updateReminder(id, {
+    status: "scheduled",
+    scheduledAt: new Date(Date.now() + 500).toISOString(),
+    delivery: "jazzwhatsapp",
+    lastError: null,
+  });
 }
 
 export async function getVoipHealth() {
-  const cfg = config();
-  const base = {
-    enabled: cfg.enabled,
-    ariUrl: cfg.ariUrl,
-    endpoint: cfg.endpoint,
-    app: cfg.app,
-    audioBaseUrl: cfg.audioBaseUrl,
-    configured: Boolean(cfg.enabled && cfg.user && cfg.password && cfg.endpoint)
+  return {
+    ok: false,
+    removed: true,
+    replacement: "jazzwhatsapp",
+    error: "Legacy SIP/Asterisk calling has been removed. JazzWhatsApp handles reminder messaging and follow-up calls.",
   };
-  if (!base.configured) return { ...base, ok: false, error: "VoIP is not fully configured." };
-  try {
-    const info = await ariFetch("/asterisk/info", { method: "GET" });
-    return { ...base, ok: true, asterisk: info?.system?.version || info?.build?.version || "reachable" };
-  } catch (error) {
-    return { ...base, ok: false, error: error instanceof Error ? error.message : String(error) };
-  }
 }
