@@ -102,6 +102,16 @@ if ($serverText -notmatch 'utterance-normalizer\.mjs' -or $serverText -notmatch 
 }
 Write-Host "Local Jazz API source verified: $expectedVersion" -ForegroundColor Green
 
+# Ensure the lightweight local Web-RAG embedding runtime is available.
+$transformersModule = Join-Path $root "services\api\node_modules\@huggingface\transformers"
+if (-not (Test-Path $transformersModule)) {
+  Write-Host "Installing Jazz Web-RAG dependency (one-time)..." -ForegroundColor Yellow
+  & pnpm --filter @jazz/api install
+  if ($LASTEXITCODE -ne 0) {
+    Write-Warning "Web-RAG embedding install failed; Jazz will still use lexical web ranking as fallback."
+  }
+}
+
 # 1) Start API first. Piper prewarm is disabled until the launcher validates the runtime.
 $node = Get-Command node -ErrorAction Stop
 $apiOut = Join-Path $logDir "api.out.log"
@@ -113,12 +123,14 @@ $oldProvider = $env:JAZZ_LLM_PROVIDER
 $oldAutoStart = $env:JAZZ_OLLAMA_AUTOSTART
 $oldFallback = $env:JAZZ_OLLAMA_FALLBACK
 $oldPiperPrewarm = $env:JAZZ_PIPER_PREWARM
+$oldWebRag = $env:JAZZ_WEB_RAG_ENABLED
 try {
   $env:PORT = "$apiPort"
   $env:JAZZ_LLM_PROVIDER = "ollama"
   $env:JAZZ_OLLAMA_AUTOSTART = "true"
   $env:JAZZ_OLLAMA_FALLBACK = "true"
   $env:JAZZ_PIPER_PREWARM = "false"
+  $env:JAZZ_WEB_RAG_ENABLED = "true"
 
   # Do not load services/api/.env here. Old provider/Piper overrides in that file
   # must not control the managed Jazz runtime.
@@ -129,6 +141,7 @@ try {
   if ($null -eq $oldAutoStart) { Remove-Item Env:JAZZ_OLLAMA_AUTOSTART -ErrorAction SilentlyContinue } else { $env:JAZZ_OLLAMA_AUTOSTART = $oldAutoStart }
   if ($null -eq $oldFallback) { Remove-Item Env:JAZZ_OLLAMA_FALLBACK -ErrorAction SilentlyContinue } else { $env:JAZZ_OLLAMA_FALLBACK = $oldFallback }
   if ($null -eq $oldPiperPrewarm) { Remove-Item Env:JAZZ_PIPER_PREWARM -ErrorAction SilentlyContinue } else { $env:JAZZ_PIPER_PREWARM = $oldPiperPrewarm }
+  if ($null -eq $oldWebRag) { Remove-Item Env:JAZZ_WEB_RAG_ENABLED -ErrorAction SilentlyContinue } else { $env:JAZZ_WEB_RAG_ENABLED = $oldWebRag }
 }
 
 $healthUrl = "http://127.0.0.1:$apiPort/health"
@@ -154,6 +167,16 @@ if ($apiHealth.provider -ne "ollama") {
   throw "Wrong provider. Expected ollama but got $($apiHealth.provider)."
 }
 Write-Host "Jazz API READY: version=$($apiHealth.version), provider=$($apiHealth.provider), port=$apiPort, PID=$($apiProcess.Id)" -ForegroundColor Green
+try {
+  $webRagHealth = Invoke-RestMethod "http://127.0.0.1:$apiPort/api/web-rag/health" -TimeoutSec 5
+  if ($webRagHealth.ok -and $webRagHealth.webRag.enabled) {
+    Write-Host "Web-RAG READY on Jazz API port $apiPort: $($webRagHealth.webRag.provider)" -ForegroundColor Green
+  } else {
+    Write-Warning "Web-RAG health check did not report enabled."
+  }
+} catch {
+  Write-Warning "Web-RAG health check failed: $($_.Exception.Message)"
+}
 
 # 2) Ollama local brain.
 try {
