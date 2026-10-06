@@ -7,5 +7,8 @@
     "dev": "node src/server.mjs",
     "test": "node tests/utterance-normalizer.test.mjs",
     "tts:check": "node -e \"import('./src/tts.mjs').then(async m => { const c=m.ttsConfig(); console.log(c); }).catch(e => { console.error(e); process.exit(1); })\""
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^4.3.0"
   }
 }
