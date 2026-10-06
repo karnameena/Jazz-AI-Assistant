@@ -19,7 +19,7 @@ function config() {
 function cleanQuery(raw) {
   return String(raw || "")
     .replace(MODE_PREFIX, "")
-    .replace(/^(?:hey\s+jazz[, ]*)/i, "")
+    .replace(/^(?:(?:hey|hi|hello)\s+)?jazz[,\s:-]*/i, "")
     .replace(/^(?:please\s+)?(?:search(?:\s+the)?\s+web|search\s+online|search\s+internet|web\s+search|look\s+up\s+online|look\s+up)\s*(?:for\s*)?/i, "")
     .trim();
 }
@@ -28,13 +28,13 @@ export function isWebSearchIntent(raw) {
   const text = String(raw || "").replace(MODE_PREFIX, "").trim();
   if (!text) return false;
 
-  if (/^(?:hey\s+jazz[, ]*)?(?:please\s+)?(?:search(?:\s+the)?\s+web|search\s+online|search\s+internet|web\s+search|look\s+up\s+online|look\s+up)\b/i.test(text)) {
+  if (/^(?:(?:hey|hi|hello)\s+)?(?:jazz[,\s:-]*)?(?:please\s+)?(?:search(?:\s+the)?\s+web|search\s+online|search\s+internet|web\s+search|look\s+up\s+online|look\s+up)\b/i.test(text)) {
     return true;
   }
 
   // Freshness-sensitive questions are useful to route through RAG automatically.
   if (/\b(latest|today|recent|current|right now|this week|news|updated|update on)\b/i.test(text) &&
-      /^(?:hey\s+jazz[, ]*)?(?:what|who|when|where|which|how|tell me|give me|show me|find|is|are|has|have|did|does)\b/i.test(text)) {
+      /^(?:(?:hey|hi|hello)\s+)?(?:jazz[,\s:-]*)?(?:what|who|when|where|which|how|tell me|give me|show me|find|is|are|has|have|did|does)\b/i.test(text)) {
     return true;
   }
 
