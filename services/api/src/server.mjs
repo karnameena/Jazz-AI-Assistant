@@ -6,6 +6,7 @@ import { callOllama, ensureOllamaReady, getOllamaStatus, streamOllama } from "./
 import { getTtsStatus, streamPiperRaw, synthesizeWithPiper } from "./tts.mjs";
 import { debugUnderstanding, normalizeUtterance } from "./utterance-normalizer.mjs";
 import { jazzSystemPrompt, localPersonalityReply } from "./jazz-personality.mjs";
+import { answerWithWebRag, getWebRagStatus } from "./web-rag.mjs";
 import { getCodingAgentHealth, getCodingTask, handleCodingIntent, listCodingTasks } from "../../coding-agent/src/index.mjs";
 import {
   callReminderNow,
@@ -350,6 +351,9 @@ async function localAssistantReply(message) {
   const scripted = await handleScriptIntent(text);
   if (scripted) return scripted;
 
+  const webRag = await answerWithWebRag(text, systemPrompt(), callOllama);
+  if (webRag) return webRag;
+
   if (/^(?:what(?:'s| is)\s+)?(?:the\s+)?(?:current\s+)?time(?:\s+is\s+it)?(?:\s+in\s+india)?[?.! ]*$/i.test(text)) return { assistant: `Mama ⏰ the current time in India is ${getCurrentTime()}.` };
   if (/\b(where are you|where r u|where are u|where're you)\b/i.test(text)) return { assistant: "Right here with you, Mama 👋😎 Jazz is online and ready." };
   if (lower.includes("remember") || lower.includes("memory")) return { assistant: "Absolutely, Mama 🧠 Tell me what you want Jazz to remember." };
@@ -509,6 +513,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === "GET" && req.url === "/api/brain-health") return sendJson(res, 200, { ok: true, version: VERSION, provider: process.env.JAZZ_LLM_PROVIDER || "ollama", ollama: await getOllamaStatus() });
     if (req.method === "GET" && req.url === "/api/tts-health") return sendJson(res, 200, { ok: true, version: VERSION, tts: await getTtsStatus() });
+    if (req.method === "GET" && req.url === "/api/web-rag/health") return sendJson(res, 200, { ok: true, webRag: await getWebRagStatus() });
     if (req.method === "GET" && req.url === "/api/voip/health") return sendJson(res, 200, { ok: true, voip: await getVoipHealth() });
     if (req.method === "GET" && req.url === "/api/coding/health") return sendJson(res, 200, { ok: true, coding: await getCodingAgentHealth() });
     if (req.method === "GET" && req.url === "/api/coding/tasks") return sendJson(res, 200, { ok: true, items: await listCodingTasks() });
