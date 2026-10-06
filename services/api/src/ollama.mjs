@@ -146,7 +146,7 @@ async function resolveModel(mode = "normal") {
   throw new Error(`Ollama ${mode} model '${requested}' is not installed. Installed models: ${installed.join(", ") || "none"}.`);
 }
 
-function chatPayload(model, systemInstruction, message, stream, mode) {
+function chatPayload(model, systemInstruction, message, stream, mode, requestOptions = {}) {
   const config = ollamaConfig();
   const modeInstruction = mode === "evil"
     ? "\n\nJazz mode: Ethical Hack Lab. Focus on authorized, defensive, CTF, sandbox, and owner-controlled security testing. Keep the answer practical and technically precise."
@@ -162,8 +162,8 @@ function chatPayload(model, systemInstruction, message, stream, mode) {
     ],
     options: {
       temperature: Number(process.env.JAZZ_OLLAMA_TEMPERATURE || 0.35),
-      num_predict: config.maxTokens,
-      num_ctx: config.contextSize
+      num_predict: Math.max(64, Number(requestOptions.maxTokens || config.maxTokens)),
+      num_ctx: Math.max(1024, Number(requestOptions.contextSize || config.contextSize))
     }
   };
 }
@@ -186,7 +186,7 @@ function invalidateModelOnTransportFailure() {
   warmedModels.clear();
 }
 
-export async function callOllama(message, systemInstruction) {
+export async function callOllama(message, systemInstruction, requestOptions = {}) {
   const config = ollamaConfig();
   const routed = extractModeAndMessage(message);
   const model = await resolveModel(routed.mode);
@@ -196,7 +196,7 @@ export async function callOllama(message, systemInstruction) {
     response = await fetchWithTimeout(`${config.url}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(chatPayload(model, systemInstruction, normalizedMessage, false, routed.mode))
+      body: JSON.stringify(chatPayload(model, systemInstruction, normalizedMessage, false, routed.mode, requestOptions))
     }, Number(process.env.JAZZ_OLLAMA_TIMEOUT_MS || 120000));
   } catch (error) {
     invalidateModelOnTransportFailure();
