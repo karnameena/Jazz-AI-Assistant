@@ -170,7 +170,7 @@ Write-Host "Jazz API READY: version=$($apiHealth.version), provider=$($apiHealth
 try {
   $webRagHealth = Invoke-RestMethod "http://127.0.0.1:$apiPort/api/web-rag/health" -TimeoutSec 5
   if ($webRagHealth.ok -and $webRagHealth.webRag.enabled) {
-    Write-Host "Web-RAG READY on Jazz API port $apiPort: $($webRagHealth.webRag.provider)" -ForegroundColor Green
+    Write-Host "Web-RAG READY on Jazz API port ${apiPort}: $($webRagHealth.webRag.provider)" -ForegroundColor Green
   } else {
     Write-Warning "Web-RAG health check did not report enabled."
   }
