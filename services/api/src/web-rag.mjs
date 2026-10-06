@@ -549,13 +549,34 @@ function discoverRelevantChildLinks(html, baseUrl, query, limit = 3) {
   return out.sort((a,b) => b.score - a.score).slice(0, limit);
 }
 
+function extractPageTitle(html, fallback = "") {
+  const match = String(html || "").match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  return stripTags(match?.[1] || fallback).replace(/\s*[|–—-]\s*React\s*$/i, " - React").trim();
+}
+
+function extractCodeSamples(html, limit = 3) {
+  const samples = [];
+  const regex = /<pre\b[^>]*>([\s\S]*?)<\/pre>/gi;
+  let match;
+  while ((match = regex.exec(String(html || ""))) && samples.length < limit) {
+    const code = decodeHtml(match[1].replace(/<[^>]+>/g, ""))
+      .replace(/\r/g, "")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+    if (code.length >= 20 && code.length <= 1800) samples.push(code);
+  }
+  return samples;
+}
+
 async function fetchResultPage(item, cfg) {
   try {
     const html = await fetchText(item.url, {}, 5500);
     const text = htmlToText(html, cfg.pageChars);
-    return { ...item, pageText: text, rawHtml: html };
+    const pageTitle = extractPageTitle(html, item.title);
+    const codeSamples = extractCodeSamples(html);
+    return { ...item, title: pageTitle || item.title, pageText: text, rawHtml: html, codeSamples };
   } catch {
-    return { ...item, pageText: "", rawHtml: "" };
+    return { ...item, pageText: "", rawHtml: "", codeSamples: [] };
   }
 }
 
@@ -565,6 +586,11 @@ function finalizeRagAnswer(value, sources) {
 
   // The API owns source rendering so the model cannot duplicate or invent source lists.
   const sourceHeading = /^\s*(?:\*\*)?Sources(?:\*\*)?\s*:?\s*$/im;
+  text = text
+    .replace(/\s*\[\[?object Object\]?\]\s*/gi, " ")
+    .replace(/\s+([,.;:!?])/g, "$1")
+    .trim();
+
   const match = sourceHeading.exec(text);
   if (match) text = text.slice(0, match.index).trim();
 
@@ -595,7 +621,7 @@ function preferEvidenceChunks(query, rankedChunks) {
       const host = new URL(chunk.url).hostname.toLowerCase().replace(/^www\./, "");
       return topic && host.includes(topic);
     } catch { return false; }
-  });
+  }).sort((a, b) => (b.kind === "source-code" ? 1 : 0) - (a.kind === "source-code" ? 1 : 0));
   const recent = rankedChunks.filter(chunk => {
     const age = freshnessAgeDays(chunk.publishedAt);
     return age === null || age <= 365;
@@ -738,6 +764,20 @@ export async function answerWithWebRag(rawMessage, systemInstruction, callOllama
         searchScore: page.searchScore || 0,
       });
     });
+
+    (page.codeSamples || []).forEach((code, index) => {
+      chunkCandidates.push({
+        title: page.title,
+        url: page.url,
+        text: `SOURCE CODE SAMPLE:\n${code}`,
+        chunk: 1000 + index,
+        publishedAt: page.publishedAt || null,
+        kind: "source-code",
+        publisherUrl: page.publisherUrl || null,
+        publisherName: page.publisherName || null,
+        searchScore: (page.searchScore || 0) + 1,
+      });
+    });
   }
 
   const allRankedChunks = await rankTexts(query, chunkCandidates, cfg);
@@ -764,7 +804,9 @@ RULES:
 - Lead with the most current verified fact. If the evidence explicitly gives a stable version and release date, state both in the opening sentence and cite it inline.
 - For feature/update questions, focus on the newest 2-5 verified features or releases. Do not include older historical releases when newer evidence is available.
 - Use a numbered list. For each item: feature name + version/release context, 1-3 concise sentences explaining what it does, and a short practical "Think:" example when useful.
-- For programming topics, include a code example only if the retrieved evidence itself contains enough syntax to support that example. Otherwise omit code. Never create an unrelated demo just to include code.
+- For programming topics, include code only when LIVE WEB EVIDENCE contains a block beginning with "SOURCE CODE SAMPLE:". Reproduce only a short relevant subset of that source-backed code. If no such block exists, omit code entirely.
+- Never emit "[object Object]", "[[object Object]]", or any internal serialization artifact.
+- Use simple inline citations like [1], [2]; do not invent any other citation syntax.
 - When a source URL is known, use a natural markdown link near the supported claim when helpful, in addition to the numbered citation marker.
 - Keep the tone conversational and useful, like a high-quality technical assistant answering in chat.
 - An article headline alone is not enough to establish a product version or feature as fact; require supporting evidence in the snippet/page text.
