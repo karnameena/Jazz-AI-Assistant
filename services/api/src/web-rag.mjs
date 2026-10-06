@@ -153,6 +153,9 @@ async function searchBingRss(query, cfg) {
     const link = item.match(/<link>([\s\S]*?)<\/link>/i)?.[1] || "";
     const description = item.match(/<description>([\s\S]*?)<\/description>/i)?.[1] || "";
     const pubDate = item.match(/<pubDate>([\s\S]*?)<\/pubDate>/i)?.[1] || "";
+    const sourceMatch = item.match(/<source[^>]+url=["']([^"']+)["'][^>]*>([\s\S]*?)<\/source>/i);
+    const publisherUrl = normalizeSearchUrl(decodeXml(sourceMatch?.[1] || "").trim());
+    const publisherName = stripTags(decodeXml(sourceMatch?.[2] || ""));
     const normalizedUrl = normalizeSearchUrl(decodeXml(link).trim());
     if (!normalizedUrl || !isPublicHttpUrl(normalizedUrl)) continue;
     results.push({
@@ -245,7 +248,7 @@ function sourceAuthorityBonus(query, item) {
   let bonus = 0;
 
   // A domain matching the main topic is a strong generic signal for first-party docs/sites.
-  if (topic && host.includes(topic.replace(/[^a-z0-9]/g, ""))) bonus += 2.5;
+  if (topic && host.includes(topic.replace(/[^a-z0-9]/g, ""))) bonus += 5;
 
   // Common primary-source hosts receive a modest boost without hard-coding a topic.
   if (/^(?:docs\.|developer\.)/.test(host)) bonus += 0.8;
@@ -268,7 +271,7 @@ function rankSearchResults(query, items) {
   return items
     .map(item => {
       const age = freshnessAgeDays(item.publishedAt);
-      const stalePenalty = fresh && age !== null && age > 730 ? -3 : fresh && age !== null && age > 365 ? -1.5 : 0;
+      const stalePenalty = fresh && age !== null && age > 730 ? -6 : fresh && age !== null && age > 365 ? -3 : 0;
       const authority = sourceAuthorityBonus(query, item);
       const recency = fresh ? freshnessBonus(item.publishedAt) * 6 : 0;
       return { ...item, searchScore: (item.relevance || 0) + authority + recency + stalePenalty };
@@ -319,6 +322,8 @@ async function searchGoogleNewsRss(query, cfg) {
       url: normalizedUrl,
       snippet: stripTags(decodeXml(description)),
       publishedAt: pubDate ? new Date(pubDate).toISOString() : null,
+      publisherUrl: publisherUrl && isPublicHttpUrl(publisherUrl) ? publisherUrl : null,
+      publisherName: publisherName || null,
       engine: "google-news-rss",
     });
   }
@@ -374,6 +379,14 @@ function isFreshnessQuery(query) {
   return /\b(latest|recent|today|current|right now|this week|news|updated|update|updates|new release|released)\b/i.test(String(query || ""));
 }
 
+function freshnessPenalty(publishedAt) {
+  const age = freshnessAgeDays(publishedAt);
+  if (age === null) return 0;
+  if (age > 730) return -0.45;
+  if (age > 365) return -0.25;
+  return 0;
+}
+
 function freshnessBonus(publishedAt) {
   if (!publishedAt) return 0;
   const time = Date.parse(publishedAt);
@@ -425,7 +438,7 @@ async function rankTexts(query, candidates, cfg) {
     return candidates
       .map(item => {
         const base = lexicalScore(query, item.text);
-        const freshness = isFreshnessQuery(query) ? freshnessBonus(item.publishedAt) : 0;
+        const freshness = isFreshnessQuery(query) ? freshnessBonus(item.publishedAt) + freshnessPenalty(item.publishedAt) : 0;
         const snippetBoost = isFreshnessQuery(query) && item.kind === "search-snippet" ? 0.08 : 0;
         return { ...item, score: base + freshness + snippetBoost };
       })
@@ -440,7 +453,7 @@ async function rankTexts(query, candidates, cfg) {
     return candidates
       .map((item, index) => {
         const semantic = dot(q, vectors[index + 1]);
-        const freshness = isFreshnessQuery(query) ? freshnessBonus(item.publishedAt) : 0;
+        const freshness = isFreshnessQuery(query) ? freshnessBonus(item.publishedAt) + freshnessPenalty(item.publishedAt) : 0;
         const snippetBoost = isFreshnessQuery(query) && item.kind === "search-snippet" ? 0.08 : 0;
         return { ...item, score: semantic + freshness + snippetBoost };
       })
@@ -450,7 +463,7 @@ async function rankTexts(query, candidates, cfg) {
     return candidates
       .map(item => {
         const base = lexicalScore(query, item.text);
-        const freshness = isFreshnessQuery(query) ? freshnessBonus(item.publishedAt) : 0;
+        const freshness = isFreshnessQuery(query) ? freshnessBonus(item.publishedAt) + freshnessPenalty(item.publishedAt) : 0;
         const snippetBoost = isFreshnessQuery(query) && item.kind === "search-snippet" ? 0.08 : 0;
         return { ...item, score: base + freshness + snippetBoost };
       })
@@ -520,43 +533,78 @@ function modePrefix(raw) {
   return match ? `[JAZZ_MODE:${match[1].toUpperCase()}]` : "";
 }
 
-function cleanEvidenceSources(sources) {
-  const list = Array.isArray(sources) ? sources : [];
-  const direct = list.filter(source => {
-    try { return new URL(source.url).hostname.toLowerCase() !== "news.google.com"; }
-    catch { return false; }
-  });
-  return direct.length >= 2 ? direct : list;
+function sourceIdentity(item) {
+  const rawUrl = item?.url || "";
+  try {
+    const host = new URL(rawUrl).hostname.toLowerCase();
+    if (host === "news.google.com" && item?.publisherUrl) {
+      return {
+        url: item.publisherUrl,
+        title: item.publisherName || item.title || item.publisherUrl,
+      };
+    }
+  } catch {}
+  return { url: rawUrl, title: item?.title || rawUrl };
 }
 
-function buildEvidence(rankedChunks, rankedResults) {
+function preferEvidenceChunks(query, rankedChunks) {
+  if (!isFreshnessQuery(query)) return rankedChunks;
+  const topic = primaryTopic(query).replace(/[^a-z0-9]/g, "");
+  const directFirstParty = rankedChunks.filter(chunk => {
+    try {
+      const host = new URL(chunk.url).hostname.toLowerCase().replace(/^www\./, "");
+      return topic && host.includes(topic);
+    } catch { return false; }
+  });
+  const recent = rankedChunks.filter(chunk => {
+    const age = freshnessAgeDays(chunk.publishedAt);
+    return age === null || age <= 365;
+  });
+
+  const ordered = [];
+  const seen = new Set();
+  for (const chunk of [...directFirstParty, ...recent, ...rankedChunks]) {
+    const key = `${chunk.url}#${chunk.chunk}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    ordered.push(chunk);
+  }
+  return ordered;
+}
+
+function buildEvidence(query, rankedChunks, rankedResults) {
   const sourceMap = new Map();
   let next = 1;
   const lines = [];
 
-  for (const chunk of rankedChunks) {
-    let sourceNo = sourceMap.get(chunk.url);
+  for (const chunk of preferEvidenceChunks(query, rankedChunks)) {
+    const identity = sourceIdentity(chunk);
+    if (!identity.url) continue;
+    let sourceNo = sourceMap.get(identity.url);
     if (!sourceNo) {
       sourceNo = next++;
-      sourceMap.set(chunk.url, sourceNo);
+      sourceMap.set(identity.url, { number: sourceNo, title: identity.title });
     }
-    lines.push(`[${sourceNo}] ${chunk.title}\nURL: ${chunk.url}${chunk.publishedAt ? `\nPublished: ${chunk.publishedAt}` : ""}\nEvidence: ${chunk.text.slice(0, 1600)}`);
+    lines.push(`[${sourceNo}] ${identity.title}\nURL: ${identity.url}${chunk.publishedAt ? `\nPublished: ${chunk.publishedAt}` : ""}\nEvidence: ${chunk.text.slice(0, 1600)}`);
   }
 
   if (!lines.length) {
     for (const item of rankedResults.slice(0, 5)) {
+      const identity = sourceIdentity(item);
+      if (!identity.url) continue;
       const sourceNo = next++;
-      sourceMap.set(item.url, sourceNo);
-      lines.push(`[${sourceNo}] ${item.title}\nURL: ${item.url}${item.publishedAt ? `\nPublished: ${item.publishedAt}` : ""}\nEvidence: ${item.snippet}`);
+      sourceMap.set(identity.url, { number: sourceNo, title: identity.title });
+      lines.push(`[${sourceNo}] ${identity.title}\nURL: ${identity.url}${item.publishedAt ? `\nPublished: ${item.publishedAt}` : ""}\nEvidence: ${item.snippet}`);
     }
   }
 
-  const sources = [...sourceMap.entries()].map(([url, number]) => {
-    const item = rankedResults.find(result => result.url === url);
-    return { number, title: item?.title || url, url };
-  });
+  const sources = [...sourceMap.entries()].map(([url, meta]) => ({
+    number: meta.number,
+    title: meta.title || url,
+    url,
+  }));
 
-  return { context: lines.join("\n\n"), sources: cleanEvidenceSources(sources) };
+  return { context: lines.join("\n\n"), sources };
 }
 
 export async function answerWithWebRag(rawMessage, systemInstruction, callOllama) {
@@ -594,6 +642,8 @@ export async function answerWithWebRag(rawMessage, systemInstruction, callOllama
       chunk: -1,
       kind: "search-snippet",
       publishedAt: item.publishedAt || null,
+      publisherUrl: item.publisherUrl || null,
+      publisherName: item.publisherName || null,
     });
   }
 
@@ -608,12 +658,14 @@ export async function answerWithWebRag(rawMessage, systemInstruction, callOllama
         chunk: index,
         publishedAt: page.publishedAt || null,
         kind: "page-chunk",
+        publisherUrl: page.publisherUrl || null,
+        publisherName: page.publisherName || null,
       });
     });
   }
 
   const rankedChunks = (await rankTexts(query, chunkCandidates, cfg)).slice(0, cfg.topChunks);
-  const evidence = buildEvidence(rankedChunks, rankedResults);
+  const evidence = buildEvidence(query, rankedChunks, rankedResults);
 
   const prompt = `${modePrefix(rawMessage)} Answer this user question using the live web evidence below.
 
@@ -633,6 +685,9 @@ RULES:
 - Use inline source markers like [1], [2] immediately after the claims they support.
 - Synthesize the evidence into a natural answer; do not dump source passages, source titles, or raw evidence blocks.
 - Lead with the most current verified fact, then summarize the most useful recent features/changes.
+- An article headline alone is not enough to establish a product version or feature as fact; require supporting evidence in the snippet/page text.
+- Prefer first-party documentation when it is present. Use secondary reporting only to supplement it.
+- If evidence for a claimed newest version conflicts or is only from secondary sources, say the newest version could not be verified instead of guessing.
 - Keep the answer concise and useful.
 - Do not expose internal model names, search-provider details, RAG mechanics, or say that the evidence is "untrusted".
 - For freshness-sensitive questions, prioritize evidence with explicit recent publication dates over undated archive/index content.
