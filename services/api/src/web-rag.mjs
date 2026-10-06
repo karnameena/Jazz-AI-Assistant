@@ -666,7 +666,7 @@ export async function answerWithWebRag(rawMessage, systemInstruction, callOllama
   // so "recent features" can use specific release articles instead of old archive text.
   const discovered = [];
   if (isFreshnessQuery(query)) {
-    for (const page of evidencePages) {
+    for (const page of pages) {
       if (!page.rawHtml) continue;
       const links = discoverRelevantChildLinks(page.rawHtml, page.url, query, 3);
       for (const link of links) {
@@ -696,7 +696,7 @@ export async function answerWithWebRag(rawMessage, systemInstruction, callOllama
     });
   }
 
-  for (const page of pages) {
+  for (const page of evidencePages) {
     const pieces = page.pageText ? chunkText(page.pageText) : [];
     if (!pieces.length && page.snippet) pieces.push(page.snippet);
     pieces.forEach((text, index) => {
