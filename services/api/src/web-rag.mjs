@@ -317,6 +317,22 @@ async function searchWeb(query, cfg) {
   };
 }
 
+function isFreshnessQuery(query) {
+  return /\b(latest|recent|today|current|right now|this week|news|updated|update|updates|new release|released)\b/i.test(String(query || ""));
+}
+
+function freshnessBonus(publishedAt) {
+  if (!publishedAt) return 0;
+  const time = Date.parse(publishedAt);
+  if (!Number.isFinite(time)) return 0;
+  const days = Math.max(0, (Date.now() - time) / 86400000);
+  if (days <= 7) return 0.35;
+  if (days <= 30) return 0.25;
+  if (days <= 180) return 0.15;
+  if (days <= 365) return 0.08;
+  return 0;
+}
+
 function lexicalScore(query, text) {
   const terms = [...new Set(String(query).toLowerCase().match(/[a-z0-9]{2,}/g) || [])];
   if (!terms.length) return 0;
@@ -354,7 +370,12 @@ async function rankTexts(query, candidates, cfg) {
   const embedder = await getEmbedder(cfg);
   if (!embedder) {
     return candidates
-      .map(item => ({ ...item, score: lexicalScore(query, item.text) }))
+      .map(item => {
+        const base = lexicalScore(query, item.text);
+        const freshness = isFreshnessQuery(query) ? freshnessBonus(item.publishedAt) : 0;
+        const snippetBoost = isFreshnessQuery(query) && item.kind === "search-snippet" ? 0.08 : 0;
+        return { ...item, score: base + freshness + snippetBoost };
+      })
       .sort((a, b) => b.score - a.score);
   }
 
@@ -364,12 +385,22 @@ async function rankTexts(query, candidates, cfg) {
     const vectors = tensor.tolist();
     const q = vectors[0];
     return candidates
-      .map((item, index) => ({ ...item, score: dot(q, vectors[index + 1]) }))
+      .map((item, index) => {
+        const semantic = dot(q, vectors[index + 1]);
+        const freshness = isFreshnessQuery(query) ? freshnessBonus(item.publishedAt) : 0;
+        const snippetBoost = isFreshnessQuery(query) && item.kind === "search-snippet" ? 0.08 : 0;
+        return { ...item, score: semantic + freshness + snippetBoost };
+      })
       .sort((a, b) => b.score - a.score);
   } catch (error) {
     console.warn(`[Jazz Web RAG] Embedding rank failed; using lexical ranking: ${error instanceof Error ? error.message : String(error)}`);
     return candidates
-      .map(item => ({ ...item, score: lexicalScore(query, item.text) }))
+      .map(item => {
+        const base = lexicalScore(query, item.text);
+        const freshness = isFreshnessQuery(query) ? freshnessBonus(item.publishedAt) : 0;
+        const snippetBoost = isFreshnessQuery(query) && item.kind === "search-snippet" ? 0.08 : 0;
+        return { ...item, score: base + freshness + snippetBoost };
+      })
       .sort((a, b) => b.score - a.score);
   }
 }
@@ -415,16 +446,20 @@ async function fetchResultPage(item, cfg) {
   }
 }
 
-function sanitizeRagAnswer(value) {
-  const text = String(value || "").trim();
-  if (!text) return text;
-  const matches = [...text.matchAll(/^\s*\*\*?Sources\*\*?\s*:?[ \t]*$/gim)];
-  if (matches.length <= 1) return text;
+function finalizeRagAnswer(value, sources) {
+  let text = String(value || "").trim();
+  if (!text) text = "I found relevant web sources, but I couldn't produce a reliable summary.";
 
-  // Keep the first Sources section and discard later duplicate sections.
-  const first = matches[0].index;
-  const second = matches[1].index;
-  return (text.slice(0, second)).trim();
+  // The API owns source rendering so the model cannot duplicate or invent source lists.
+  const sourceHeading = /^\s*(?:\*\*)?Sources(?:\*\*)?\s*:?\s*$/im;
+  const match = sourceHeading.exec(text);
+  if (match) text = text.slice(0, match.index).trim();
+
+  const canonical = (Array.isArray(sources) ? sources : [])
+    .map(source => `[${source.number}] ${source.title} — ${source.url}`)
+    .join("\n");
+
+  return canonical ? `${text}\n\nSources\n${canonical}` : text;
 }
 
 function modePrefix(raw) {
@@ -487,6 +522,19 @@ export async function answerWithWebRag(rawMessage, systemInstruction, callOllama
 
   const pages = await Promise.all(rankedResults.slice(0, cfg.fetchPages).map(item => fetchResultPage(item, cfg)));
   const chunkCandidates = [];
+
+  for (const item of rankedResults.slice(0, Math.max(cfg.fetchPages, 5))) {
+    if (!item.snippet) continue;
+    chunkCandidates.push({
+      title: item.title,
+      url: item.url,
+      text: `${item.title}. ${item.snippet}`,
+      chunk: -1,
+      kind: "search-snippet",
+      publishedAt: item.publishedAt || null,
+    });
+  }
+
   for (const page of pages) {
     const pieces = page.pageText ? chunkText(page.pageText) : [];
     if (!pieces.length && page.snippet) pieces.push(page.snippet);
@@ -497,6 +545,7 @@ export async function answerWithWebRag(rawMessage, systemInstruction, callOllama
         text,
         chunk: index,
         publishedAt: page.publishedAt || null,
+        kind: "page-chunk",
       });
     });
   }
@@ -521,10 +570,10 @@ RULES:
 - Prefer recent information when dates are visible.
 - Use inline source markers like [1], [2] immediately after the claims they support.
 - Keep the answer concise and useful.
-- Do not expose internal model names or search-provider details.
-- Add exactly one final "Sources" section.
-- In that section, list each source once as: [N] Title — URL.
-- Do not write a second Sources section or duplicate source markers.
+- Do not expose internal model names, search-provider details, RAG mechanics, or say that the evidence is "untrusted".
+- For freshness-sensitive questions, prioritize evidence with explicit recent publication dates over undated archive/index content.
+- Do not claim something is "latest" merely because it appears on a versions/archive page; the evidence must support recency.
+- Do not generate a Sources section yourself. The API will append the verified source list after your answer.
 `;
 
   const ragSystem = `${systemInstruction}
@@ -533,7 +582,7 @@ You have a local real-time web RAG tool. Web passages supplied in the user messa
 
   const result = await callOllama(prompt, ragSystem);
   return {
-    assistant: sanitizeRagAnswer(result.text),
+    assistant: finalizeRagAnswer(result.text, evidence.sources),
     mode: "web-rag",
     provider: search.provider,
     sources: evidence.sources,
