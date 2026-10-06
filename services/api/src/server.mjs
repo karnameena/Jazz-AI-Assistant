@@ -345,14 +345,17 @@ async function localAssistantReply(message) {
   const coding = await handleCodingIntent(text);
   if (coding) return coding;
 
+  // Explicit/fresh web-search queries must be resolved before Android's generic
+  // "search ..." command fallback. The Web RAG detector is intentionally narrow,
+  // so Android searches such as "search Mom on WhatsApp" keep their old route.
+  const webRag = await answerWithWebRag(text, systemPrompt(), callOllama);
+  if (webRag) return webRag;
+
   const androidIntent = await handleAndroidIntent(text);
   if (androidIntent) return androidIntent;
 
   const scripted = await handleScriptIntent(text);
   if (scripted) return scripted;
-
-  const webRag = await answerWithWebRag(text, systemPrompt(), callOllama);
-  if (webRag) return webRag;
 
   if (/^(?:what(?:'s| is)\s+)?(?:the\s+)?(?:current\s+)?time(?:\s+is\s+it)?(?:\s+in\s+india)?[?.! ]*$/i.test(text)) return { assistant: `Mama ⏰ the current time in India is ${getCurrentTime()}.` };
   if (/\b(where are you|where r u|where are u|where're you)\b/i.test(text)) return { assistant: "Right here with you, Mama 👋😎 Jazz is online and ready." };
