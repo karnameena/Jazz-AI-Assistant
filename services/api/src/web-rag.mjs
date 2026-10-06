@@ -229,10 +229,24 @@ function relevanceScore(query, item) {
   return score;
 }
 
+function isLikelyTopicMatch(query, item) {
+  const topic = primaryTopic(query).toLowerCase();
+  if (!topic) return true;
+  const hay = `${item?.title || ""} ${item?.snippet || ""} ${item?.url || ""}`.toLowerCase();
+
+  // For technical-library style queries, require nearby software/dev context when
+  // the topic word is also a common English verb (for example "react").
+  if (topic === "react") {
+    return /\breact(?:js)?\b/.test(hay) &&
+      /\b(javascript|frontend|framework|library|component|hook|server|ssr|jsx|developer|meta|npm|react\.dev|reactjs)\b/.test(hay);
+  }
+  return hay.includes(topic);
+}
+
 function filterRelevant(query, items) {
   const scored = items
     .map(item => ({ ...item, relevance: relevanceScore(query, item) }))
-    .filter(item => item.relevance > 0)
+    .filter(item => item.relevance > 0 && isLikelyTopicMatch(query, item))
     .sort((a, b) => b.relevance - a.relevance);
   return scored;
 }
@@ -443,7 +457,8 @@ async function rankTexts(query, candidates, cfg) {
         const base = lexicalScore(query, item.text);
         const freshness = isFreshnessQuery(query) ? freshnessBonus(item.publishedAt) + freshnessPenalty(item.publishedAt) : 0;
         const snippetBoost = isFreshnessQuery(query) && item.kind === "search-snippet" ? 0.08 : 0;
-        return { ...item, score: base + freshness + snippetBoost };
+        const authorityBoost = Number(item.searchScore || 0) * 0.06;
+        return { ...item, score: base + freshness + snippetBoost + authorityBoost };
       })
       .sort((a, b) => b.score - a.score);
   }
@@ -458,7 +473,8 @@ async function rankTexts(query, candidates, cfg) {
         const semantic = dot(q, vectors[index + 1]);
         const freshness = isFreshnessQuery(query) ? freshnessBonus(item.publishedAt) + freshnessPenalty(item.publishedAt) : 0;
         const snippetBoost = isFreshnessQuery(query) && item.kind === "search-snippet" ? 0.08 : 0;
-        return { ...item, score: semantic + freshness + snippetBoost };
+        const authorityBoost = Number(item.searchScore || 0) * 0.06;
+        return { ...item, score: semantic + freshness + snippetBoost + authorityBoost };
       })
       .sort((a, b) => b.score - a.score);
   } catch (error) {
@@ -468,7 +484,8 @@ async function rankTexts(query, candidates, cfg) {
         const base = lexicalScore(query, item.text);
         const freshness = isFreshnessQuery(query) ? freshnessBonus(item.publishedAt) + freshnessPenalty(item.publishedAt) : 0;
         const snippetBoost = isFreshnessQuery(query) && item.kind === "search-snippet" ? 0.08 : 0;
-        return { ...item, score: base + freshness + snippetBoost };
+        const authorityBoost = Number(item.searchScore || 0) * 0.06;
+        return { ...item, score: base + freshness + snippetBoost + authorityBoost };
       })
       .sort((a, b) => b.score - a.score);
   }
@@ -565,16 +582,9 @@ function modePrefix(raw) {
 
 function sourceIdentity(item) {
   const rawUrl = item?.url || "";
-  try {
-    const host = new URL(rawUrl).hostname.toLowerCase();
-    if (host === "news.google.com" && item?.publisherUrl) {
-      return {
-        url: item.publisherUrl,
-        title: item.publisherName || item.title || item.publisherUrl,
-      };
-    }
-  } catch {}
-  return { url: rawUrl, title: item?.title || rawUrl };
+  // Do not replace a Google News article with a publisher homepage: that loses
+  // the actual evidence location and makes the source look more authoritative than it is.
+  return { url: rawUrl, title: item?.title || item?.publisherName || rawUrl };
 }
 
 function preferEvidenceChunks(query, rankedChunks) {
@@ -602,12 +612,27 @@ function preferEvidenceChunks(query, rankedChunks) {
   return ordered;
 }
 
+function preferFirstPartyEvidence(query, chunks) {
+  if (!isFreshnessQuery(query)) return chunks;
+  const topic = primaryTopic(query).replace(/[^a-z0-9]/g, "");
+  const firstParty = chunks.filter(chunk => {
+    try {
+      const host = new URL(chunk.url).hostname.toLowerCase().replace(/^www\./, "");
+      return topic && host.includes(topic);
+    } catch { return false; }
+  });
+  if (!firstParty.length) return chunks;
+
+  const supporting = chunks.filter(chunk => !firstParty.includes(chunk)).slice(0, 2);
+  return [...firstParty, ...supporting];
+}
+
 function buildEvidence(query, rankedChunks, rankedResults) {
   const sourceMap = new Map();
   let next = 1;
   const lines = [];
 
-  for (const chunk of preferEvidenceChunks(query, rankedChunks)) {
+  for (const chunk of preferFirstPartyEvidence(query, preferEvidenceChunks(query, rankedChunks))) {
     const identity = sourceIdentity(chunk);
     if (!identity.url) continue;
     let sourceNo = sourceMap.get(identity.url);
@@ -693,6 +718,7 @@ export async function answerWithWebRag(rawMessage, systemInstruction, callOllama
       publishedAt: item.publishedAt || null,
       publisherUrl: item.publisherUrl || null,
       publisherName: item.publisherName || null,
+      searchScore: item.searchScore || 0,
     });
   }
 
@@ -709,11 +735,13 @@ export async function answerWithWebRag(rawMessage, systemInstruction, callOllama
         kind: "page-chunk",
         publisherUrl: page.publisherUrl || null,
         publisherName: page.publisherName || null,
+        searchScore: page.searchScore || 0,
       });
     });
   }
 
-  const rankedChunks = (await rankTexts(query, chunkCandidates, cfg)).slice(0, cfg.topChunks);
+  const allRankedChunks = await rankTexts(query, chunkCandidates, cfg);
+  const rankedChunks = preferEvidenceChunks(query, allRankedChunks).slice(0, cfg.topChunks);
   const evidence = buildEvidence(query, rankedChunks, rankedResults);
 
   const prompt = `${modePrefix(rawMessage)} Answer this user question using the live web evidence below.
@@ -736,11 +764,12 @@ RULES:
 - Lead with the most current verified fact. If the evidence explicitly gives a stable version and release date, state both in the opening sentence and cite it inline.
 - For feature/update questions, focus on the newest 2-5 verified features or releases. Do not include older historical releases when newer evidence is available.
 - Use a numbered list. For each item: feature name + version/release context, 1-3 concise sentences explaining what it does, and a short practical "Think:" example when useful.
-- For programming topics, include a small code example only when exact API syntax or an equivalent code pattern appears in the retrieved evidence. Otherwise omit code rather than inventing it. Keep examples short and syntactically valid.
+- For programming topics, include a code example only if the retrieved evidence itself contains enough syntax to support that example. Otherwise omit code. Never create an unrelated demo just to include code.
 - When a source URL is known, use a natural markdown link near the supported claim when helpful, in addition to the numbered citation marker.
 - Keep the tone conversational and useful, like a high-quality technical assistant answering in chat.
 - An article headline alone is not enough to establish a product version or feature as fact; require supporting evidence in the snippet/page text.
-- Prefer first-party documentation when it is present. Use secondary reporting only to supplement it.
+- Prefer first-party documentation when it is present. If first-party evidence exists, base the core answer on it and use secondary reporting only to supplement it.
+- Do not include unrelated or historical items merely because they contain the topic word.
 - If evidence for a claimed newest version conflicts or is only from secondary sources, say the newest version could not be verified instead of guessing.
 - Keep the answer concise and useful.
 - Do not expose internal model names, search-provider details, RAG mechanics, or say that the evidence is "untrusted".
