@@ -128,33 +128,81 @@ async function searchSearxng(query, cfg) {
     .slice(0, cfg.maxResults);
 }
 
-async function searchDuckDuckGo(query, cfg) {
-  const body = new URLSearchParams({ q: query, kl: "wt-wt" });
-  const html = await fetchText("https://html.duckduckgo.com/html/", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: body.toString(),
+function decodeXml(value) {
+  return decodeHtml(String(value || "")
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1"));
+}
+
+async function searchBingRss(query, cfg) {
+  const url = new URL("https://www.bing.com/search");
+  url.searchParams.set("q", query);
+  url.searchParams.set("format", "rss");
+  url.searchParams.set("setlang", "en-us");
+  const xml = await fetchText(url.toString(), {
+    headers: {
+      Accept: "application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.8",
+    },
   }, 8000);
 
   const results = [];
-  const blockRegex = /<div[^>]+class="[^"]*result[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/gi;
-  let block;
-  while ((block = blockRegex.exec(html)) && results.length < cfg.maxResults) {
-    const chunk = block[1];
-    const link = chunk.match(/<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
-    if (!link) continue;
-    const snippet = chunk.match(/<(?:a|div)[^>]+class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/(?:a|div)>/i);
-    const url = normalizeSearchUrl(link[1]);
-    if (!url || !isPublicHttpUrl(url)) continue;
+  const itemRegex = /<item>([\s\S]*?)<\/item>/gi;
+  let match;
+  while ((match = itemRegex.exec(xml)) && results.length < cfg.maxResults) {
+    const item = match[1];
+    const title = item.match(/<title>([\s\S]*?)<\/title>/i)?.[1] || "";
+    const link = item.match(/<link>([\s\S]*?)<\/link>/i)?.[1] || "";
+    const description = item.match(/<description>([\s\S]*?)<\/description>/i)?.[1] || "";
+    const normalizedUrl = normalizeSearchUrl(decodeXml(link).trim());
+    if (!normalizedUrl || !isPublicHttpUrl(normalizedUrl)) continue;
     results.push({
-      title: stripTags(link[2]),
-      url,
-      snippet: stripTags(snippet?.[1] || ""),
-      engine: "duckduckgo",
+      title: stripTags(decodeXml(title)),
+      url: normalizedUrl,
+      snippet: stripTags(decodeXml(description)),
+      engine: "bing-rss",
     });
   }
-
   return results;
+}
+
+async function searchDuckDuckGo(query, cfg) {
+  const endpoints = [
+    `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}&kl=wt-wt`,
+    `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}&kl=wt-wt`,
+  ];
+
+  for (const endpoint of endpoints) {
+    let html;
+    try {
+      html = await fetchText(endpoint, {}, 8000);
+    } catch {
+      continue;
+    }
+
+    const results = [];
+    const linkRegex = /<a[^>]+(?:class="[^"]*(?:result__a|result-link)[^"]*"[^>]+)?href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+    let match;
+    while ((match = linkRegex.exec(html)) && results.length < cfg.maxResults) {
+      const url = normalizeSearchUrl(match[1]);
+      const title = stripTags(match[2]);
+      if (!url || !title || !isPublicHttpUrl(url)) continue;
+      if (/duckduckgo\.com/i.test(new URL(url).hostname)) continue;
+
+      const after = html.slice(match.index + match[0].length, match.index + match[0].length + 1800);
+      const snippetMatch =
+        after.match(/<(?:a|div|td)[^>]+class=["'][^"']*(?:result__snippet|result-snippet)[^"']*["'][^>]*>([\s\S]*?)<\/(?:a|div|td)>/i)
+        || after.match(/<td[^>]*class=["']result-snippet["'][^>]*>([\s\S]*?)<\/td>/i);
+
+      results.push({
+        title,
+        url,
+        snippet: stripTags(snippetMatch?.[1] || ""),
+        engine: endpoint.includes("lite.") ? "duckduckgo-lite" : "duckduckgo-html",
+      });
+    }
+    if (results.length) return results;
+  }
+
+  return [];
 }
 
 async function searchWeb(query, cfg) {
@@ -163,11 +211,25 @@ async function searchWeb(query, cfg) {
       const items = await searchSearxng(query, cfg);
       if (items.length) return { provider: "searxng", items };
     } catch (error) {
-      console.warn(`[Jazz Web RAG] SearXNG unavailable; falling back to DuckDuckGo HTML: ${error instanceof Error ? error.message : String(error)}`);
+      console.warn(`[Jazz Web RAG] SearXNG unavailable: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
-  const items = await searchDuckDuckGo(query, cfg);
-  return { provider: "duckduckgo", items };
+
+  try {
+    const items = await searchBingRss(query, cfg);
+    if (items.length) return { provider: "bing-rss", items };
+  } catch (error) {
+    console.warn(`[Jazz Web RAG] Bing RSS unavailable: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  try {
+    const items = await searchDuckDuckGo(query, cfg);
+    if (items.length) return { provider: "duckduckgo", items };
+  } catch (error) {
+    console.warn(`[Jazz Web RAG] DuckDuckGo unavailable: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  return { provider: cfg.searxngUrl ? "searxng/bing-rss/duckduckgo" : "bing-rss/duckduckgo", items: [] };
 }
 
 function lexicalScore(query, text) {
@@ -380,7 +442,7 @@ export async function getWebRagStatus() {
   const cfg = config();
   return {
     enabled: cfg.enabled,
-    provider: cfg.searxngUrl ? "searxng-with-duckduckgo-fallback" : "duckduckgo-html",
+    provider: cfg.searxngUrl ? "searxng-with-bing-rss-and-duckduckgo-fallback" : "bing-rss-with-duckduckgo-fallback",
     searxngConfigured: Boolean(cfg.searxngUrl),
     embeddingsConfigured: cfg.embeddings,
     embeddingModel: cfg.embeddingModel,
