@@ -205,31 +205,116 @@ async function searchDuckDuckGo(query, cfg) {
   return [];
 }
 
-async function searchWeb(query, cfg) {
-  if (cfg.searxngUrl) {
+
+function queryKeywords(query) {
+  const stop = new Set(["the","and","for","with","from","this","that","what","when","where","which","who","how","latest","recent","current","today","news","updates","update","about","tell","give","show","find","search","web"]);
+  return [...new Set((String(query).toLowerCase().match(/[a-z0-9.+#-]{2,}/g) || []).filter(term => !stop.has(term)))];
+}
+
+function relevanceScore(query, item) {
+  const keywords = queryKeywords(query);
+  if (!keywords.length) return 1;
+  const title = String(item?.title || "").toLowerCase();
+  const snippet = String(item?.snippet || "").toLowerCase();
+  let score = 0;
+  for (const keyword of keywords) {
+    if (title.includes(keyword)) score += 3;
+    else if (snippet.includes(keyword)) score += 1;
+  }
+  return score;
+}
+
+function filterRelevant(query, items) {
+  const scored = items
+    .map(item => ({ ...item, relevance: relevanceScore(query, item) }))
+    .filter(item => item.relevance > 0)
+    .sort((a, b) => b.relevance - a.relevance);
+  return scored;
+}
+
+function dedupeResults(items) {
+  const seen = new Set();
+  const out = [];
+  for (const item of items) {
     try {
-      const items = await searchSearxng(query, cfg);
-      if (items.length) return { provider: "searxng", items };
+      const url = new URL(item.url);
+      url.hash = "";
+      ["utm_source","utm_medium","utm_campaign","utm_term","utm_content"].forEach(key => url.searchParams.delete(key));
+      const key = url.toString().replace(/\/$/, "");
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ ...item, url: key });
+    } catch {}
+  }
+  return out;
+}
+
+async function searchGoogleNewsRss(query, cfg) {
+  const url = new URL("https://news.google.com/rss/search");
+  url.searchParams.set("q", query);
+  url.searchParams.set("hl", "en-IN");
+  url.searchParams.set("gl", "IN");
+  url.searchParams.set("ceid", "IN:en");
+  const xml = await fetchText(url.toString(), {
+    headers: { Accept: "application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.8" },
+  }, 8000);
+
+  const results = [];
+  const itemRegex = /<item>([\s\S]*?)<\/item>/gi;
+  let match;
+  while ((match = itemRegex.exec(xml)) && results.length < cfg.maxResults) {
+    const item = match[1];
+    const title = item.match(/<title>([\s\S]*?)<\/title>/i)?.[1] || "";
+    const link = item.match(/<link>([\s\S]*?)<\/link>/i)?.[1] || "";
+    const description = item.match(/<description>([\s\S]*?)<\/description>/i)?.[1] || "";
+    const pubDate = item.match(/<pubDate>([\s\S]*?)<\/pubDate>/i)?.[1] || "";
+    const normalizedUrl = normalizeSearchUrl(decodeXml(link).trim());
+    if (!normalizedUrl || !isPublicHttpUrl(normalizedUrl)) continue;
+    results.push({
+      title: stripTags(decodeXml(title)),
+      url: normalizedUrl,
+      snippet: stripTags(decodeXml(description)),
+      publishedAt: pubDate ? new Date(pubDate).toISOString() : null,
+      engine: "google-news-rss",
+    });
+  }
+  return results;
+}
+
+async function searchWeb(query, cfg) {
+  const providers = [];
+
+  if (cfg.searxngUrl) {
+    providers.push(["searxng", () => searchSearxng(query, cfg)]);
+  }
+
+  if (/\b(latest|recent|today|news|update|updates|this week|current)\b/i.test(query)) {
+    providers.push(["google-news-rss", () => searchGoogleNewsRss(query, cfg)]);
+  }
+
+  providers.push(
+    ["bing-rss", () => searchBingRss(query, cfg)],
+    ["duckduckgo", () => searchDuckDuckGo(query, cfg)],
+  );
+
+  const settled = await Promise.all(providers.map(async ([name, run]) => {
+    try {
+      const items = await run();
+      return { name, items: filterRelevant(query, items) };
     } catch (error) {
-      console.warn(`[Jazz Web RAG] SearXNG unavailable: ${error instanceof Error ? error.message : String(error)}`);
+      console.warn(`[Jazz Web RAG] ${name} unavailable: ${error instanceof Error ? error.message : String(error)}`);
+      return { name, items: [] };
     }
-  }
+  }));
 
-  try {
-    const items = await searchBingRss(query, cfg);
-    if (items.length) return { provider: "bing-rss", items };
-  } catch (error) {
-    console.warn(`[Jazz Web RAG] Bing RSS unavailable: ${error instanceof Error ? error.message : String(error)}`);
-  }
+  const merged = dedupeResults(settled.flatMap(result => result.items))
+    .sort((a, b) => (b.relevance || 0) - (a.relevance || 0))
+    .slice(0, Math.max(cfg.maxResults, 10));
 
-  try {
-    const items = await searchDuckDuckGo(query, cfg);
-    if (items.length) return { provider: "duckduckgo", items };
-  } catch (error) {
-    console.warn(`[Jazz Web RAG] DuckDuckGo unavailable: ${error instanceof Error ? error.message : String(error)}`);
-  }
-
-  return { provider: cfg.searxngUrl ? "searxng/bing-rss/duckduckgo" : "bing-rss/duckduckgo", items: [] };
+  return {
+    provider: settled.filter(result => result.items.length).map(result => result.name).join("+") || "none",
+    items: merged,
+  };
 }
 
 function lexicalScore(query, text) {
@@ -442,7 +527,7 @@ export async function getWebRagStatus() {
   const cfg = config();
   return {
     enabled: cfg.enabled,
-    provider: cfg.searxngUrl ? "searxng-with-bing-rss-and-duckduckgo-fallback" : "bing-rss-with-duckduckgo-fallback",
+    provider: cfg.searxngUrl ? "multi-source:searxng+google-news-rss+bing-rss+duckduckgo" : "multi-source:google-news-rss+bing-rss+duckduckgo",
     searxngConfigured: Boolean(cfg.searxngUrl),
     embeddingsConfigured: cfg.embeddings,
     embeddingModel: cfg.embeddingModel,
