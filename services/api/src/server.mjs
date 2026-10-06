@@ -490,7 +490,7 @@ const jazzWhatsApp = await createJazzWhatsApp({ assistantReply, visionReply: ans
   }
   return result;
 } });
-console.log("[JazzWhatsApp] client API 1.0.6 ready: bulk delete, verified model modes, reminder follow-ups");
+console.log("[JazzWhatsApp] client API 1.0.7 ready: bulk delete, verified model modes, reminder follow-ups");
 const jazzWhatsAppTimer = setInterval(() => void jazzWhatsApp.tick().catch(error => console.warn("[JazzWhatsApp] scheduler:", error.message)), 1000);
 jazzWhatsAppTimer.unref();
 

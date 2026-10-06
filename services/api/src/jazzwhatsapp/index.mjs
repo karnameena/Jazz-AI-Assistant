@@ -83,7 +83,7 @@ export async function createJazzWhatsApp({
       if (socket.readyState === 1) socket.send(event);
   };
   const publicState = () => ({
-    apiVersion: "1.0.6",
+    apiVersion: "1.0.7",
     capabilities: ["clear-chat", "bulk-delete", "model-modes", "reminder-followup", "image-questions", "call-resume"],
     assistantMode: state.assistantMode,
     assistantModel: state.assistantModel || null,
@@ -308,7 +308,7 @@ export async function createJazzWhatsApp({
       return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
     };
     try {
-      if (route === "/version" && req.method === "GET") return reply(200, {ok: true, apiVersion: "1.0.6"});
+      if (route === "/version" && req.method === "GET") return reply(200, {ok: true, apiVersion: "1.0.7"});
       if (route === "/auth" && req.method === "POST") {
         const ip = req.socket.remoteAddress;
         const entry = attempts.get(ip) || { count: 0, time: clock() };
@@ -589,7 +589,7 @@ export async function createJazzWhatsApp({
           await save();
           return msg;
         });
-        return reply(200, { message: incoming, assistant: outgoing, assistantMode: state.assistantMode, assistantModel: state.assistantModel, apiVersion: "1.0.6" });
+        return reply(200, { message: incoming, assistant: outgoing, assistantMode: state.assistantMode, assistantModel: state.assistantModel, apiVersion: "1.0.7" });
       }
       const body = req.method === "POST" ? await parseJson(req) : {};
       return await lock(async () => {

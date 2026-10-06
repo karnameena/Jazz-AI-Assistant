@@ -14,7 +14,7 @@ try {
     & .\gradlew.bat --no-daemon assembleDebug lintDebug --console=plain
     if ($LASTEXITCODE -ne 0) { throw 'Android build or lint failed. Share the error output; no APK was delivered.' }
     New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
-    $apk = Join-Path $OutputDirectory 'JazzAi-1.0.6.apk'
+    $apk = Join-Path $OutputDirectory 'JazzAi-1.0.7.apk'
     Copy-Item '.\app\build\outputs\apk\debug\app-debug.apk' $apk -Force
     Write-Host "Built APK: $apk"
     Write-Host 'Install this APK on your phone/tablet, then allow microphone, notification and camera permissions as needed.'

@@ -14,7 +14,27 @@ import org.json.*;
 
 public class MainActivity extends Activity {
   public static volatile boolean chatVisible;
-  private boolean resumed;
+  private boolean resumed, chatRequested;
+  private static final java.util.Set<MainActivity> visibleChats = java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<MainActivity, Boolean>());
+  private void updateChatVisibility() {
+    if (resumed && hasWindowFocus() && chatRequested) visibleChats.add(this); else visibleChats.remove(this);
+    chatVisible = !visibleChats.isEmpty();
+    if (chatVisible) { NotificationManager manager = getSystemService(NotificationManager.class); for (android.service.notification.StatusBarNotification n : manager.getActiveNotifications()) if ("messages".equals(n.getNotification().getChannelId())) manager.cancel(n.getId()); }
+  }
+  public void onWindowFocusChanged(boolean focused) { super.onWindowFocusChanged(focused); updateChatVisibility(); }
+  private void clearSession() {
+    final String active = VoiceService.activeCall();
+    if (active != null) try { Api.call(this, "/call-action", Api.json("id", new JSONObject(active).optString("id"), "action", "end"), (data, error) -> {}); } catch (Exception ignored) {}
+    Outbox.clear(this);
+    Api.prefs(this).edit().remove("token").putLong("sessionEpoch", Api.prefs(this).getLong("sessionEpoch", 0) + 1).apply();
+    stopService(new Intent(this, VoiceService.class));
+    stopService(new Intent(this, RealtimeService.class));
+    for (String id : JazzConnectionService.connections.keySet()) JazzConnectionService.finish(id);
+    if (!Notifications.ringingId.isEmpty()) Notifications.cancelIncoming(this, Notifications.ringingId);
+    getSystemService(NotificationManager.class).cancelAll();
+    RealtimeService.status = "Disconnected";
+    call = null; autoAnswer = false;
+  }
 
 
   protected WebView web;
@@ -151,8 +171,15 @@ public class MainActivity extends Activity {
   }
 
   public class Bridge {
+    @JavascriptInterface public void configureVoice(String mode) { Api.prefs(MainActivity.this).edit().putString("tts", "server".equals(mode) ? "server" : "android").apply(); }
+    @JavascriptInterface public void ttsSettings() { runOnUiThread(() -> { try { startActivity(new Intent("com.android.settings.TTS_SETTINGS")); } catch (Exception e) { startActivity(new Intent(Settings.ACTION_SETTINGS)); } }); }
+    @JavascriptInterface public void signOut() { runOnUiThread(() -> {
+      Api.call(MainActivity.this, "/logout", Api.json(), (data, error) -> {});
+      clearSession();
+      dispatch(Api.json("type", "signedOut").toString());
+    }); }
     @JavascriptInterface public void enqueue(String raw) { Outbox.enqueue(MainActivity.this, raw); }
-    @JavascriptInterface public void chatVisible(boolean value) { chatVisible = resumed && value; }
+    @JavascriptInterface public void chatVisible(boolean value) { runOnUiThread(() -> { chatRequested = value; updateChatVisibility(); }); }
     @JavascriptInterface public void notificationSettings() { runOnUiThread(() -> startActivity(new Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS"))); }
 
     @JavascriptInterface
@@ -189,8 +216,12 @@ public class MainActivity extends Activity {
         try {
           if (!route.matches("/[a-z-]+")) throw new Exception("Invalid route");
           JSONObject body = raw.equals("null") ? null : new JSONObject(raw);
-          Api.call(MainActivity.this, route, body, (data, error) -> {
+          if (route.equals("/logout")) { Api.call(MainActivity.this, route, body, (data, error) -> {}); clearSession(); callback(id, Api.json("ok", "true"), null); return; }
+          final long sessionEpoch = Api.prefs(MainActivity.this).getLong("sessionEpoch", 0);
+          Api.call(MainActivity.this, route, body, (data, error) -> runOnUiThread(() -> {
+            if (sessionEpoch != Api.prefs(MainActivity.this).getLong("sessionEpoch", 0)) { callback(id, null, "Connection changed"); return; }
             if (error == null && route.equals("/auth")) {
+              if (data.optString("token").isEmpty()) { callback(id, null, "Server did not return a login token"); return; }
               Api.prefs(MainActivity.this)
                 .edit()
                 .putString("token", data.optString("token"))
@@ -199,13 +230,8 @@ public class MainActivity extends Activity {
               runOnUiThread(() -> startConnection());
             }
             if (error == null && route.equals("/clear-chat")) Outbox.clear(MainActivity.this);
-            if (error == null && route.equals("/logout")) {
-              Outbox.clear(MainActivity.this);
-              Api.prefs(MainActivity.this).edit().remove("token").apply();
-              stopService(new Intent(MainActivity.this, RealtimeService.class));
-            }
             callback(id, data, error);
-          });
+          }));
         } catch (Exception e) {
           callback(id, null, e.getMessage());
         }
@@ -224,17 +250,14 @@ public class MainActivity extends Activity {
             u.getQuery() != null
           ) throw new Exception();
           String clean = url.replaceAll("/+$", "");
-          if (!clean.equals(Api.base(MainActivity.this))) {
-            Outbox.clear(MainActivity.this);
-              Api.prefs(MainActivity.this).edit().remove("token").apply();
-            stopService(new Intent(MainActivity.this, RealtimeService.class));
-          }
+          boolean changed = !clean.equals(Api.base(MainActivity.this));
+          if (changed) clearSession();
           Api.prefs(MainActivity.this)
             .edit()
             .putString("base", clean)
             .putString("stt", stt.equals("android") ? "android" : "local")
             .apply();
-          dispatch(Api.json("type", "configured").toString());
+          dispatch(Api.json("type", "configured", "base", clean, "changed", String.valueOf(changed)).toString());
         } catch (Exception e) {
           dispatch(
             Api.json(
@@ -653,19 +676,20 @@ public class MainActivity extends Activity {
   }
 
   protected void onPause() {
-    resumed = false; chatVisible = false;
+    resumed = false; updateChatVisibility();
     if (loaded) dispatch(Api.json("type", "cameraPaused").toString());
     super.onPause();
   }
 
   protected void onResume() {
     super.onResume();
-    resumed = true;
+    resumed = true; updateChatVisibility();
     if (loaded) web.evaluateJavascript("Native.chatVisible(typeof page !== 'undefined' && page === 'chat')", null);
     if (loaded) dispatch(Api.json("type", "cameraResumed").toString());
   }
 
   protected void onDestroy() {
+    resumed = false; updateChatVisibility();
     unregisterReceiver(events);
     if (dictation != null) dictation.destroy();
     web.removeJavascriptInterface("Native");

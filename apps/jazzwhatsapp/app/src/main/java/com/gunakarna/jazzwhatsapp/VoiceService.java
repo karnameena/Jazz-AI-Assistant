@@ -22,7 +22,9 @@ public class VoiceService extends Service {
   private AudioRecord recorder;
   private volatile boolean running, muted;
   private boolean speaking, ttsReady;
-  private String callJson = "{}";
+  private String callJson = "{}", callBase = "";
+  private String pendingSpeech;
+  private boolean ttsFailed;
   public static String activeCall() {
     VoiceService service = instance;
     return service != null && service.running ? service.callJson : null;
@@ -58,7 +60,13 @@ public class VoiceService extends Service {
     a.setSpeakerphoneOn(true);
     tts = new TextToSpeech(this, status -> {
       ttsReady = status == TextToSpeech.SUCCESS;
-      if (ttsReady) tts.setLanguage(Locale.ENGLISH);
+      if (ttsReady) {
+        int language = tts.setLanguage(Locale.ENGLISH);
+        ttsReady = language != TextToSpeech.LANG_MISSING_DATA && language != TextToSpeech.LANG_NOT_SUPPORTED;
+        tts.setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build());
+      }
+      ttsFailed = !ttsReady;
+      h.post(() -> { if (pendingSpeech != null && running) { String text = pendingSpeech; pendingSpeech = null; fallback(text, epoch); } });
     });
     tts.setOnUtteranceProgressListener(
       new UtteranceProgressListener() {
@@ -66,6 +74,7 @@ public class VoiceService extends Service {
 
         public void onDone(String id) {
           h.post(() -> {
+            if (!running || !id.equals("jazz:" + epoch)) return;
             speaking = false;
             h.postDelayed(VoiceService.this::listen, 650);
           });
@@ -73,6 +82,7 @@ public class VoiceService extends Service {
 
         public void onError(String id) {
           h.post(() -> {
+            if (!running || !id.equals("jazz:" + epoch)) return;
             speaking = false;
             emit("Speech unavailable", 0, "");
             listen();
@@ -80,6 +90,7 @@ public class VoiceService extends Service {
         }
 
         public void onRangeStart(String id, int start, int end, int frame) {
+          if (!running || !id.equals("jazz:" + epoch)) return;
           emit("Speaking", .35, "");
         }
       }
@@ -92,6 +103,7 @@ public class VoiceService extends Service {
       return START_NOT_STICKY;
     }
     if (running && callId.equals(i.getStringExtra("id"))) return START_NOT_STICKY;
+    callBase = Api.base(this);
     callId = i.getStringExtra("id");
     callJson = i.getStringExtra("call");
     if (callJson == null) callJson = Api.json("id", callId, "status", "active").toString();
@@ -377,6 +389,7 @@ public class VoiceService extends Service {
     speaking = true;
     emit("Speaking", .4, text);
     long generation = epoch;
+    if (!Api.prefs(this).getString("tts", "android").equals("server")) { fallback(text, generation); return; }
     try {
       Request request = Api.request(this, "/tts")
         .post(
@@ -493,14 +506,18 @@ public class VoiceService extends Service {
   private void fallback(String text, long generation) {
     if (!running || generation != epoch) return;
     if (ttsReady) {
-      tts.speak(
+      int spoken = tts.speak(
         text.replaceAll("[*#`]", ""),
         TextToSpeech.QUEUE_FLUSH,
         null,
-        "jazz"
+        "jazz:" + generation
       );
+      if (spoken == TextToSpeech.ERROR) { speaking = false; emit("Android voice unavailable. Check your text-to-speech engine and voice data.", 0, text); h.postDelayed(VoiceService.this::listen, 1000); }
+    } else if (!ttsFailed) {
+      pendingSpeech = text;
+      h.postDelayed(() -> { if (pendingSpeech != null && running && generation == epoch) { ttsFailed = true; pendingSpeech = null; fallback(text, generation); } }, 5000);
     } else {
-      emit("Text-to-speech unavailable", 0, text);
+      emit("Text-to-speech unavailable. Install or enable an Android TTS engine and English voice data.", 0, text);
       speaking = false;
       h.postDelayed(VoiceService.this::listen, 1000);
     }
@@ -508,7 +525,7 @@ public class VoiceService extends Service {
 
   public void onDestroy() {
     running = false;
-    Api.prefs(this).edit().putString("pendingEnd:" + callId, "end").apply();
+    Api.prefs(this).edit().putString("pendingEnd:" + callBase + "|" + callId, "end").apply();
     JazzConnectionService.finish(callId);
     RealtimeService.event(this, Api.json("type", "call.localEnded", "id", callId));
     getSystemService(NotificationManager.class).cancel(3);

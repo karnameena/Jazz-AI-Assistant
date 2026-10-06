@@ -14,7 +14,7 @@ const context = vm.createContext({document, Native:native, window:{Native:native
 vm.runInContext(fs.readFileSync(path,'utf8'),context);
 const run=script=>vm.runInContext(script, context);
 (async()=>{
- run('state.apiVersion="1.0.6";page="chat";renderChat();');
+ run('state.apiVersion="1.0.7";page="chat";renderChat();');
  assert.match(element('#app').innerHTML,/data-action="videoJazz"/);
  assert.match(element('#app').innerHTML,/id="composerButton" data-action="dictate"/);
  element('#message').value='Hello'; run('updateComposer()'); assert.equal(element('#composerButton').type,'submit');
@@ -44,5 +44,16 @@ const run=script=>vm.runInContext(script, context);
  assert.equal(run('outbox.length'),0);
  assert.equal(run('state.messages.filter(m=>m.sender==="user").length'),1);
  assert.equal(run('state.messages.find(m=>m.sender==="user").status'),'read');
+ native.signOut=()=>calls.push('localSignOut');
+ run('currentCall={id:"old",status:"active"}; state.messages=[{id:"old"}]; state.calls=[currentCall]; boot.signedIn="true"; signOutLocal()');
+ assert.equal(calls.at(-1),'localSignOut');
+ assert.equal(run('page'),'login');
+ assert.equal(run('currentCall'),null);
+ assert.equal(run('state.messages.length'),0);
+ run('state.calls=[{id:"old",status:"active"}];window.onNativeEvent({type:"configured",base:"https://new.example",changed:"true"})');
+ assert.equal(run('boot.base'),'https://new.example');
+ assert.equal(run('storageKey'),'jazz:https://new.example');
+ assert.equal(run('state.calls.length'),0);
+ assert.equal(run('boot.signedIn'),'false');
  console.log('UI behavior checks passed: video control, mic/send switching, image preview/download, active-call resume without restarting voice, ended-call state. DOM/native bridge mocked; no visual or Android hardware validation.');
 })().catch(e=>{console.error(e);process.exitCode=1});

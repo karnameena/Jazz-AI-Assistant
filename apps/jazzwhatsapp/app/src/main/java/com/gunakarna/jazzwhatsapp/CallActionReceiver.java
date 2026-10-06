@@ -19,6 +19,7 @@ public class CallActionReceiver extends BroadcastReceiver {
   }
 
   static void act(Context c, String id, String action, Runnable done) {
+    final String pendingKey = "pendingEnd:" + Api.base(c) + "|" + id;
     Notifications.cancelIncoming(c, id);
     JazzConnectionService.finish(id);
     RealtimeService.event(c, Api.json("type", "call.localEnded", "id", id));
@@ -28,8 +29,8 @@ public class CallActionReceiver extends BroadcastReceiver {
       "/call-action",
       Api.json("id", id, "action", action),
       (data, error) -> {
-        if (error != null) Api.prefs(c).edit().putString("pendingEnd:" + id, action).apply();
-        else Api.prefs(c).edit().remove("pendingEnd:" + id).apply();
+        if (error != null) Api.prefs(c).edit().putString(pendingKey, action).apply();
+        else Api.prefs(c).edit().remove(pendingKey).apply();
         done.run();
       }
     );

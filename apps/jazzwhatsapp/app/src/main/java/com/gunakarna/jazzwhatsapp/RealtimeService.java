@@ -8,6 +8,7 @@ import org.json.*;
 
 public class RealtimeService extends Service {
 
+  private static volatile RealtimeService current;
   private WebSocket socket;
   private final Handler handler = new Handler(Looper.getMainLooper());
   private boolean stopped;
@@ -30,6 +31,7 @@ public class RealtimeService extends Service {
 
   public void onCreate() {
     super.onCreate();
+    current = this;
     Notifications.channels(this);
     startForeground(
       1,
@@ -47,6 +49,8 @@ public class RealtimeService extends Service {
 
   private void connect() {
     if (stopped || Api.token(this).isEmpty()) return;
+    final String connectionBase = Api.base(this), connectionToken = Api.token(this);
+    final long sessionEpoch = Api.prefs(this).getLong("sessionEpoch", 0);
     connected(this, "Connecting");
     try {
       socket = Api.client.newWebSocket(
@@ -57,12 +61,14 @@ public class RealtimeService extends Service {
           )
           .build(),
         new WebSocketListener() {
+          private boolean valid() { return !stopped && connectionBase.equals(Api.base(RealtimeService.this)) && connectionToken.equals(Api.token(RealtimeService.this)) && sessionEpoch == Api.prefs(RealtimeService.this).getLong("sessionEpoch", 0); }
           public void onOpen(WebSocket ws, Response response) {
+            if (!valid()) { ws.cancel(); return; }
             retry = 0;
             MessageNotificationListener.refresh();
             for (String key : Api.prefs(RealtimeService.this).getAll().keySet()) {
-              if (key.startsWith("pendingEnd:")) {
-                String id = key.substring(11);
+              if (key.startsWith("pendingEnd:" + connectionBase + "|")) {
+                String id = key.substring(("pendingEnd:" + connectionBase + "|").length());
                 Api.call(RealtimeService.this, "/call-action", Api.json("id", id, "action", Api.prefs(RealtimeService.this).getString(key, "end")), (data, error) -> {
                   if (error == null) Api.prefs(RealtimeService.this).edit().remove(key).apply();
                 });
@@ -73,6 +79,7 @@ public class RealtimeService extends Service {
           }
 
           public void onMessage(WebSocket ws, String text) {
+            if (!valid()) return;
             try {
               JSONObject data = new JSONObject(text);
               event(RealtimeService.this, data);
@@ -115,6 +122,7 @@ public class RealtimeService extends Service {
           }
 
           public void onFailure(WebSocket ws, Throwable e, Response r) {
+            if (!valid()) return;
             if (r != null && r.code() == 401) {
               connected(RealtimeService.this, "Sign in again");
               return;
@@ -123,6 +131,7 @@ public class RealtimeService extends Service {
           }
 
           public void onClosed(WebSocket ws, int code, String reason) {
+            if (!valid()) return;
             reconnect();
           }
         }
@@ -148,7 +157,7 @@ public class RealtimeService extends Service {
     stopped = true;
     handler.removeCallbacksAndMessages(null);
     if (socket != null) socket.close(1000, "Stopped");
-    connected(this, "Disconnected");
+    if (current == this) { current = null; connected(this, "Disconnected"); }
     super.onDestroy();
   }
 

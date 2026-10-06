@@ -29,7 +29,7 @@ let page = "home",
 let chatGeneration = 0;
 let previewImage = null, cameraStream = null, cameraStarting = false, cameraWanted = false, cameraForeground = true;
 currentCall = boot.activeCall || null;
-const storageKey = "jazz:" + boot.base;
+let storageKey = "jazz:" + boot.base;
 const loadLocal = (key, fallback) => { try { return JSON.parse(localStorage.getItem(storageKey + key)) || fallback; } catch { return fallback; } };
 let outbox = loadLocal(":outbox", []), endedCalls = new Set(loadLocal(":endedCalls", [])), flushing = false;
 if (boot.signedIn === "true") Object.assign(state, loadLocal(":cache", {}));
@@ -46,6 +46,35 @@ function reconcile(data) {
   outbox = outbox.filter(item => !state.messages.some(m => m.status !== "queued" && m.clientId === item.clientId));
   for (const item of outbox) if (!state.messages.some(m => m.clientId === item.clientId)) state.messages.push(item);
   persistLocal();
+}
+let configureWait = null;
+function configureConnection(base, stt) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { configureWait = null; reject(new Error("Server settings did not update. Try again.")); }, 10000);
+    configureWait = {resolve:() => { clearTimeout(timer); resolve(); }, reject:error => { clearTimeout(timer); reject(error); }};
+    Native.configure(base, stt);
+  });
+}
+function resetConnection(base = boot.base) {
+  chatGeneration++; stopCamera();
+  for (const task of pending.values()) task.reject(new Error("Connection changed"));
+  pending.clear();
+  currentCall = null; typing = false; replyTo = null; selectingMessages = false;
+  selectedMessages.clear(); outbox = []; endedCalls.clear();
+  state.messages = []; state.calls = []; state.reminders = []; delete state.apiVersion;
+  state.profile = {name:"Mama",about:"Available",avatar:""};
+  state.jazzProfile = {name:"Jazz AI",about:"Your personal AI assistant",avatar:""};
+  state.assistantMode = "normal"; state.assistantModel = null;
+  persistLocal();
+  boot.base = base; storageKey = "jazz:" + base;
+  boot.signedIn = "false"; connection = "Disconnected";
+  boot.call = null; boot.activeCall = null; boot.voiceRunning = false;
+  streamingText = ""; clearTimeout(streamingTimer); streamingTimer = null;
+  show("login");
+}
+function signOutLocal() {
+  Native.signOut();
+  resetConnection();
 }
 async function flushOutbox() {
   if (flushing || connection !== "Connected") return;
@@ -125,7 +154,7 @@ document.addEventListener("input", e => { if (e.target.id === "message") updateC
 const selectedMessages = new Set();
 let selectingMessages = false;
 function requireCompatibleBackend() {
-  if (state.apiVersion !== "1.0.6") throw new Error(`App 1.0.6 needs backend 1.0.6. Server reports ${state.apiVersion || "an older version"}. Apply the update patch and restart Jazz API.`);
+  if (state.apiVersion !== "1.0.7") throw new Error(`App 1.0.7 needs backend 1.0.7. Server reports ${state.apiVersion || "an older version"}. Apply the update patch and restart Jazz API.`);
 }
 function removeMessages(ids) {
   chatGeneration++;
@@ -335,6 +364,7 @@ function render() {
             "Reminder call delay",
             `120 seconds without a reply`,
           ],
+          ["voicePlayback", "speaker", "Call voice playback", "Android voice or server Piper"],
           ["notificationAccess", "bell", "Read phone notifications", "Enable access for WhatsApp, Instagram and SMS summaries"],
           ["logout", "shield", "Sign out", "This device only"],
         ]
@@ -344,7 +374,7 @@ function render() {
           )
           .join(
             "",
-          )}<p class="privacy">Jazz Ai 1.0.6 · Dark theme<br>Calls use your internet connection, not a cellular provider.</p></main>`;
+          )}<p class="privacy">Jazz Ai 1.0.7 · Dark theme<br>Calls use your internet connection, not a cellular provider.</p></main>`;
       break;
   }
 }
@@ -375,7 +405,7 @@ function reminderCards() {
       );
 }
 function renderChat() {
-  root.innerHTML = `<header class="topbar">${act("chats", icon("back"), "iconbtn")}<button data-action="jazzProfile" style="display:flex;align-items:center;gap:10px;flex:1;text-align:left">${avatar()}<div><h3>${esc(state.jazzProfile.name)}</h3><small>${typing ? "typing…" : connection === "Connected" ? "online" : "connecting…"}</small></div></button>${act("videoJazz", icon("video"), "iconbtn")}${act("callJazz", icon("call"), "iconbtn")}${act("chatMenu", icon("more"), "iconbtn")}</header>${resumeBanner()}${connection !== "Connected" ? `<div class="connectionBanner">${esc(connection)}</div>` : ""}${state.apiVersion !== "1.0.6" ? `<div class="connectionBanner">App 1.0.6 · server ${esc(state.apiVersion || "older version")}. Apply the backend update and restart Jazz.</div>` : ""}${selectingMessages ? `<div class="selectionbar">${act("cancelSelection", "Cancel")}<b>${selectedMessages.size} selected</b>${act("selectAllMessages", "Select all")}${act("deleteSelected", "Delete selected")}</div>` : ""}<main class="chatwall" id="messages"><div class="day">Today</div>${state.messages.filter(m => !m.deleted).map(bubble).join("")}${typing ? '<div class="bubble"><div class="muted">Jazz is typing…</div></div>' : ""}</main><div class="composerwrap">${replyTo ? `<div class="replybar"><div><b>Replying to ${replyTo.sender === "jazz" ? esc(state.jazzProfile.name) : "you"}</b><p>${esc(replyTo.text.slice(0, 80))}</p></div>${act("cancelReply", "×")}</div>` : ""}<form id="composer" class="composer"><div class="inputbox">${act("emoji", "☺", "iconbtn")}<textarea id="message" rows="1" placeholder="Message" aria-label="Message"></textarea>${act("attachment", icon("clip"), "iconbtn")}${act("photoMessage", icon("camera"), "iconbtn")}</div><button type="button" id="composerButton" data-action="dictate" class="sendbtn" aria-label="Voice message">${icon("mic")}</button></form></div>`;
+  root.innerHTML = `<header class="topbar">${act("chats", icon("back"), "iconbtn")}<button data-action="jazzProfile" style="display:flex;align-items:center;gap:10px;flex:1;text-align:left">${avatar()}<div><h3>${esc(state.jazzProfile.name)}</h3><small>${typing ? "typing…" : connection === "Connected" ? "online" : "connecting…"}</small></div></button>${act("videoJazz", icon("video"), "iconbtn")}${act("callJazz", icon("call"), "iconbtn")}${act("chatMenu", icon("more"), "iconbtn")}</header>${resumeBanner()}${connection !== "Connected" ? `<div class="connectionBanner">${esc(connection)}</div>` : ""}${state.apiVersion !== "1.0.7" ? `<div class="connectionBanner">App 1.0.7 · server ${esc(state.apiVersion || "older version")}. Apply the backend update and restart Jazz.</div>` : ""}${selectingMessages ? `<div class="selectionbar">${act("cancelSelection", "Cancel")}<b>${selectedMessages.size} selected</b>${act("selectAllMessages", "Select all")}${act("deleteSelected", "Delete selected")}</div>` : ""}<main class="chatwall" id="messages"><div class="day">Today</div>${state.messages.filter(m => !m.deleted).map(bubble).join("")}${typing ? '<div class="bubble"><div class="muted">Jazz is typing…</div></div>' : ""}</main><div class="composerwrap">${replyTo ? `<div class="replybar"><div><b>Replying to ${replyTo.sender === "jazz" ? esc(state.jazzProfile.name) : "you"}</b><p>${esc(replyTo.text.slice(0, 80))}</p></div>${act("cancelReply", "×")}</div>` : ""}<form id="composer" class="composer"><div class="inputbox">${act("emoji", "☺", "iconbtn")}<textarea id="message" rows="1" placeholder="Message" aria-label="Message"></textarea>${act("attachment", icon("clip"), "iconbtn")}${act("photoMessage", icon("camera"), "iconbtn")}</div><button type="button" id="composerButton" data-action="dictate" class="sendbtn" aria-label="Voice message">${icon("mic")}</button></form></div>`;
   requestAnimationFrame(
     () => ($("#messages").scrollTop = $("#messages").scrollHeight),
   );
@@ -682,6 +712,12 @@ document.addEventListener("click", async (e) => {
       case "fullScreen":
         Native.fullScreenSettings();
         break;
+      case "voicePlayback":
+        sheet(`<h2>Call voice playback</h2><p>Android voice works even when your server has no Piper installed.</p><form id="voicePlayback" class="form"><select name="tts"><option value="android">Android text-to-speech</option><option value="server">Server Piper, with Android fallback</option></select><button class="cta" type="submit">Save</button></form>${act("ttsSettings", "Android voice settings", "row")}`);
+        break;
+      case "ttsSettings":
+        Native.ttsSettings();
+        break;
       case "notificationAccess":
         Native.notificationSettings();
         break;
@@ -790,9 +826,7 @@ document.addEventListener("click", async (e) => {
         );
         break;
       case "logout":
-        await api("/logout", {});
-        outbox = []; state.messages = []; persistLocal();
-        show("login");
+        signOutLocal();
         break;
     }
     if (
@@ -819,8 +853,7 @@ document.addEventListener("submit", async (e) => {
     switch (f.id) {
       case "login":
         f.querySelector("button").disabled = true;
-        boot.base = values.base.replace(/\/+$/, "");
-        Native.configure(boot.base, boot.stt || "local");
+        await configureConnection(values.base.replace(/\/+$/, ""), boot.stt || "local");
         Object.assign(
           state,
           await api("/auth", {
@@ -828,6 +861,9 @@ document.addEventListener("submit", async (e) => {
             password: values.password,
           }),
         );
+        boot.signedIn = "true";
+        storageKey = "jazz:" + boot.base;
+        persistLocal();
         show("home");
         Native.connect();
         break;
@@ -854,16 +890,18 @@ document.addEventListener("submit", async (e) => {
         reminderAction(f.dataset.id, "snoozed", Number(values.minutes));
         break;
       case "serverForm":
-        boot.base = values.base;
-        Native.configure(values.base, boot.stt);
-        closeSheet();
-        show("login");
+        Native.configure(values.base.trim().replace(/\/+$/, ""), boot.stt || "local");
         break;
       case "speech":
         boot.stt = values.stt;
         Native.configure(boot.base, values.stt);
         closeSheet();
         render();
+        break;
+      case "voicePlayback":
+        Native.configureVoice(values.tts);
+        closeSheet();
+        toast("Voice playback saved. Start a new call to use it.");
         break;
       case "escalation":
         localStorage.setItem("escalation", values.delay);
@@ -889,6 +927,15 @@ function mergeMessage(m) {
 window.onNativeEvent = (raw) => {
   const event = typeof raw === "string" ? JSON.parse(raw) : raw;
   switch (event.type) {
+    case "signedOut":
+      resetConnection();
+      break;
+    case "configured":
+      const waiter = configureWait; configureWait = null;
+      if (event.changed === "true") resetConnection(event.base);
+      else boot.base = event.base || boot.base;
+      waiter?.resolve();
+      break;
     case "cameraPaused":
       const wantedCamera = cameraWanted;
       cameraForeground = false;
@@ -1048,6 +1095,7 @@ window.onNativeEvent = (raw) => {
       }
       break;
     case "error":
+      if (configureWait) { configureWait.reject(new Error(event.error)); configureWait = null; }
       toast(event.error);
       break;
     case "dictation":
