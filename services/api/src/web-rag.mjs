@@ -185,7 +185,7 @@ async function getEmbedder(cfg) {
   if (!cfg.embeddings || embedderDisabled) return null;
   if (!embedderPromise) {
     embedderPromise = import("@huggingface/transformers")
-      .then(async ({ pipeline }) => pipeline("feature-extraction", cfg.embeddingModel))
+      .then(async ({ pipeline }) => pipeline("feature-extraction", cfg.embeddingModel, { dtype: "q8" }))
       .catch(error => {
         embedderDisabled = true;
         console.warn(`[Jazz Web RAG] Embeddings unavailable; using lexical ranking: ${error instanceof Error ? error.message : String(error)}`);
