@@ -6,6 +6,7 @@ import { devices, getDevice, sendAndroidCommand, sendAndroidScript } from "./dev
 import { findScriptForMessage, getScript, listScripts } from "./script-registry.mjs";
 import { handleAndroidIntent } from "./android-intents.mjs";
 import { callOllama, ensureOllamaReady, getOllamaStatus, streamOllama, verifyModeModel } from "./ollama.mjs";
+import { answerWithWebRag, getWebRagStatus } from "./web-rag.mjs";
 import { getTtsStatus, streamPiperRaw, synthesizeWithPiper } from "./tts.mjs";
 import { debugUnderstanding, normalizeUtterance } from "./utterance-normalizer.mjs";
 import { jazzSystemPrompt, localPersonalityReply } from "./jazz-personality.mjs";
@@ -347,6 +348,12 @@ async function localAssistantReply(message) {
   const coding = await handleCodingIntent(text);
   if (coding) return coding;
 
+  // Fresh/current questions and explicit web searches are handled before the
+  // Android generic "search ..." fallback. Narrow Web-RAG intent detection keeps
+  // WhatsApp/device search commands on their existing Android path.
+  const webRag = await answerWithWebRag(text, systemPrompt(), callOllama);
+  if (webRag) return webRag;
+
   const androidIntent = await handleAndroidIntent(text);
   if (androidIntent) return androidIntent;
 
@@ -535,6 +542,7 @@ const server = http.createServer(async (req, res) => {
       });
     }
     if (req.method === "GET" && req.url === "/api/brain-health") return sendJson(res, 200, { ok: true, version: VERSION, provider: process.env.JAZZ_LLM_PROVIDER || "ollama", ollama: await getOllamaStatus() });
+    if (req.method === "GET" && req.url === "/api/web-rag/health") return sendJson(res, 200, { ok: true, webRag: await getWebRagStatus() });
     if (req.method === "GET" && req.url === "/api/tts-health") return sendJson(res, 200, { ok: true, version: VERSION, tts: await getTtsStatus() });
     if (req.method === "GET" && req.url === "/api/voip/health") return sendJson(res, 200, { ok: true, voip: await getVoipHealth() });
     if (req.method === "GET" && req.url === "/api/coding/health") return sendJson(res, 200, { ok: true, coding: await getCodingAgentHealth() });
