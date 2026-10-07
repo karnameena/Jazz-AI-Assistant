@@ -41,6 +41,11 @@ export default defineConfig(({ mode }) => ({
   },
   server: {
     host: "0.0.0.0",
+    headers: {
+      "Cache-Control": "no-store",
+      "Pragma": "no-cache",
+      "Expires": "0"
+    },
     port: 5173,
     strictPort: true,
     proxy: {
