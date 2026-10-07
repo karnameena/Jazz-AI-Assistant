@@ -114,6 +114,8 @@ async function streamChat(message: string, onText: (chunk: string) => void, sour
   return full;
 }
 
+const UI_BUILD = "20261007-panel-toggle-v5";
+
 function App() {
   const [messages, setMessages] = useState<Message[]>(() => {
     const stored = readStoredMessages();
@@ -228,6 +230,7 @@ function App() {
   };
 
   useEffect(() => {
+    console.info(`[Jazz UI] ${UI_BUILD}`);
     const timer = window.setInterval(() => setDayMode(getDayMode()), 30_000);
     apiJson("/api/reminders").then(data => setReminders(data.items || [])).catch(() => setReminders([]));
 
@@ -394,10 +397,10 @@ function App() {
   };
   const visibleDevices = showAllDevices ? devices : devices.slice(0, 3);
 
-  return <div className={`jazz-app mode-${dayMode} ${leftPanelOpen ? "left-panel-open" : "left-panel-closed"} ${rightPanelOpen ? "right-panel-open" : "right-panel-closed"}`}>
+  return <div data-ui-build={UI_BUILD} className={`jazz-app mode-${dayMode} ${leftPanelOpen ? "left-panel-open" : "left-panel-closed"} ${rightPanelOpen ? "right-panel-open" : "right-panel-closed"}`}>
     <div className="ambient ambient-one" /><div className="ambient ambient-two" /><div className="ambient-grid" />
     {sidebarOpen && <div className="mobile-overlay" onClick={() => setSidebarOpen(false)} />}
-    <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`} style={{ display: leftPanelOpen || sidebarOpen ? "flex" : "none" }}>
+    {(leftPanelOpen || sidebarOpen) && <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
       <div className="sidebar-topline"><div className="brand"><div className="brand-logo"><Wave /></div><div className="brand-copy"><strong>Jazz</strong><span>AI Assistant</span><small>Always there. Always with you.</small></div></div><button className="collapse-button" onClick={() => setLeftPanelOpen(false)} title="Hide left panel" aria-label="Hide left panel"><ChevronLeft size={17} /></button></div>
       <button className="new-chat-button" onClick={newChat}><Plus size={18} /><span>New Chat</span></button>
       <nav className="navigation">
@@ -417,32 +420,29 @@ function App() {
       <div className="sidebar-assistant-card"><div className="assistant-card-label"><strong>Jazz</strong> AI Assistant</div><span>{voiceMode ? "Voice replies on" : "Voice replies off"}</span><div className="assistant-orb"><div className="assistant-orb-ring r1" /><div className="assistant-orb-ring r2" /><div className="assistant-orb-core"><MiniWave /></div></div></div>
       <button className="customize-button" onClick={() => { setActiveNav("Settings"); setToast("Customize Hub opened"); }}><Wand2 size={16} /> Customize Hub</button>
       <div className="sidebar-wave-strip">{Array.from({ length: 34 }, (_, i) => <i key={i} style={{ height: `${5 + ((i * 7) % 22)}px` }} />)}</div>
-    </aside>
+    </aside>}
     <main className="main-content">
-      <button className={`panel-edge-toggle panel-edge-left ${leftPanelOpen ? "is-open" : "is-closed"}`} onClick={toggleLeftPanel} title={leftPanelOpen ? "Hide left panel" : "Show left panel"} aria-label={leftPanelOpen ? "Hide left panel" : "Show left panel"}>
-        {leftPanelOpen ? <ChevronLeft size={18} /> : <ChevronRight size={18} />}
-        <span>{leftPanelOpen ? "Hide" : "Menu"}</span>
-      </button>
-      <button className={`panel-edge-toggle panel-edge-right ${rightPanelOpen ? "is-open" : "is-closed"}`} onClick={toggleRightPanel} title={rightPanelOpen ? "Hide right panel" : "Show right panel"} aria-label={rightPanelOpen ? "Hide right panel" : "Show right panel"}>
-        <span>{rightPanelOpen ? "Hide" : "Tools"}</span>
-        {rightPanelOpen ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
-      </button>
-      <header className="top-header"><button className="mobile-menu" onClick={() => setSidebarOpen(true)}><Menu size={22} /></button><div className="greeting"><h1>{greeting.title}</h1><p><span>Jazz is <b>online</b></span> and ready to assist you.</p></div><div className="top-search" onClick={() => setSearchOpen(true)}><Search size={17} /><span>Search anything...</span><kbd>Ctrl K</kbd></div><div className="header-actions"><button className={`round-button ${voiceMode ? "active" : ""}`} onClick={toggleVoice} title={voiceMode ? "Turn voice replies off" : "Turn voice replies on"}><Mic size={18} /></button><button className="round-button notification-button"><Bell size={18} /><span>3</span></button><div className="profile clickable" onClick={() => profileInputRef.current?.click()}>{profileImage ? <img src={profileImage} alt="Profile" className="profile-image" /> : <div className="profile-avatar">G</div>}<div className="profile-info"><strong>Gunakarna</strong><span><i />Online</span></div></div><input ref={profileInputRef} type="file" accept="image/*" onChange={onProfileSelected} hidden /></div></header>
-      <div className="dashboard-scroll"><div className="dashboard-grid" style={{ gridTemplateColumns: rightPanelOpen ? undefined : "minmax(0, 1fr)" }}>
+      <header className="top-header"><button className="mobile-menu" onClick={() => setSidebarOpen(true)}><Menu size={22} /></button><div className="greeting"><h1>{greeting.title}</h1><p><span>Jazz is <b>online</b></span> and ready to assist you.</p></div><div className="top-search" onClick={() => setSearchOpen(true)}><Search size={17} /><span>Search anything...</span><kbd>Ctrl K</kbd></div><div className="header-actions">
+        <button type="button" className={`layout-toggle ${leftPanelOpen ? "active" : ""}`} onClick={() => setLeftPanelOpen(v => !v)} aria-pressed={leftPanelOpen} title={leftPanelOpen ? "Hide left panel" : "Show left panel"}>
+          {leftPanelOpen ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}<span>Menu</span>
+        </button>
+        <button type="button" className={`layout-toggle ${rightPanelOpen ? "active" : ""}`} onClick={() => setRightPanelOpen(v => !v)} aria-pressed={rightPanelOpen} title={rightPanelOpen ? "Hide right panel" : "Show right panel"}>
+          <span>Tools</span>{rightPanelOpen ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+        </button>
+        <button className={`round-button ${voiceMode ? "active" : ""}`} onClick={toggleVoice} title={voiceMode ? "Turn voice replies off" : "Turn voice replies on"}><Mic size={18} /></button><button className="round-button notification-button"><Bell size={18} /><span>3</span></button><div className="profile clickable" onClick={() => profileInputRef.current?.click()}>{profileImage ? <img src={profileImage} alt="Profile" className="profile-image" /> : <div className="profile-avatar">G</div>}<div className="profile-info"><strong>Gunakarna</strong><span><i />Online</span></div></div><input ref={profileInputRef} type="file" accept="image/*" onChange={onProfileSelected} hidden /></div></header>
+      <div className="dashboard-scroll"><div className={`dashboard-grid ${rightPanelOpen ? "with-right-panel" : "without-right-panel"}`}>
         <section className="center-column">
           <div className="mode-tabs">{["AI Chat", "Code Assistant", "Web Search", "Summarize", "Creative"].map((tab, i) => <button key={tab} className={activeMode === tab ? "active" : ""} onClick={() => setActiveMode(tab)}>{i === 0 ? <Bot /> : i === 1 ? <Code2 /> : i === 2 ? <Search /> : i === 3 ? <FileText /> : <Sparkles />}{tab}</button>)}</div>
           <section className="chat-panel"><div className="chat-panel-glow" /><div className="chat-messages" ref={messagesRef}>{messages.map(message => <ChatMessage key={message.id} message={message} />)}</div>{voiceMode && voiceState === "listening" && <VoiceListeningBubble transcript={voiceTranscript} />}<div className="composer-wrap"><div className="composer"><button className="composer-icon"><Paperclip size={18} /></button><input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === "Enter" && void sendMessage()} placeholder={voiceState === "listening" ? "Listening…" : voiceMode ? "Voice mode on — type or speak..." : "Type a message or use the microphone..."} /><button className={`composer-icon ${voiceMode ? "voice-on" : ""}`} onClick={toggleVoice} title={voiceMode ? "Turn voice replies off" : "Turn voice replies on"}><Mic size={18} /></button></div><button className="send-button" onClick={() => void sendMessage()}><Send size={19} /></button></div><div className="suggestion-row"><Suggestion label="Summarize this page" icon={<FileText />} onClick={() => setInput("Summarize this page")} /><Suggestion label="Remind me at 8 PM" icon={<Timer />} onClick={setReminder} /><Suggestion label="Show my tasks" icon={<Check />} onClick={() => addJazzMessage("Your current dashboard shows 12 of 18 tasks completed.")} /><Suggestion label="Open WhatsApp" icon={<Webhook />} onClick={() => preferredAndroid && void runAndroidCommand(preferredAndroid, "launch_app", { packageName: "com.whatsapp" })} /><Suggestion label="Today’s agenda" icon={<CalendarDays />} onClick={openCalendar} /></div></section>
           {showFeatures && <section className="feature-card"><div className="section-heading"><div><span className="heading-icon"><Sparkles size={16} /></span><strong>Powerful Features</strong></div></div><div className="feature-grid"><Feature icon={<Bot />} title="AI Agents" sub="Autonomous task" badge="NEW" /><Feature icon={<Webhook />} title="Automation" sub="Smart workflows" /><Feature icon={<FileText />} title="Knowledge" sub="Your knowledge base" /><Feature icon={<Code2 />} title="Code Assistant" sub="Write & debug code" /><Feature icon={<FileText />} title="File Analyzer" sub="Analyze any file" /><Feature icon={<Search />} title="Web Search" sub="Real-time results" /><Feature icon={<Mic />} title="Voice Control" sub="Hands-free control" /><Feature icon={<ImagePlus />} title="Image Generation" sub="Create with AI" /></div></section>}
         </section>
-        <aside className="right-column" style={{ display: rightPanelOpen ? "flex" : "none" }}>
-          {rightPanelOpen && <>
+        {rightPanelOpen && <aside className="right-column">
           <button className="right-panel-close" onClick={() => setRightPanelOpen(false)} title="Hide right panel" aria-label="Hide right panel"><ChevronRight size={16} /></button>
           <DashboardCard icon={<Sparkles />} title="Quick Actions" action="Edit"><div className="quick-actions-grid">{quickActionList.map(action => <QuickAction key={action.label} {...action} />)}</div></DashboardCard>
           <DashboardCard icon={<Smartphone />} title="Devices" action={showAllDevices ? "Collapse" : "See all"} actionClick={() => setShowAllDevices(v => !v)}><div className="device-list">{(visibleDevices.length ? visibleDevices : [{ id: "android-phone", name: "Android Phone", kind: "android", status: "not-configured", bridge: false, connected: false }]).map(device => <DeviceRow key={device.id} device={device} onClick={() => setShowAllDevices(true)} />)}</div></DashboardCard>
           <DashboardCard icon={<Bell />} title="Upcoming Reminders" action="See all"><div className="reminder-list">{reminders.length ? reminders.slice(0, 3).map(item => <ReminderRow key={item.id} item={item} />) : <div className="empty-row">No reminders yet. Use Set Reminder.</div>}</div></DashboardCard>
           <div className="status-card"><div className="status-top"><div><div className="status-heading"><span className="status-icon"><Zap size={16} /></span><strong>Jazz Status</strong></div><p>{voiceMode ? `Voice replies on • ${voiceState === "listening" ? "listening..." : voiceState === "speaking" ? "speaking..." : "ready"}` : "Voice replies off • text only"}</p></div><span className="online-badge">Online</span></div><div className="status-wave">{Array.from({ length: 22 }, (_, i) => <i key={i} style={{ height: `${6 + ((i * 11) % 27)}px` }} />)}</div></div>
-          </>}
-        </aside>
+        </aside>}
       </div>
       <section className="analytics-row"><div className="activity-card"><div className="analytics-heading"><div><span className="heading-icon blue"><Activity size={16} /></span><strong>Activity Overview</strong></div><button>This Week <ChevronDown size={14} /></button></div><div className="activity-content"><div className="productivity-ring"><span>68%</span><small>Productivity Score</small></div><div className="activity-legend"><Legend dot="purple" label="Chats" value="42%" /><Legend dot="cyan" label="Tasks" value="28%" /><Legend dot="green" label="Automations" value="18%" /><Legend dot="blue" label="Learning" value="12%" /></div></div></div></section></div>
       <div className="command-bar"><div className="command-title"><span className="command-orb"><Mic size={16} /></span><strong>Quick Voice Command</strong></div>{quickCommands.map(command => <button key={command.label} onClick={() => void command.run()}>{command.icon}<span>{command.label}</span></button>)}<button className="all-commands" onClick={() => addJazzMessage("Available commands: device info, open URL, launch app, home, back, recents, notifications, tap, swipe, click text, read screen.")}>Show all commands <ChevronLeft size={16} className="rotate-180" /></button></div>
