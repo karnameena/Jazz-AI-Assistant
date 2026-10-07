@@ -364,7 +364,7 @@ Write-Host "Jazz health:" -ForegroundColor Cyan
 (Invoke-RestMethod $healthUrl -TimeoutSec 5) | ConvertTo-Json -Depth 6
 Write-Host ""
 Write-Host "Jazz startup completed." -ForegroundColor Green
-Write-Host "Web: http://localhost:$webPort/?v=20261007-panel-toggle-v5" -ForegroundColor Green
+Write-Host "Web: http://localhost:$webPort/?v=20261007-panel-toggle-v6" -ForegroundColor Green
 Write-Host "API: http://127.0.0.1:$apiPort/health" -ForegroundColor Green
 Write-Host "STT: http://127.0.0.1:$sttPort/health" -ForegroundColor Green
 Write-Host "Recovery: http://127.0.0.1:$recoveryPort/health" -ForegroundColor Green
