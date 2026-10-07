@@ -394,11 +394,11 @@ function App() {
   };
   const visibleDevices = showAllDevices ? devices : devices.slice(0, 3);
 
-  return <div className={`jazz-app mode-${dayMode}`}>
+  return <div className={`jazz-app mode-${dayMode} ${leftPanelOpen ? "left-panel-open" : "left-panel-closed"} ${rightPanelOpen ? "right-panel-open" : "right-panel-closed"}`}>
     <div className="ambient ambient-one" /><div className="ambient ambient-two" /><div className="ambient-grid" />
     {sidebarOpen && <div className="mobile-overlay" onClick={() => setSidebarOpen(false)} />}
     <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""} ${!leftPanelOpen && !sidebarOpen ? "sidebar-collapsed" : ""}`}>
-      <div className="sidebar-topline"><div className="brand"><div className="brand-logo"><Wave /></div><div className="brand-copy"><strong>Jazz</strong><span>AI Assistant</span><small>Always there. Always with you.</small></div></div><button className="collapse-button" onClick={toggleLeftPanel} title={leftPanelOpen || sidebarOpen ? "Collapse left panel" : "Expand left panel"} aria-label={leftPanelOpen || sidebarOpen ? "Collapse left panel" : "Expand left panel"}>{leftPanelOpen || sidebarOpen ? <ChevronLeft size={17} /> : <ChevronRight size={17} />}</button></div>
+      <div className="sidebar-topline"><div className="brand"><div className="brand-logo"><Wave /></div><div className="brand-copy"><strong>Jazz</strong><span>AI Assistant</span><small>Always there. Always with you.</small></div></div></div>
       <button className="new-chat-button" onClick={newChat}><Plus size={18} /><span>New Chat</span></button>
       <nav className="navigation">
         <NavItem icon={<MessageSquare />} text="Chat" active={activeNav === "Chat"} onClick={() => setActiveNav("Chat")} />
@@ -419,6 +419,12 @@ function App() {
       <div className="sidebar-wave-strip">{Array.from({ length: 34 }, (_, i) => <i key={i} style={{ height: `${5 + ((i * 7) % 22)}px` }} />)}</div>
     </aside>
     <main className="main-content">
+      <button className={`panel-edge-toggle panel-edge-left ${leftPanelOpen ? "is-open" : "is-closed"}`} onClick={toggleLeftPanel} title={leftPanelOpen ? "Collapse left panel" : "Expand left panel"} aria-label={leftPanelOpen ? "Collapse left panel" : "Expand left panel"}>
+        {leftPanelOpen ? <ChevronLeft size={18} /> : <ChevronRight size={18} />}
+      </button>
+      <button className={`panel-edge-toggle panel-edge-right ${rightPanelOpen ? "is-open" : "is-closed"}`} onClick={toggleRightPanel} title={rightPanelOpen ? "Collapse right panel" : "Expand right panel"} aria-label={rightPanelOpen ? "Collapse right panel" : "Expand right panel"}>
+        {rightPanelOpen ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
+      </button>
       <header className="top-header"><button className="mobile-menu" onClick={() => setSidebarOpen(true)}><Menu size={22} /></button><div className="greeting"><h1>{greeting.title}</h1><p><span>Jazz is <b>online</b></span> and ready to assist you.</p></div><div className="top-search" onClick={() => setSearchOpen(true)}><Search size={17} /><span>Search anything...</span><kbd>Ctrl K</kbd></div><div className="header-actions"><button className={`round-button ${voiceMode ? "active" : ""}`} onClick={toggleVoice} title={voiceMode ? "Turn voice replies off" : "Turn voice replies on"}><Mic size={18} /></button><button className="round-button notification-button"><Bell size={18} /><span>3</span></button><div className="profile clickable" onClick={() => profileInputRef.current?.click()}>{profileImage ? <img src={profileImage} alt="Profile" className="profile-image" /> : <div className="profile-avatar">G</div>}<div className="profile-info"><strong>Gunakarna</strong><span><i />Online</span></div></div><input ref={profileInputRef} type="file" accept="image/*" onChange={onProfileSelected} hidden /></div></header>
       <div className="dashboard-scroll"><div className={`dashboard-grid ${rightPanelOpen ? "" : "right-panel-collapsed"}`}>
         <section className="center-column">
@@ -427,9 +433,6 @@ function App() {
           {showFeatures && <section className="feature-card"><div className="section-heading"><div><span className="heading-icon"><Sparkles size={16} /></span><strong>Powerful Features</strong></div></div><div className="feature-grid"><Feature icon={<Bot />} title="AI Agents" sub="Autonomous task" badge="NEW" /><Feature icon={<Webhook />} title="Automation" sub="Smart workflows" /><Feature icon={<FileText />} title="Knowledge" sub="Your knowledge base" /><Feature icon={<Code2 />} title="Code Assistant" sub="Write & debug code" /><Feature icon={<FileText />} title="File Analyzer" sub="Analyze any file" /><Feature icon={<Search />} title="Web Search" sub="Real-time results" /><Feature icon={<Mic />} title="Voice Control" sub="Hands-free control" /><Feature icon={<ImagePlus />} title="Image Generation" sub="Create with AI" /></div></section>}
         </section>
         <aside className={`right-column ${rightPanelOpen ? "" : "right-column-collapsed"}`}>
-          <button className="right-panel-toggle" onClick={toggleRightPanel} title={rightPanelOpen ? "Collapse right panel" : "Expand right panel"} aria-label={rightPanelOpen ? "Collapse right panel" : "Expand right panel"}>
-            {rightPanelOpen ? <ChevronRight size={17} /> : <ChevronLeft size={17} />}
-          </button>
           {rightPanelOpen && <>
           <DashboardCard icon={<Sparkles />} title="Quick Actions" action="Edit"><div className="quick-actions-grid">{quickActionList.map(action => <QuickAction key={action.label} {...action} />)}</div></DashboardCard>
           <DashboardCard icon={<Smartphone />} title="Devices" action={showAllDevices ? "Collapse" : "See all"} actionClick={() => setShowAllDevices(v => !v)}><div className="device-list">{(visibleDevices.length ? visibleDevices : [{ id: "android-phone", name: "Android Phone", kind: "android", status: "not-configured", bridge: false, connected: false }]).map(device => <DeviceRow key={device.id} device={device} onClick={() => setShowAllDevices(true)} />)}</div></DashboardCard>
