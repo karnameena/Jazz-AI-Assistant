@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity, Bell, Bot, BrainCircuit, CalendarDays, Camera, Check,
-  ChevronDown, ChevronLeft, Code2, FileText, Globe, ImagePlus, Instagram,
+  ChevronDown, ChevronLeft, ChevronRight, Code2, FileText, Globe, ImagePlus, Instagram,
   Laptop, Menu, MessageSquare, Mic, Music2, Paperclip, Plus, Search,
   Send, Settings2, Smartphone, Sparkles, Timer, Volume2, Wand2, Webhook,
   X, Youtube, Zap
@@ -34,6 +34,8 @@ const CHAT_STORAGE_KEY = "jazz-chat-history-v1";
 const DRAFT_STORAGE_KEY = "jazz-chat-draft-v1";
 const MODE_STORAGE_KEY = "jazz-active-mode-v1";
 const NAV_STORAGE_KEY = "jazz-active-nav-v1";
+const LEFT_PANEL_STORAGE_KEY = "jazz-left-panel-v1";
+const RIGHT_PANEL_STORAGE_KEY = "jazz-right-panel-v1";
 
 function getDayMode(hour = new Date().getHours()): DayMode {
   if (hour >= 5 && hour < 12) return "morning";
@@ -123,6 +125,8 @@ function App() {
   const [activeMode, setActiveMode] = useState(() => readStoredString(MODE_STORAGE_KEY, "AI Chat"));
   const [activeNav, setActiveNav] = useState(() => readStoredString(NAV_STORAGE_KEY, "Chat"));
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [leftPanelOpen, setLeftPanelOpen] = useState(() => readStoredString(LEFT_PANEL_STORAGE_KEY, "open") !== "closed");
+  const [rightPanelOpen, setRightPanelOpen] = useState(() => readStoredString(RIGHT_PANEL_STORAGE_KEY, "open") !== "closed");
   const [voiceMode, setVoiceMode] = useState(false);
   const [voiceState, setVoiceState] = useState<"idle" | "listening" | "speaking" | "unsupported">("idle");
   const [voiceTranscript, setVoiceTranscript] = useState("");
@@ -297,6 +301,8 @@ function App() {
   useEffect(() => { writeStoredString(DRAFT_STORAGE_KEY, input); }, [input]);
   useEffect(() => { writeStoredString(MODE_STORAGE_KEY, activeMode); }, [activeMode]);
   useEffect(() => { writeStoredString(NAV_STORAGE_KEY, activeNav); }, [activeNav]);
+  useEffect(() => { writeStoredString(LEFT_PANEL_STORAGE_KEY, leftPanelOpen ? "open" : "closed"); }, [leftPanelOpen]);
+  useEffect(() => { writeStoredString(RIGHT_PANEL_STORAGE_KEY, rightPanelOpen ? "open" : "closed"); }, [rightPanelOpen]);
   useEffect(() => { if (!toast) return; const t = window.setTimeout(() => setToast("") , 2400); return () => window.clearTimeout(t); }, [toast]);
 
   const toggleVoice = () => {
@@ -320,6 +326,14 @@ function App() {
     voiceActivationPendingRef.current = true;
     void voice.start();
   };
+  const toggleLeftPanel = () => {
+    if (window.innerWidth <= 980 && sidebarOpen) {
+      setSidebarOpen(false);
+      return;
+    }
+    setLeftPanelOpen(open => !open);
+  };
+  const toggleRightPanel = () => setRightPanelOpen(open => !open);
   const newChat = () => { setActiveNav("Chat"); setShowFeatures(true); setMessages([{ id: Date.now(), sender: "jazz", text: "New chat started, Mama. I’m ready.", time: nowTime() }]); };
   const takeNote = async () => {
     const content = window.prompt("What should Jazz remember?")?.trim(); if (!content) return;
@@ -383,8 +397,8 @@ function App() {
   return <div className={`jazz-app mode-${dayMode}`}>
     <div className="ambient ambient-one" /><div className="ambient ambient-two" /><div className="ambient-grid" />
     {sidebarOpen && <div className="mobile-overlay" onClick={() => setSidebarOpen(false)} />}
-    <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
-      <div className="sidebar-topline"><div className="brand"><div className="brand-logo"><Wave /></div><div className="brand-copy"><strong>Jazz</strong><span>AI Assistant</span><small>Always there. Always with you.</small></div></div><button className="collapse-button"><ChevronLeft size={17} /></button></div>
+    <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""} ${!leftPanelOpen && !sidebarOpen ? "sidebar-collapsed" : ""}`}>
+      <div className="sidebar-topline"><div className="brand"><div className="brand-logo"><Wave /></div><div className="brand-copy"><strong>Jazz</strong><span>AI Assistant</span><small>Always there. Always with you.</small></div></div><button className="collapse-button" onClick={toggleLeftPanel} title={leftPanelOpen || sidebarOpen ? "Collapse left panel" : "Expand left panel"} aria-label={leftPanelOpen || sidebarOpen ? "Collapse left panel" : "Expand left panel"}>{leftPanelOpen || sidebarOpen ? <ChevronLeft size={17} /> : <ChevronRight size={17} />}</button></div>
       <button className="new-chat-button" onClick={newChat}><Plus size={18} /><span>New Chat</span></button>
       <nav className="navigation">
         <NavItem icon={<MessageSquare />} text="Chat" active={activeNav === "Chat"} onClick={() => setActiveNav("Chat")} />
@@ -406,17 +420,22 @@ function App() {
     </aside>
     <main className="main-content">
       <header className="top-header"><button className="mobile-menu" onClick={() => setSidebarOpen(true)}><Menu size={22} /></button><div className="greeting"><h1>{greeting.title}</h1><p><span>Jazz is <b>online</b></span> and ready to assist you.</p></div><div className="top-search" onClick={() => setSearchOpen(true)}><Search size={17} /><span>Search anything...</span><kbd>Ctrl K</kbd></div><div className="header-actions"><button className={`round-button ${voiceMode ? "active" : ""}`} onClick={toggleVoice} title={voiceMode ? "Turn voice replies off" : "Turn voice replies on"}><Mic size={18} /></button><button className="round-button notification-button"><Bell size={18} /><span>3</span></button><div className="profile clickable" onClick={() => profileInputRef.current?.click()}>{profileImage ? <img src={profileImage} alt="Profile" className="profile-image" /> : <div className="profile-avatar">G</div>}<div className="profile-info"><strong>Gunakarna</strong><span><i />Online</span></div></div><input ref={profileInputRef} type="file" accept="image/*" onChange={onProfileSelected} hidden /></div></header>
-      <div className="dashboard-scroll"><div className="dashboard-grid">
+      <div className="dashboard-scroll"><div className={`dashboard-grid ${rightPanelOpen ? "" : "right-panel-collapsed"}`}>
         <section className="center-column">
           <div className="mode-tabs">{["AI Chat", "Code Assistant", "Web Search", "Summarize", "Creative"].map((tab, i) => <button key={tab} className={activeMode === tab ? "active" : ""} onClick={() => setActiveMode(tab)}>{i === 0 ? <Bot /> : i === 1 ? <Code2 /> : i === 2 ? <Search /> : i === 3 ? <FileText /> : <Sparkles />}{tab}</button>)}</div>
           <section className="chat-panel"><div className="chat-panel-glow" /><div className="chat-messages" ref={messagesRef}>{messages.map(message => <ChatMessage key={message.id} message={message} />)}</div>{voiceMode && voiceState === "listening" && <VoiceListeningBubble transcript={voiceTranscript} />}<div className="composer-wrap"><div className="composer"><button className="composer-icon"><Paperclip size={18} /></button><input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === "Enter" && void sendMessage()} placeholder={voiceState === "listening" ? "Listening…" : voiceMode ? "Voice mode on — type or speak..." : "Type a message or use the microphone..."} /><button className={`composer-icon ${voiceMode ? "voice-on" : ""}`} onClick={toggleVoice} title={voiceMode ? "Turn voice replies off" : "Turn voice replies on"}><Mic size={18} /></button></div><button className="send-button" onClick={() => void sendMessage()}><Send size={19} /></button></div><div className="suggestion-row"><Suggestion label="Summarize this page" icon={<FileText />} onClick={() => setInput("Summarize this page")} /><Suggestion label="Remind me at 8 PM" icon={<Timer />} onClick={setReminder} /><Suggestion label="Show my tasks" icon={<Check />} onClick={() => addJazzMessage("Your current dashboard shows 12 of 18 tasks completed.")} /><Suggestion label="Open WhatsApp" icon={<Webhook />} onClick={() => preferredAndroid && void runAndroidCommand(preferredAndroid, "launch_app", { packageName: "com.whatsapp" })} /><Suggestion label="Today’s agenda" icon={<CalendarDays />} onClick={openCalendar} /></div></section>
           {showFeatures && <section className="feature-card"><div className="section-heading"><div><span className="heading-icon"><Sparkles size={16} /></span><strong>Powerful Features</strong></div></div><div className="feature-grid"><Feature icon={<Bot />} title="AI Agents" sub="Autonomous task" badge="NEW" /><Feature icon={<Webhook />} title="Automation" sub="Smart workflows" /><Feature icon={<FileText />} title="Knowledge" sub="Your knowledge base" /><Feature icon={<Code2 />} title="Code Assistant" sub="Write & debug code" /><Feature icon={<FileText />} title="File Analyzer" sub="Analyze any file" /><Feature icon={<Search />} title="Web Search" sub="Real-time results" /><Feature icon={<Mic />} title="Voice Control" sub="Hands-free control" /><Feature icon={<ImagePlus />} title="Image Generation" sub="Create with AI" /></div></section>}
         </section>
-        <aside className="right-column">
+        <aside className={`right-column ${rightPanelOpen ? "" : "right-column-collapsed"}`}>
+          <button className="right-panel-toggle" onClick={toggleRightPanel} title={rightPanelOpen ? "Collapse right panel" : "Expand right panel"} aria-label={rightPanelOpen ? "Collapse right panel" : "Expand right panel"}>
+            {rightPanelOpen ? <ChevronRight size={17} /> : <ChevronLeft size={17} />}
+          </button>
+          {rightPanelOpen && <>
           <DashboardCard icon={<Sparkles />} title="Quick Actions" action="Edit"><div className="quick-actions-grid">{quickActionList.map(action => <QuickAction key={action.label} {...action} />)}</div></DashboardCard>
           <DashboardCard icon={<Smartphone />} title="Devices" action={showAllDevices ? "Collapse" : "See all"} actionClick={() => setShowAllDevices(v => !v)}><div className="device-list">{(visibleDevices.length ? visibleDevices : [{ id: "android-phone", name: "Android Phone", kind: "android", status: "not-configured", bridge: false, connected: false }]).map(device => <DeviceRow key={device.id} device={device} onClick={() => setShowAllDevices(true)} />)}</div></DashboardCard>
           <DashboardCard icon={<Bell />} title="Upcoming Reminders" action="See all"><div className="reminder-list">{reminders.length ? reminders.slice(0, 3).map(item => <ReminderRow key={item.id} item={item} />) : <div className="empty-row">No reminders yet. Use Set Reminder.</div>}</div></DashboardCard>
           <div className="status-card"><div className="status-top"><div><div className="status-heading"><span className="status-icon"><Zap size={16} /></span><strong>Jazz Status</strong></div><p>{voiceMode ? `Voice replies on • ${voiceState === "listening" ? "listening..." : voiceState === "speaking" ? "speaking..." : "ready"}` : "Voice replies off • text only"}</p></div><span className="online-badge">Online</span></div><div className="status-wave">{Array.from({ length: 22 }, (_, i) => <i key={i} style={{ height: `${6 + ((i * 11) % 27)}px` }} />)}</div></div>
+          </>}
         </aside>
       </div>
       <section className="analytics-row"><div className="activity-card"><div className="analytics-heading"><div><span className="heading-icon blue"><Activity size={16} /></span><strong>Activity Overview</strong></div><button>This Week <ChevronDown size={14} /></button></div><div className="activity-content"><div className="productivity-ring"><span>68%</span><small>Productivity Score</small></div><div className="activity-legend"><Legend dot="purple" label="Chats" value="42%" /><Legend dot="cyan" label="Tasks" value="28%" /><Legend dot="green" label="Automations" value="18%" /><Legend dot="blue" label="Learning" value="12%" /></div></div></div></section></div>
