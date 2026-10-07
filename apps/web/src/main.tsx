@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Activity, Bell, Bot, BrainCircuit, CalendarDays, Camera, Check,
+  Activity, Bell, Bot, BrainCircuit, CalendarDays, Camera, Check, Copy,
   ChevronDown, ChevronLeft, ChevronRight, Code2, FileText, Globe, ImagePlus, Instagram,
-  Laptop, Menu, MessageSquare, Mic, Music2, Paperclip, Plus, Search,
-  Send, Settings2, Smartphone, Sparkles, Timer, Volume2, Wand2, Webhook,
+  Laptop, Menu, MessageSquare, Mic, MoreHorizontal, Music2, Paperclip, Plus, Search, Share2,
+  Send, Settings2, Smartphone, Sparkles, ThumbsDown, ThumbsUp, Timer, Volume2, Wand2, Webhook,
   X, Youtube, Zap
 } from "lucide-react";
 import { createRoot } from "react-dom/client";
@@ -114,7 +114,7 @@ async function streamChat(message: string, onText: (chunk: string) => void, sour
   return full;
 }
 
-const UI_BUILD = "20261007-panel-toggle-v7";
+const UI_BUILD = "20261008-chat-structure-v1";
 
 function App() {
   const [messages, setMessages] = useState<Message[]>(() => {
@@ -468,7 +468,37 @@ function App() {
 }
 
 function NavItem({ icon, text, active, badge, dropdown, onClick }: { icon: React.ReactNode; text: string; active?: boolean; badge?: string; dropdown?: boolean; onClick?: () => void }) { return <button className={`nav-item ${active ? "active" : ""}`} onClick={onClick}>{React.cloneElement(icon as React.ReactElement, { size: 18 })}<span>{text}</span>{badge && <em>{badge}</em>}{dropdown && <ChevronDown size={15} className="nav-chevron" />}</button>; }
-function ChatMessage({ message }: { message: Message }) { return message.sender === "user" ? <div className="message-row user-row"><div className="user-bubble"><div>{message.text}</div><small>{message.time}<Check size={12} /><Check size={12} className="check-overlap" /></small></div></div> : <div className="message-row jazz-row"><div className="jazz-avatar"><Wave /></div><div className="jazz-bubble"><MessageContent text={message.text} /><small>{message.time}</small></div></div>; }
+function ChatMessage({ message }: { message: Message }) {
+  if (message.sender === "user") {
+    return (
+      <div className="message-row user-row">
+        <div className="message-content-column user-content-column">
+          <div className="user-bubble"><MessageContent text={message.text} /></div>
+          <div className="user-message-meta">{message.time}<Check size={12} /><Check size={12} className="check-overlap" /></div>
+        </div>
+        <div className="user-avatar" aria-hidden="true">G</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="message-row jazz-row">
+      <div className="jazz-avatar"><Wave /></div>
+      <div className="message-content-column jazz-content-column">
+        <div className="assistant-meta"><strong>Jazz</strong><span>{message.time}</span></div>
+        <div className="jazz-bubble"><MessageContent text={message.text} /></div>
+        <div className="message-actions" aria-hidden="true">
+          <Copy size={16} />
+          <ThumbsUp size={16} />
+          <ThumbsDown size={16} />
+          <Share2 size={16} />
+          <Volume2 size={16} />
+          <MoreHorizontal size={17} />
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function VoiceListeningBubble({ transcript }: { transcript: string }) {
   return (
