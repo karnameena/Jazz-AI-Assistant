@@ -114,7 +114,7 @@ async function streamChat(message: string, onText: (chunk: string) => void, sour
   return full;
 }
 
-const UI_BUILD = "20261007-panel-toggle-v5";
+const UI_BUILD = "20261007-panel-toggle-v7";
 
 function App() {
   const [messages, setMessages] = useState<Message[]>(() => {
@@ -231,6 +231,14 @@ function App() {
 
   useEffect(() => {
     console.info(`[Jazz UI] ${UI_BUILD}`);
+    const syncPanelsForViewport = () => {
+      if (window.innerWidth <= 980) {
+        setSidebarOpen(false);
+        setRightPanelOpen(false);
+      }
+    };
+    syncPanelsForViewport();
+    window.addEventListener("resize", syncPanelsForViewport);
     const timer = window.setInterval(() => setDayMode(getDayMode()), 30_000);
     apiJson("/api/reminders").then(data => setReminders(data.items || [])).catch(() => setReminders([]));
 
@@ -285,6 +293,7 @@ function App() {
     return () => {
       window.clearInterval(timer);
       window.clearInterval(deviceTimer);
+      window.removeEventListener("resize", syncPanelsForViewport);
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onVisibility);
       voiceActivationPendingRef.current = false;
@@ -400,6 +409,7 @@ function App() {
   return <div data-ui-build={UI_BUILD} className={`jazz-app mode-${dayMode} ${leftPanelOpen ? "left-panel-open" : "left-panel-closed"} ${rightPanelOpen ? "right-panel-open" : "right-panel-closed"}`}>
     <div className="ambient ambient-one" /><div className="ambient ambient-two" /><div className="ambient-grid" />
     {sidebarOpen && <div className="mobile-overlay" onClick={() => setSidebarOpen(false)} />}
+    {rightPanelOpen && <div className="right-mobile-overlay" onClick={() => setRightPanelOpen(false)} />}
     {(leftPanelOpen || sidebarOpen) && <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
       <div className="sidebar-topline"><div className="brand"><div className="brand-logo"><Wave /></div><div className="brand-copy"><strong>Jazz</strong><span>AI Assistant</span><small>Always there. Always with you.</small></div></div><button className="collapse-button" onClick={() => setLeftPanelOpen(false)} title="Hide left panel" aria-label="Hide left panel"><ChevronLeft size={17} /></button></div>
       <button className="new-chat-button" onClick={newChat}><Plus size={18} /><span>New Chat</span></button>
@@ -422,14 +432,18 @@ function App() {
       <div className="sidebar-wave-strip">{Array.from({ length: 34 }, (_, i) => <i key={i} style={{ height: `${5 + ((i * 7) % 22)}px` }} />)}</div>
     </aside>}
     <main className="main-content">
-      <header className="top-header"><button className="mobile-menu" onClick={() => setSidebarOpen(true)}><Menu size={22} /></button><div className="greeting"><h1>{greeting.title}</h1><p><span>Jazz is <b>online</b></span> and ready to assist you.</p></div><div className="top-search" onClick={() => setSearchOpen(true)}><Search size={17} /><span>Search anything...</span><kbd>Ctrl K</kbd></div><div className="header-actions">
-        <button type="button" className={`layout-toggle ${leftPanelOpen ? "active" : ""}`} onClick={() => setLeftPanelOpen(v => !v)} aria-pressed={leftPanelOpen} title={leftPanelOpen ? "Hide left panel" : "Show left panel"}>
-          {leftPanelOpen ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}<span>Menu</span>
-        </button>
-        <button type="button" className={`layout-toggle ${rightPanelOpen ? "active" : ""}`} onClick={() => setRightPanelOpen(v => !v)} aria-pressed={rightPanelOpen} title={rightPanelOpen ? "Hide right panel" : "Show right panel"}>
-          <span>Tools</span>{rightPanelOpen ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
-        </button>
+      <header className="top-header"><button className="mobile-menu" onClick={() => { setLeftPanelOpen(true); setSidebarOpen(true); }}><Menu size={22} /></button><div className="greeting"><h1>{greeting.title}</h1><p><span>Jazz is <b>online</b></span> and ready to assist you.</p></div><div className="top-search" onClick={() => setSearchOpen(true)}><Search size={17} /><span>Search anything...</span><kbd>Ctrl K</kbd></div><div className="header-actions"><button className="mobile-tools-button" onClick={() => setRightPanelOpen(true)} title="Open tools"><ChevronLeft size={18} /><span>Tools</span></button>
         <button className={`round-button ${voiceMode ? "active" : ""}`} onClick={toggleVoice} title={voiceMode ? "Turn voice replies off" : "Turn voice replies on"}><Mic size={18} /></button><button className="round-button notification-button"><Bell size={18} /><span>3</span></button><div className="profile clickable" onClick={() => profileInputRef.current?.click()}>{profileImage ? <img src={profileImage} alt="Profile" className="profile-image" /> : <div className="profile-avatar">G</div>}<div className="profile-info"><strong>Gunakarna</strong><span><i />Online</span></div></div><input ref={profileInputRef} type="file" accept="image/*" onChange={onProfileSelected} hidden /></div></header>
+      <div className="panel-control-row" aria-label="Dashboard panel controls">
+        <button type="button" className={`panel-control panel-control-left ${leftPanelOpen ? "is-open" : "is-closed"}`} onClick={() => setLeftPanelOpen(v => !v)} aria-pressed={leftPanelOpen}>
+          {leftPanelOpen ? <ChevronLeft size={18} /> : <ChevronRight size={18} />}
+          <span>{leftPanelOpen ? "Hide Menu" : "Show Menu"}</span>
+        </button>
+        <button type="button" className={`panel-control panel-control-right ${rightPanelOpen ? "is-open" : "is-closed"}`} onClick={() => setRightPanelOpen(v => !v)} aria-pressed={rightPanelOpen}>
+          <span>{rightPanelOpen ? "Hide Tools" : "Show Tools"}</span>
+          {rightPanelOpen ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
+        </button>
+      </div>
       <div className="dashboard-scroll"><div className={`dashboard-grid ${rightPanelOpen ? "with-right-panel" : "without-right-panel"}`}>
         <section className="center-column">
           <div className="mode-tabs">{["AI Chat", "Code Assistant", "Web Search", "Summarize", "Creative"].map((tab, i) => <button key={tab} className={activeMode === tab ? "active" : ""} onClick={() => setActiveMode(tab)}>{i === 0 ? <Bot /> : i === 1 ? <Code2 /> : i === 2 ? <Search /> : i === 3 ? <FileText /> : <Sparkles />}{tab}</button>)}</div>
