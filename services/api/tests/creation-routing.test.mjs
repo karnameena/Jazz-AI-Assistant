@@ -7,6 +7,12 @@ import { maybeGenerateArtifact, getArtifact } from "../src/artifact-generation.m
 test("PDF reports about React.js are files, never 30B coding tasks", async () => {
   const request = "Create a professional PDF report about React.js";
   assert.deepEqual(routeCreationIntent(request), {type:"artifact", kind:"pdf"});
+  // The Jazz web UI's legacy Normal/Evil mode middleware used to prefix all
+  // requests and accidentally convert document requests into coding projects.
+  for (const mode of ["NORMAL","EVIL"]) {
+    const wrapped = "[JAZZ_MODE:" + mode + "] " + request;
+    assert.deepEqual(routeCreationIntent(wrapped), {type:"artifact",kind:"pdf"});
+  }
   let docPrompt = "";
   const output = await maybeGenerateArtifact(request, async prompt => {
     docPrompt = prompt;
@@ -17,6 +23,10 @@ test("PDF reports about React.js are files, never 30B coding tasks", async () =>
   assert.match(docPrompt,/React\.js/);
   assert.match(output.artifact.filename,/reactjs-professional-report\.pdf/);
   assert.equal(getArtifact(output.artifact.url.split("/").pop()).buffer.toString("ascii",0,5),"%PDF-");
+  const prefixed = await maybeGenerateArtifact("[JAZZ_MODE:NORMAL] " + request,
+    async () => "# Executive Summary\nReact builds user interfaces.");
+  assert.equal(prefixed.mode, "artifact-generation");
+  assert.match(prefixed.artifact.filename,/reactjs-professional-report[.]pdf/);
 });
 
 test("Word and Excel creation outrank coding keywords", () => {
