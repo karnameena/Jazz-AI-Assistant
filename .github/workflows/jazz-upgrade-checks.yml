@@ -36,6 +36,8 @@ jobs:
         run: pnpm --filter @jazz/api test
       - name: Exercise actual chat endpoints and artifact download
         run: node --test services/api/tests/live-api-artifacts.test.mjs
+      - name: Verify Normal/Evil browser middleware preserves document requests
+        run: node --test apps/web/tests/assistant-mode-document.test.mjs
       - name: Build existing Jazz web interface
         run: pnpm --filter @jazz/web build
       - name: Run JazzWhatsApp shared API tests
