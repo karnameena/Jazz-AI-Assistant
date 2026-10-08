@@ -5,6 +5,19 @@ function cleanMessage(message) {
     .trim();
 }
 
+const DOCUMENT_ACTION = /^(?:(?:hey\\s+)?jazz[,!]?\\s*)?(?:please\\s+)?(?:create|generate|make|prepare|write|export|build)\\b/i;
+const DOCUMENT_TYPE = /\\b(?:pdf|word|docx|excel|xlsx|spreadsheet)\\b/i;
+const SOFTWARE_TARGET = /\\b(?:app(?:lication)?|website|webapp|web\\s+app|software|api|component|script|package|library|pdf\\s+generator)\\b/i;
+
+export function isDocumentCreationRequest(message) {
+  const text = cleanMessage(message);
+  // "Build a PDF generator application" is coding; "Create a PDF report
+  // about React.js" is document generation. Avoid routing by topic keyword.
+  return DOCUMENT_ACTION.test(text)
+    && DOCUMENT_TYPE.test(text.slice(0, 200))
+    && !SOFTWARE_TARGET.test(text.slice(0, 200));
+}
+
 const STRONG_PATTERNS = [
   /\b(create|build|generate|scaffold|make)\b.*\b(react|next\.?js|node\.?js|express|frontend|backend|full[- ]?stack|website|web app|application|api|dashboard|login page|todo|android|webview|typescript|javascript|java|c#|\.net)\b/i,
   /\b(fix|debug|repair|resolve)\b.*\b(error|errors|bug|bugs|build|test|tests|project|repository|repo|code)\b/i,
@@ -29,6 +42,13 @@ const NON_CODING = [
 export function detectCodingIntent(message) {
   const text = cleanMessage(message);
   if (!text) return { matched: false, confidence: 0, text };
+  // Hard safety boundary: document/file creation is NOT a coding project,
+  // even when the document topic is React, TypeScript, JavaScript or Android.
+  // This guard lives inside the coding agent as defense in depth, independent
+  // of which server entry point calls detectCodingIntent.
+  if (isDocumentCreationRequest(text)) {
+    return { matched: false, confidence: 0, text, kind: null, delegatedTo: "artifact-generation" };
+  }
   if (NON_CODING.some(pattern => pattern.test(text)) && !/\b(create|build|fix|debug|code|project|app(?:lication)?)\b/i.test(text)) {
     return { matched: false, confidence: 0.02, text };
   }
