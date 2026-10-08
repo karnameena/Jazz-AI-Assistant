@@ -21,7 +21,7 @@ export function codingConfig() {
     provider: String(process.env.JAZZ_CODING_PROVIDER || "ollama").toLowerCase(),
     ollamaUrl: String(process.env.JAZZ_CODING_OLLAMA_URL || process.env.JAZZ_OLLAMA_URL || "http://127.0.0.1:11434").replace(/\/$/, ""),
     model: String(process.env.JAZZ_CODING_MODEL || "auto"),
-    smallerModelRecommendation: String(process.env.JAZZ_CODING_SMALLER_MODEL || "qwen2.5-coder:3b"),
+    smallerModelRecommendation: String(process.env.JAZZ_CODING_SMALLER_MODEL || "qwen3:4b"),
     contextSize: Math.max(2048, Number(process.env.JAZZ_CODING_CONTEXT || 4096)),
     maxTokens: Math.max(512, Number(process.env.JAZZ_CODING_MAX_TOKENS || 1536)),
     maxRepairAttempts: Math.max(0, Math.min(5, Number(process.env.JAZZ_CODING_MAX_REPAIR_ATTEMPTS || 3)))
