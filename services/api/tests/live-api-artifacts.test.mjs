@@ -3,6 +3,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
+import fs from "node:fs/promises";
+import os from "node:os";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
@@ -32,14 +34,15 @@ test("live Jazz chat and streaming deliver real PDF/Excel, never the coding agen
     res.end(JSON.stringify(result));
   });
   const modelPort = await listen(mockOllama);
+  const isolatedStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "jazz-artifacts-e2e-"));
   let child;
   let logs = "";
   try {
     const temporaryServer = http.createServer();
     const apiPort = await listen(temporaryServer);
     await new Promise(resolve => temporaryServer.close(resolve));
-    child = spawn(process.execPath, ["services/api/src/server.mjs"], {
-      cwd:root,
+    child = spawn(process.execPath, [path.join(root, "services/api/src/server.mjs")], {
+      cwd:isolatedStateDir,
       windowsHide:true,
       stdio:["ignore","pipe","pipe"],
       env:{
@@ -50,7 +53,8 @@ test("live Jazz chat and streaming deliver real PDF/Excel, never the coding agen
         JAZZ_FREE_ONLY:"true",
         JAZZ_DOCUMENT_MODEL:"qwen3:1.7b",
         JAZZ_NORMAL_MODEL:"qwen3:1.7b",
-        JAZZ_WEB_RAG_ENABLED:"false"
+        JAZZ_WEB_RAG_ENABLED:"false",
+        JAZZWHATSAPP_ALLOW_SIGNUP:"true"
       }
     });
     const capture = chunk => {logs = (logs + chunk.toString()).slice(-10000);};
@@ -99,11 +103,37 @@ test("live Jazz chat and streaming deliver real PDF/Excel, never the coding agen
     assert.match(body,/"mode":"artifact-generation"/);
     assert.match(body,/\/api\/artifacts\//);
     assert.doesNotMatch(body,/coding task|model is not ready/i);
+
+    // The user's WhatsApp-style interface uses a different authenticated
+    // request route than the main Jazz web chat. Test that exact path too.
+    const signIn = await fetch(url + "/api/jazzwhatsapp/auth", {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({username:"jazz-ci",password:"fixture-password-123"})
+    });
+    assert.equal(signIn.status,400,"An invalid username should be rejected");
+    const auth = await fetch(url + "/api/jazzwhatsapp/auth", {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({username:"jazzci",password:"fixture-password-123"})
+    });
+    assert.equal(auth.status,200,"JazzWhatsApp isolated test login failed");
+    const authData = await auth.json();
+    const waReply = await fetch(url + "/api/jazzwhatsapp/message", {
+      method:"POST",
+      headers:{"Content-Type":"application/json",Authorization:"Bearer " + authData.token},
+      body:JSON.stringify({text:"Create a professional PDF report about React.js",source:"typed"})
+    });
+    const waData = await waReply.json();
+    assert.equal(waReply.status,200,JSON.stringify(waData));
+    assert.match(waData.assistant?.text||"",/\\[Download .+\\]\\(\\/api\\/artifacts\\//);
+    assert.doesNotMatch(waData.assistant.text,/coding task|model is not ready|This operation was aborted/i);
   } finally {
     if (child && child.exitCode === null) {
       child.kill();
       await Promise.race([once(child,"exit"),delay(3000)]);
     }
     await new Promise(resolve => mockOllama.close(resolve));
+    await fs.rm(isolatedStateDir,{recursive:true,force:true});
   }
 });
