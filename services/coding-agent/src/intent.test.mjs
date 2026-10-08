@@ -28,7 +28,9 @@ test("PDF and Word content about React or Android never become coding tasks", ()
     "Hey Jazz, create a professional PDF report about React.js",
     "Please generate a Word document about Android development",
     "Build an Excel spreadsheet about JavaScript projects",
-    "Create a PDF report about React.js"
+    "Create a PDF report about React.js",
+    "Create a PDF guide for Android applications",
+    "Generate a PDF report on API performance"
   ]) {
     assert.equal(detectCodingIntent(message).matched, false, message);
   }
