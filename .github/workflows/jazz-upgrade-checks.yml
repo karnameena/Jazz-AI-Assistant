@@ -1,0 +1,33 @@
+name: Jazz upgrade checks
+on:
+  push:
+    branches:
+      - feature/jazz-intelligence-attachments-20261008
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Enable pnpm
+        run: corepack enable
+      - name: Install workspace dependencies
+        run: pnpm install --no-frozen-lockfile
+      - name: Validate JavaScript syntax
+        run: |
+          node --check services/api/src/server.mjs
+          node --check services/api/src/ollama.mjs
+          node --check services/api/src/response-context.mjs
+          node --check services/api/src/attachment-analysis.mjs
+          node --check services/api/src/artifact-generation.mjs
+      - name: Run API behavior tests
+        run: pnpm --filter @jazz/api test
+      - name: Build existing Jazz web interface
+        run: pnpm --filter @jazz/web build
+      - name: Run JazzWhatsApp shared API tests
+        run: node --test services/api/src/jazzwhatsapp/reply-quality.test.mjs services/api/src/jazzwhatsapp/vision.test.mjs
