@@ -17,7 +17,7 @@ async function fetchJson(url, options = {}, timeoutMs = 120000) {
 }
 
 const PREFERRED_LOCAL_MODELS = [
-  "qwen2.5-coder:3b", "qwen2.5:3b", "qwen3:4b", "llama3.2:3b",
+  "qwen3:4b", "qwen2.5-coder:3b", "qwen2.5:3b", "llama3.2:3b",
   "qwen2.5-coder:1.5b", "qwen3:1.7b", "qwen2.5-coder:7b",
   "qwen2.5:7b", "qwen3:8b", "qwen3:0.6b"
 ];
