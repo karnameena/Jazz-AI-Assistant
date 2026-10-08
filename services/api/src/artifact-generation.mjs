@@ -29,7 +29,6 @@ function documentTitle(request) {
 function cleanup() {
   const now = Date.now();
   for (const [id, item] of STORE) if (item.expiresAt <= now) STORE.delete(id);
-  while (STORE.size >= MAX_ARTIFACTS) STORE.delete(STORE.keys().next().value);
 }
 
 function safeFilename(request, kind) {
@@ -42,6 +41,7 @@ function storeArtifact(request, kind, buffer, mime) {
   if (!Buffer.isBuffer(buffer) || !buffer.length || buffer.length > MAX_ARTIFACT_BYTES)
     throw new Error("Document generation returned an empty or oversized file.");
   cleanup();
+  while (STORE.size >= MAX_ARTIFACTS) STORE.delete(STORE.keys().next().value);
   const id = crypto.randomUUID();
   const expiresAt = Date.now() + TTL_MS;
   STORE.set(id, {filename: safeFilename(request, kind), buffer, mime, expiresAt});
