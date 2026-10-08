@@ -21,7 +21,7 @@ if ($names -notcontains $Model) {
   exit 1
 }
 Write-Host "Checking actual Node.js fetch with a short 2048-context request..." -ForegroundColor Cyan
-$scriptFile = Join-Path $PSScriptRoot "services\\api\\scripts\\diagnose-ollama.mjs"
+$scriptFile = Join-Path $PSScriptRoot "services\api\scripts\diagnose-ollama.mjs"
 if (!(Test-Path $scriptFile)) { throw "Node Ollama diagnostic script is missing: $scriptFile" }
 & node $scriptFile $Model $api
 if ($LASTEXITCODE -ne 0) {
