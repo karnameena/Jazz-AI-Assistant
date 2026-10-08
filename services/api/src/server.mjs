@@ -15,7 +15,7 @@ import { contextStatus } from "./conversation-context.mjs";
 import { prepareResponseContext } from "./response-context.mjs";
 import { analyzeAttachments, attachmentLimits, readAttachmentJson } from "./attachment-analysis.mjs";
 import { getArtifact, maybeGenerateArtifact } from "./artifact-generation.mjs";
-import { routeCreationIntent } from "./creation-routing.mjs";
+import { routeCreationIntent, ROUTING_BUILD } from "./creation-routing.mjs";
 import { getCodingAgentHealth, getCodingTask, handleCodingIntent, listCodingTasks } from "../../coding-agent/src/index.mjs";
 import {
   callReminderNow,
@@ -27,7 +27,7 @@ import {
   listVoipReminders
 } from "./voip-reminders.mjs";
 
-const VERSION = "0.10.4-local";
+const VERSION = "0.10.5-local";
 const port = Number(process.env.PORT || 8787);
 const memories = [];
 let pendingSensitiveAction = null;
@@ -578,12 +578,28 @@ const server = http.createServer(async (req, res) => {
         ok: true,
         service: "jazz-api",
         version: VERSION,
+        routingBuild: ROUTING_BUILD,
         provider: resolveLlmProvider(),
         freeMode: getFreeModeStatus(),
         ollama,
         tts,
         streaming: true,
         ttsStreaming: true
+      });
+    }
+    // Read-only runtime fingerprint: confirm which API the chat is actually using.
+    // A stale/remote API without this route cannot generate document artifacts.
+    if (req.method === "GET" && pathname === "/api/routing/health") {
+      return sendJson(res, 200, {
+        ok: true,
+        version: VERSION,
+        routingBuild: ROUTING_BUILD,
+        documentGeneration: true,
+        documentModel: "ollama-or-configured-provider",
+        samples: {
+          "Create a professional PDF report about React.js": routeCreationIntent("Create a professional PDF report about React.js"),
+          "Create a React todo application": routeCreationIntent("Create a React todo application")
+        }
       });
     }
     if (req.method === "GET" && req.url === "/api/brain-health") return sendJson(res, 200, { ok: true, version: VERSION, provider: resolveLlmProvider(), freeMode: getFreeModeStatus(), ollama: await getOllamaStatus() });
