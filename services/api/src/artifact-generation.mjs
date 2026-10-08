@@ -90,7 +90,7 @@ async function renderPdf(title, content) {
   for (let page = 0; page < pageCount; page++) {
     doc.switchToPage(page);
     doc.fontSize(9).fillColor("#738096").text("Jazz AI Assistant  •  Page " + (page + 1) + " of " + pageCount,
-      54, 790, {width:486, align:"center", lineBreak:false});
+      54, 770, {width:486, align:"center", lineBreak:false});
   }
   doc.end();
   return completed;
@@ -142,7 +142,7 @@ async function renderXlsx(title, request) {
     sheet.getCell("D28").value = "Total";
     sheet.getCell("E28").value = {formula:"SUM(E2:E26)"};
   }
-  sheet.name = title.slice(0, 31).replace(/[\[\]*?:/\\]/g,"") || "Data";
+  sheet.name = title.slice(0, 31).replace(/[^a-zA-Z0-9 _-]/g, "") || "Data";
   sheet.getRow(1).font = {bold:true,color:{argb:"FFFFFFFF"}};
   sheet.getRow(1).fill = {type:"pattern",pattern:"solid",fgColor:{argb:"FF24486C"}};
   sheet.getRow(1).height = 23;
