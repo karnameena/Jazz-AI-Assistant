@@ -13,9 +13,12 @@ export function isDocumentCreationRequest(message) {
   const text = cleanMessage(message);
   // "Build a PDF generator application" is coding; "Create a PDF report
   // about React.js" is document generation. Avoid routing by topic keyword.
+  // The topic of a report can itself be an app/API. Judge the requested
+  // output before subject clauses, not keywords inside the document topic.
+  const requestedOutput = text.split(/\b(?:about|on|regarding|covering|for)\b/i, 1)[0];
   return DOCUMENT_ACTION.test(text)
-    && DOCUMENT_TYPE.test(text.slice(0, 200))
-    && !SOFTWARE_TARGET.test(text.slice(0, 200));
+    && DOCUMENT_TYPE.test(requestedOutput.slice(0, 200))
+    && !SOFTWARE_TARGET.test(requestedOutput.slice(0, 200));
 }
 
 const STRONG_PATTERNS = [
