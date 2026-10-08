@@ -122,8 +122,8 @@ const EXPECTED_ROUTING_BUILD = "20261008-document-route-guard-v3";
  * workflows are left unchanged. The frontend must not silently send these
  * prompts to an old backend that turns them into coding-agent tasks. */
 function isRequestedDocument(message: string) {
-  return /^(?:(?:hey\\s+jazz[,!]?[\\s,]*)|(?:please\\s+))*\\b(?:create|generate|make|prepare|write|export|build)\\b/i.test(message.trim())
-    && /\\b(?:pdf|word|docx|excel|xlsx|spreadsheet)\\b/i.test(message.slice(0, 170));
+  return /^(?:(?:hey\s+jazz[,!]?[\s,]*)|(?:please\s+))*\b(?:create|generate|make|prepare|write|export|build)\b/i.test(message.trim())
+    && /\b(?:pdf|word|docx|excel|xlsx|spreadsheet)\b/i.test(message.slice(0, 170));
 }
 async function documentRoutingWarning(message: string): Promise<string | null> {
   if (!isRequestedDocument(message)) return null;
@@ -136,8 +136,8 @@ async function documentRoutingWarning(message: string): Promise<string | null> {
     throw new Error("routing build " + (status?.routingBuild || "unknown"));
   } catch (error) {
     const reason = error instanceof Error ? error.message : "version check failed";
-    return "**Jazz document creation is blocked because this chat is connected to an older or different API.**\\n\\n"
-      + "Reason: " + reason + ".\\n\\n"
+    return "**Jazz document creation is blocked because this chat is connected to an older or different API.**\n\n"
+      + "Reason: " + reason + ".\n\n"
       + "This chat uses the API at the current website origin. Check the website URL and run "
       + "`verify-jazz-artifacts.ps1 -WebBaseUrl <your-web-url>` from the upgraded test project. "
       + "Update or switch the backend serving this site, then retry. No coding agent was run.";
