@@ -1,4 +1,4 @@
-export const ROUTING_BUILD = "20261008-document-route-guard-v3";
+export const ROUTING_BUILD = "20261008-document-route-guard-v4";
 
 // Centralized routing for overlapping "create ... React ..." requests.
 // Document requests take precedence over coding-project keywords.
