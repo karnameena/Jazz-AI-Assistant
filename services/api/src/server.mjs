@@ -321,7 +321,6 @@ async function handleScriptIntent(message) {
 
 async function localAssistantReply(message) {
   const text = normalizeLocalText(message);
-  const lower = text.toLowerCase();
   if (!text) return { assistant: "Tell me what you need, Mama. 🙂" };
 
   if (/^(confirm|yes confirm|confirm it|do it|go ahead)$/i.test(text) && pendingSensitiveAction) {
@@ -377,8 +376,14 @@ async function localAssistantReply(message) {
 
   if (/^(?:what(?:'s| is)\s+)?(?:the\s+)?(?:current\s+)?time(?:\s+is\s+it)?(?:\s+in\s+india)?[?.! ]*$/i.test(text)) return { assistant: `Mama ⏰ the current time in India is ${getCurrentTime()}.` };
   if (/\b(where are you|where r u|where are u|where're you)\b/i.test(text)) return { assistant: "Right here with you, Mama 👋😎 Jazz is online and ready." };
-  if (lower.includes("remember") || lower.includes("memory")) return { assistant: "Absolutely, Mama 🧠 Tell me what you want Jazz to remember." };
-  if (lower.includes("remind") || lower.includes("reminder")) return { assistant: "Sure, Mama ⏰ Tell me what I should remind you about and the exact time, for example: **remind me at 7 PM to take medicine**." };
+  const remember = text.match(/^(?:hey\\s+jazz[, ]*)?(?:please\\s+)?remember(?:\\s+that)?\\s+(.{2,1000})[.!]?$/i);
+  if (remember) {
+    const item = { id: crypto.randomUUID(), content: remember[1].trim(), createdAt: new Date().toISOString() };
+    memories.push(item);
+    if (memories.length > 200) memories.shift();
+    return { assistant: "I’ll keep that in this running Jazz session. Session memory is not yet saved across server restarts.", mode: "session-memory" };
+  }
+  if (/^(?:remind me|set (?:a )?reminder)[!.? ]*$/i.test(text)) return { assistant: "What should I remind you about, and when?", mode: "reminder-clarification" };
   return null;
 }
 
