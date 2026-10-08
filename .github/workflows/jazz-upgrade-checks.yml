@@ -25,6 +25,7 @@ jobs:
         run: |
           node --check services/api/src/server.mjs
           node --check services/api/src/ollama.mjs
+          node --check services/api/scripts/diagnose-ollama.mjs
           node --check services/api/src/response-context.mjs
           node --check services/api/src/attachment-analysis.mjs
           node --check services/api/src/artifact-generation.mjs
