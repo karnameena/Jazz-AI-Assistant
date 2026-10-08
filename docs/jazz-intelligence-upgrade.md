@@ -57,6 +57,22 @@ If the check fails, your current chat is reaching the wrong/older backend or the
 
 The coding agent also has a hard guard: PDF/Word/Excel requests do not become coding tasks even when their subject mentions React or Android. Genuine `Create a React Todo application` continues to use the coding agent. Ollama document jobs may take longer on an i3/8 GB machine; `JAZZ_DOCUMENT_TIMEOUT_MS` defaults to 360000 ms (six minutes), independently of normal conversation timeout. This prevents premature server-side aborts but does not override a shorter timeout imposed by an external mobile client or reverse proxy.
 
+## Repeated coding-agent error even though routing health says PASS
+
+A static health route does **not** prove the chat request uses that backend. A separate Vite proxy, JazzWhatsApp hosted API, desktop client, or previously-opened tab may point elsewhere. The phrase `I isolated the coding task ... This operation was aborted` is emitted by the **coding agent**, not PDFKit or the document writer. If it appears after `GET /api/routing/health` passes, check the actual message request destination (browser DevTools → Network → `/api/chat/stream`, `/api/chat`, or `/api/jazzwhatsapp/message`).
+
+From an upgraded checkout run:
+```powershell
+.\verify-jazz-artifacts.ps1
+# When the URL in your browser is a different website, also specify it:
+.\verify-jazz-artifacts.ps1 -WebBaseUrl "https://YOUR-JAZZ-WEBSITE.example"
+# When your client points to a different API, check that API explicitly:
+.\verify-jazz-artifacts.ps1 -ApiBaseUrl "https://YOUR-JAZZ-API.example" -WebBaseUrl ""
+```
+This revised verifier sends an **actual** `Create an Excel React expense tracker` request through both `/api/chat` and `/api/chat/stream`, verifies each returns an artifact, and checks the local web proxy. It does not download a model or change user files. The actual PDF endpoint is separately covered by an API integration test using a mock loopback Ollama server. `X-Jazz-Routing-Build` and `X-Jazz-Api-Version` response headers identify the server that handled the request.
+
+The upgraded React web chat performs a lightweight version check only for PDF/Word/Excel requests. If that **specific web origin** is connected to an older API, it explains the mismatch rather than routing the request to the coding agent. Ordinary chat, Normal/Evil modes, Android actions, recovery and reminder paths are unaffected.
+
 ## What is actually implemented
 
 - Ollama receives bounded, structured chat history **once**, without duplicating it in the system prompt. Fallback to Ollama retains history, and cloud-model compatibility is kept.
