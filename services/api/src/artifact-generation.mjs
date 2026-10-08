@@ -8,8 +8,14 @@ const MAX_ARTIFACTS = 12;
 const TTL_MS = 20 * 60 * 1000;
 const MAX_ARTIFACT_BYTES = 7 * 1024 * 1024;
 
+// Older Jazz browser builds prefix chat commands with the Normal/Evil mode.
+// That wrapper is transport metadata, not part of the requested document.
+export function stripAssistantModeEnvelope(raw) {
+  return String(raw || "").trim().replace(/^\\[JAZZ_MODE:(?:NORMAL|EVIL)\\]\\s*/i, "").trim();
+}
+
 export function detectArtifactIntent(raw) {
-  const message = String(raw || "").trim();
+  const message = stripAssistantModeEnvelope(raw);
   if (!/^(?:(?:hey\s+jazz[,!]?\s*)|(?:please\s+))*\b(?:create|generate|make|prepare|write|export|build)\b/i.test(message)) return null;
   const scope = message.slice(0, 170);
   if (/\b(?:pdf)\b/i.test(scope)) return "pdf";
@@ -38,6 +44,7 @@ export function cleanDocumentContent(raw) {
 }
 
 function documentTitle(request) {
+  request = stripAssistantModeEnvelope(request);
   const named = String(request).match(/\b(?:titled|named|title\s*:)\s*["']?([^"'\n]{3,75})/i);
   if (named) return named[1].trim().replace(/[!?]+$/, "");
   const subject = String(request).match(/\b(?:about|on|covering|regarding)\s+(.{3,70})/i);
