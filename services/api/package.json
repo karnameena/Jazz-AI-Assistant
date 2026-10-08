@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "node src/server.mjs",
-    "test": "node tests/utterance-normalizer.test.mjs",
+    "test": "node tests/utterance-normalizer.test.mjs && node --test tests/response-context.test.mjs tests/attachments-artifacts.test.mjs",
     "tts:check": "node -e \"import('./src/tts.mjs').then(async m => { const c=m.ttsConfig(); console.log(c); }).catch(e => { console.error(e); process.exit(1); })\""
   },
   "dependencies": {
