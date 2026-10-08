@@ -18,6 +18,25 @@ export function detectArtifactIntent(raw) {
   return null;
 }
 
+// Local Qwen builds occasionally emit planning text inside content even with
+// Ollama's think:false option. This is ONLY used for exported documents, never
+// for normal chat, evil mode, code tasks or attached-source analysis.
+export function cleanDocumentContent(raw) {
+  let result = String(raw ?? "").trim();
+  const closing = /<\/think\s*>/i.exec(result);
+  if (closing && closing.index < 8000) {
+    // Some local templates return just the closing tag, with no <think> opener.
+    // The content after it is the final answer; everything before is planning.
+    result = result.slice(closing.index + closing[0].length).trim();
+  } else if (/^<think(?:\s[^>]*)?>/i.test(result)) {
+    // An unfinished thinking block should never be published as a document.
+    return "";
+  }
+  // Allow markdown or plain text reports surrounded by a single code fence.
+  result = result.replace(/^\x60{3}(?:markdown|md|text)?\s*\r?\n/i, "").replace(/\r?\n\x60{3}\s*$/i, "").trim();
+  return result;
+}
+
 function documentTitle(request) {
   const named = String(request).match(/\b(?:titled|named|title\s*:)\s*["']?([^"'\n]{3,75})/i);
   if (named) return named[1].trim().replace(/[!?]+$/, "");
@@ -174,8 +193,8 @@ export async function maybeGenerateArtifact(message, generateText) {
       "and bullet lists. Aim for approximately 650–950 useful words when the topic supports it; do not " +
       "pad with repetitive text. Be technically accurate, distinguish uncertainty and do not invent sources, " +
       "statistics or personal details. Do not claim the file has already been generated. Return ONLY the " +
-      "document body, no commentary, XML or code fences around the entire response.\n\nUser request: " + message;
-    const content = String(await generateText(prompt) || "").trim();
+      "document body, no planning text, thinking tags or code fences around the entire response.\n\nStart directly with a document heading. User request: " + message;
+    const content = cleanDocumentContent(await generateText(prompt));
     if (!content) throw new Error("The local model returned no document content.");
     buffer = kind === "pdf" ? await renderPdf(title, content) : await renderDocx(title, content);
   }
