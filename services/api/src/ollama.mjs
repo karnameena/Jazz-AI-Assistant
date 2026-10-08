@@ -104,12 +104,12 @@ function warmModelInBackground(model) {
   });
 }
 
-export async function ensureOllamaReady() {
+export async function ensureOllamaReady({ skipWarmup = false } = {}) {
   let status = await getOllamaStatus();
   if (status.ok) {
     const config = ollamaConfig();
     const normal = chooseModeModel(status.models, "normal", config);
-    if (normal) warmModelInBackground(normal);
+    if (normal && !skipWarmup) warmModelInBackground(normal);
     return status;
   }
   if (!startOllamaProcess()) return status;
@@ -120,7 +120,7 @@ export async function ensureOllamaReady() {
     if (status.ok) {
       const config = ollamaConfig();
       const normal = chooseModeModel(status.models, "normal", config);
-      if (normal) warmModelInBackground(normal);
+      if (normal && !skipWarmup) warmModelInBackground(normal);
       return status;
     }
   }
@@ -131,7 +131,7 @@ export async function resolveModel(mode = "normal", taskOptions = {}) {
   const config = ollamaConfig();
   let installed = cachedInstalledModels;
   if (!installed) {
-    const status = await ensureOllamaReady();
+    const status = await ensureOllamaReady({ skipWarmup: taskOptions.skipWarmup === true });
     if (!status.ok) throw new Error(`Ollama is not running at ${config.url}. Install/start Ollama or run start-jazz.ps1.`);
     installed = status.models;
   }
