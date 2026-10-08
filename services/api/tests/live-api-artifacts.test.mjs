@@ -20,11 +20,22 @@ async function listen(server) {
 }
 
 test("live Jazz chat and streaming deliver real PDF/Excel, never the coding agent", {timeout: 85000}, async () => {
+  let simulatedRunnerCrashes = 0;
+  let fallbackModelsUsed = 0;
   const mockOllama = http.createServer(async (req, res) => {
     let result;
-    if (req.url === "/api/tags") result = {models:[{name:"qwen3:1.7b"}]};
+    if (req.url === "/api/tags") result = {models:[{name:"qwen3:1.7b"},{name:"qwen3:0.6b"}]};
     else if (req.url === "/api/generate") result = {response:"",done:true};
     else if (req.url === "/api/chat") {
+      let content = "";
+      for await (const chunk of req) content += String(chunk);
+      const body = JSON.parse(content);
+      if (body.model === "qwen3:1.7b" && simulatedRunnerCrashes === 0) {
+        simulatedRunnerCrashes += 1;
+        req.socket.destroy(); // Simulate Windows Ollama runner dying under RAM pressure
+        return;
+      }
+      if (body.model === "qwen3:0.6b") fallbackModelsUsed += 1;
       result = {message:{role:"assistant",content:
         "# Executive Summary\nReact.js builds user interfaces using components.\n\n" +
         "## Core Concepts\nReact offers components, props, state and hooks.\n\n" +
@@ -92,6 +103,8 @@ test("live Jazz chat and streaming deliver real PDF/Excel, never the coding agen
       assert.equal(bytes.toString("ascii",0,request.includes("PDF")?5:2), request.includes("PDF")?"%PDF-":"PK");
       assert.doesNotMatch(result.assistant,/coding task|model is not ready/i);
     }
+    assert.equal(simulatedRunnerCrashes,1,"Expected a simulated local model connection crash");
+    assert.equal(fallbackModelsUsed,1,"Document should retry with 0.6B local model exactly once");
 
     const streamed = await fetch(url + "/api/chat/stream", {
       method:"POST",headers:{"Content-Type":"application/json"},
