@@ -33,6 +33,8 @@ jobs:
           node --check services/coding-agent/src/config.mjs
       - name: Run API behavior tests
         run: pnpm --filter @jazz/api test
+      - name: Exercise actual chat endpoints and artifact download
+        run: node --test services/api/tests/live-api-artifacts.test.mjs
       - name: Build existing Jazz web interface
         run: pnpm --filter @jazz/web build
       - name: Run JazzWhatsApp shared API tests
