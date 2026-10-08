@@ -5,9 +5,9 @@ function cleanMessage(message) {
     .trim();
 }
 
-const DOCUMENT_ACTION = /^(?:(?:hey\\s+)?jazz[,!]?\\s*)?(?:please\\s+)?(?:create|generate|make|prepare|write|export|build)\\b/i;
-const DOCUMENT_TYPE = /\\b(?:pdf|word|docx|excel|xlsx|spreadsheet)\\b/i;
-const SOFTWARE_TARGET = /\\b(?:app(?:lication)?|website|webapp|web\\s+app|software|api|component|script|package|library|pdf\\s+generator)\\b/i;
+const DOCUMENT_ACTION = /^(?:(?:hey\s+)?jazz[,!]?\s*)?(?:please\s+)?(?:create|generate|make|prepare|write|export|build)\b/i;
+const DOCUMENT_TYPE = /\b(?:pdf|word|docx|excel|xlsx|spreadsheet)\b/i;
+const SOFTWARE_TARGET = /\b(?:app(?:lication)?|website|webapp|web\s+app|software|api|component|script|package|library|pdf\s+generator)\b/i;
 
 export function isDocumentCreationRequest(message) {
   const text = cleanMessage(message);
