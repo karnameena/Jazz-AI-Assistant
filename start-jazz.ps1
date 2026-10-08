@@ -124,6 +124,7 @@ $oldAutoStart = $env:JAZZ_OLLAMA_AUTOSTART
 $oldFallback = $env:JAZZ_OLLAMA_FALLBACK
 $oldPiperPrewarm = $env:JAZZ_PIPER_PREWARM
 $oldWebRag = $env:JAZZ_WEB_RAG_ENABLED
+$oldFreeOnly = $env:JAZZ_FREE_ONLY
 try {
   $env:PORT = "$apiPort"
   $env:JAZZ_LLM_PROVIDER = "ollama"
@@ -131,6 +132,7 @@ try {
   $env:JAZZ_OLLAMA_FALLBACK = "true"
   $env:JAZZ_PIPER_PREWARM = "false"
   $env:JAZZ_WEB_RAG_ENABLED = "true"
+  $env:JAZZ_FREE_ONLY = "true"
 
   # Do not load services/api/.env here. Old provider/Piper overrides in that file
   # must not control the managed Jazz runtime.
@@ -142,6 +144,7 @@ try {
   if ($null -eq $oldFallback) { Remove-Item Env:JAZZ_OLLAMA_FALLBACK -ErrorAction SilentlyContinue } else { $env:JAZZ_OLLAMA_FALLBACK = $oldFallback }
   if ($null -eq $oldPiperPrewarm) { Remove-Item Env:JAZZ_PIPER_PREWARM -ErrorAction SilentlyContinue } else { $env:JAZZ_PIPER_PREWARM = $oldPiperPrewarm }
   if ($null -eq $oldWebRag) { Remove-Item Env:JAZZ_WEB_RAG_ENABLED -ErrorAction SilentlyContinue } else { $env:JAZZ_WEB_RAG_ENABLED = $oldWebRag }
+  if ($null -eq $oldFreeOnly) { Remove-Item Env:JAZZ_FREE_ONLY -ErrorAction SilentlyContinue } else { $env:JAZZ_FREE_ONLY = $oldFreeOnly }
 }
 
 $healthUrl = "http://127.0.0.1:$apiPort/health"
@@ -167,7 +170,11 @@ if ($apiHealth.provider -ne "ollama") {
   throw "Wrong provider. Expected ollama but got $($apiHealth.provider)."
 }
 Write-Host "Jazz API READY: version=$($apiHealth.version), provider=$($apiHealth.provider), port=$apiPort, PID=$($apiProcess.Id)" -ForegroundColor Green
+if (-not $apiHealth.freeMode.enabled -or $apiHealth.provider -ne "ollama") { throw "Jazz free-only mode is not active." }
+Write-Host "FREE-ONLY MODE READY: local Ollama + free Web-RAG; no paid LLM subscription/API required." -ForegroundColor Green
 try {
+  $freeModeHealth = Invoke-RestMethod "http://127.0.0.1:$apiPort/api/free-mode/health" -TimeoutSec 5
+  if (-not $freeModeHealth.freeMode.enabled) { throw "Free-only health check did not report enabled." }
   $webRagHealth = Invoke-RestMethod "http://127.0.0.1:$apiPort/api/web-rag/health" -TimeoutSec 5
   if ($webRagHealth.ok -and $webRagHealth.webRag.enabled) {
     Write-Host "Web-RAG READY on Jazz API port ${apiPort}: $($webRagHealth.webRag.provider)" -ForegroundColor Green
