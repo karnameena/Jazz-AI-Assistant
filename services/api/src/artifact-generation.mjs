@@ -19,8 +19,15 @@ export function detectArtifactIntent(raw) {
 }
 
 function documentTitle(request) {
-  const named = String(request).match(/\b(?:titled|named|title\s*:)\s*["']?([^"'\n.]{3,75})/i);
-  if (named) return named[1].trim();
+  const named = String(request).match(/\b(?:titled|named|title\s*:)\s*["']?([^"'\n]{3,75})/i);
+  if (named) return named[1].trim().replace(/[!?]+$/, "");
+  const subject = String(request).match(/\b(?:about|on|covering|regarding)\s+(.{3,70})/i);
+  if (subject) {
+    const topic = subject[1].trim().replace(/[!?]+$/, "");
+    const kind = detectArtifactIntent(request);
+    const suffix = kind === "pdf" ? "Professional Report" : kind === "docx" ? "Word Document" : "Spreadsheet";
+    return (topic + " — " + suffix).slice(0, 90);
+  }
   const item = String(request).replace(/^(?:hey\s+jazz[,!]?\s*)?(?:please\s+)?(?:create|generate|make|prepare|write|export|build)\s+(?:me\s+)?(?:an?\s+)?/i, "")
     .replace(/\b(?:in|as)\s+(?:a\s+)?(?:PDF|Word|Excel|DOCX|XLSX)\b/ig, "").trim();
   return item.slice(0, 76) || "Jazz Document";
@@ -159,10 +166,15 @@ export async function maybeGenerateArtifact(message, generateText) {
   let buffer;
   if (kind === "xlsx") buffer = await renderXlsx(title, message);
   else {
-    const prompt = "Draft the actual content requested below. Write a complete professional document with " +
-      "meaningful titled sections and concrete, accurate information when known. " +
-      "Do not invent personal details or statistics. Return only the document body in readable Markdown, " +
-      "without prefaces or claims that files were generated. User request: " + message;
+    const prompt = "You are an expert professional writer preparing a complete document for export. " +
+      "Follow the user's actual topic and requested format precisely. Write meaningful original content " +
+      "rather than a placeholder or outline. For a technical report, include a short executive summary, " +
+      "background, core concepts, detailed explanations, practical examples, best practices, limitations " +
+      "and a conclusion where applicable. Use clear Markdown section headings (# or ##), concise paragraphs " +
+      "and bullet lists. Aim for approximately 650–950 useful words when the topic supports it; do not " +
+      "pad with repetitive text. Be technically accurate, distinguish uncertainty and do not invent sources, " +
+      "statistics or personal details. Do not claim the file has already been generated. Return ONLY the " +
+      "document body, no commentary, XML or code fences around the entire response.\\n\\nUser request: " + message;
     const content = String(await generateText(prompt) || "").trim();
     if (!content) throw new Error("The local model returned no document content.");
     buffer = kind === "pdf" ? await renderPdf(title, content) : await renderDocx(title, content);
