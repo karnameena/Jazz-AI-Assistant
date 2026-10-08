@@ -147,7 +147,7 @@ export async function resolveModel(mode = "normal", taskOptions = {}) {
     : (preferred.map(name => findInstalledModel(installed, name)).find(Boolean)
       || chooseModeModel(installed, mode, config));
   if (selected) {
-    warmModelInBackground(selected);
+    if (!taskOptions.skipWarmup) warmModelInBackground(selected);
     return selected;
   }
 
@@ -165,7 +165,7 @@ function chatPayload(model, systemInstruction, message, stream, mode, history = 
     model,
     think: false,
     stream,
-    keep_alive: config.keepAlive,
+    keep_alive: requestOptions.keepAlive || config.keepAlive,
     messages: [
       { role: "system", content: `${systemInstruction}${modeInstruction}` },
       ...history,
@@ -211,7 +211,19 @@ export async function callOllama(message, systemInstruction, history = [], reque
     }, Math.min(600000, Math.max(30000, Number(requestOptions.timeoutMs || process.env.JAZZ_OLLAMA_TIMEOUT_MS || 120000))));
   } catch (error) {
     invalidateModelOnTransportFailure();
-    throw error;
+    // Node fetch masks ECONNRESET, ECONNREFUSED and Ollama runner crashes as
+    // "fetch failed". Keep the actual local cause and the model name visible.
+    const detail = [error?.cause?.code, error?.cause?.message]
+      .filter(Boolean).map(String).join(": ").slice(0, 220);
+    const timeout = error?.name === "AbortError" || error?.name === "TimeoutError";
+    const message = timeout
+      ? `Ollama model '${model}' did not respond before the local timeout (${config.url}).`
+      : `Ollama connection failed while running '${model}' at ${config.url}.`;
+    const diagnostic = new Error(message + (detail ? " Cause: " + detail + "." : "")
+      + " Check http://127.0.0.1:11434/api/tags, RAM usage and Ollama's server log.", { cause: error });
+    diagnostic.code = "OLLAMA_TRANSPORT";
+    diagnostic.model = model;
+    throw diagnostic;
   }
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
