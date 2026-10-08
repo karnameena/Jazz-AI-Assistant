@@ -10,6 +10,9 @@
   },
   "dependencies": {
     "ws": "^8.18.3",
-    "@huggingface/transformers": "^4.3.0"
+    "@huggingface/transformers": "^4.3.0",
+    "exceljs": "^4.4.0",
+    "mammoth": "^1.9.0",
+    "pdfjs-dist": "^4.10.38"
   }
 }
