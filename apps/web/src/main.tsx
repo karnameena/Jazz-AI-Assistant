@@ -115,8 +115,8 @@ async function streamChat(message: string, onText: (chunk: string) => void, sour
   return full;
 }
 
-const UI_BUILD = "20261008-chat-artifact-route-v3";
-const EXPECTED_ROUTING_BUILD = "20261008-document-route-guard-v3";
+const UI_BUILD = "20261008-web-document-direct-v4";
+const EXPECTED_ROUTING_BUILD = "20261008-document-route-guard-v4";
 
 /** Only document-generation commands need this preflight. Other chat/device
  * workflows are left unchanged. The frontend must not silently send these
@@ -265,6 +265,7 @@ function App() {
   const sendMessage = async (valueOverride?: string, source: MessageSource = "typed") => {
     const value = (valueOverride ?? input).trim();
     const fileBatch = source === "typed" ? selectedFiles : [];
+    const documentRequested = !fileBatch.length && isRequestedDocument(value);
     if ((!value && !fileBatch.length) || sendInFlightRef.current) return;
     const now = Date.now();
     if (lastSubmissionRef.current?.value === value && now - lastSubmissionRef.current.at < 1800) return;
@@ -299,6 +300,20 @@ function App() {
         if (routeWarning) {
           streamedReply = routeWarning;
           setMessages(current => current.map(item => item.id === replyId ? { ...item, text: routeWarning } : item));
+        } else if (documentRequested) {
+          // Use the exact synchronous /api/chat route that generates and stores
+          // the real PDF/Word/Excel file on this server. SSE is best for normal
+          // AI chat, but can be buffered by proxies during large PDF drafts.
+          const data = await apiJson("/api/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ message: value, source, history: recentHistory })
+          });
+          if (data.mode === "coding-agent") {
+            throw new Error("This browser is connected to an old coding-agent route instead of Jazz document generation. Verify the website's API URL and reload the updated app.");
+          }
+          streamedReply = data.assistant || "Jazz did not return a document response.";
+          setMessages(current => current.map(item => item.id === replyId ? { ...item, text: streamedReply } : item));
         } else {
           await streamChat(value, chunk => {
             streamedReply += chunk;
@@ -312,6 +327,10 @@ function App() {
         const reply = error instanceof Error ? error.message : "Attachment analysis failed.";
         setMessages(current => current.map(item => item.id === replyId ? { ...item, text: "I couldn't analyze the attachment: " + reply } : item));
         setInput(value);
+      } else if (documentRequested) {
+        const reason = error instanceof Error ? error.message : "Document request failed.";
+        const reply = "I couldn't create the document in this Jazz web chat: " + reason;
+        setMessages(current => current.map(item => item.id === replyId ? { ...item, text: reply } : item));
       } else
       if (streamedReply.trim()) {
         speechScheduled = shouldSpeakReply ? queueSpeech(streamedReply) : false;
