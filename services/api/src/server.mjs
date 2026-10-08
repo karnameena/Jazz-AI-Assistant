@@ -288,7 +288,7 @@ async function callOpenAICompatibleLLM(message, systemInstruction) {
 
 async function callConfiguredLLM(message, conversationContext = "", requestOptions = {}) {
   const provider = resolveLlmProvider();
-  const context = prepareResponseContext(systemPrompt(), conversationContext);
+  const context = prepareResponseContext(requestOptions.systemInstruction || systemPrompt(), conversationContext);
 
   if (provider === "ollama") return callOllama(message, context.ollamaPrompt, context.history, requestOptions);
 
@@ -362,16 +362,52 @@ async function localAssistantReply(message) {
   const creationRoute = routeCreationIntent(text);
   if (creationRoute?.type === "artifact") {
     try {
+      // PDF and Word writing must not overload an 8 GB CPU-only machine by
+      // loading models in the background or inheriting the large chat context.
+      const documentOptions = {
+        maxTokens: Math.min(3200, Math.max(512, Number(process.env.JAZZ_DOCUMENT_MAX_TOKENS || 1200))),
+        contextSize: Math.min(4096, Math.max(1024, Number(process.env.JAZZ_DOCUMENT_CONTEXT || 2048))),
+        timeoutMs: Math.min(600000, Math.max(120000, Number(process.env.JAZZ_DOCUMENT_TIMEOUT_MS || 360000))),
+        preferredModels: ["qwen3:4b", "qwen2.5:3b", "llama3.2:3b", "qwen2.5:7b", "qwen3:8b", "qwen3:1.7b"],
+        model: process.env.JAZZ_DOCUMENT_MODEL || "",
+        keepAlive: "2m",
+        skipWarmup: true,
+        systemInstruction: "You are Jazz, a precise technical document writer. Draft the requested document with professional formatting, concrete technical details and no invented citations. Return the body only."
+      };
+      let fallbackModel = "";
       const artifact = await maybeGenerateArtifact(text, async draftPrompt => {
-        const response = await callConfiguredLLM(draftPrompt, [], {
-          maxTokens: Math.min(3200, Math.max(640, Number(process.env.JAZZ_DOCUMENT_MAX_TOKENS || 1600))),
-          timeoutMs: Math.min(600000, Math.max(120000, Number(process.env.JAZZ_DOCUMENT_TIMEOUT_MS || 360000))),
-          preferredModels: ["qwen3:4b", "qwen2.5:3b", "llama3.2:3b", "qwen2.5:7b", "qwen3:8b", "qwen3:1.7b"],
-          model: process.env.JAZZ_DOCUMENT_MODEL || ""
-        });
-        return response.text;
+        try {
+          const response = await callConfiguredLLM(draftPrompt, [], documentOptions);
+          return response.text;
+        } catch (error) {
+          // A dropped local model runner commonly appears as "fetch failed".
+          // Retry ONLY document drafting, only after a genuine local transport
+          // error, using an installed smaller model. No paid provider.
+          if (error?.code !== "OLLAMA_TRANSPORT" || process.env.JAZZ_DOCUMENT_FALLBACK === "false") throw error;
+          const smaller = process.env.JAZZ_DOCUMENT_FALLBACK_MODEL || "qwen3:0.6b";
+          if (smaller === error.model) throw error;
+          console.warn("[Jazz] Document model transport failed. Trying smaller local document model: " + smaller + ". " + error.message);
+          try {
+            const recovered = await callOllama(draftPrompt, documentOptions.systemInstruction, [], {
+              ...documentOptions,
+              model: smaller,
+              maxTokens: Math.min(documentOptions.maxTokens, 900),
+              contextSize: Math.min(documentOptions.contextSize, 1536),
+              keepAlive: "1m",
+              preferredModels: []
+            });
+            fallbackModel = recovered.model;
+            return recovered.text;
+          } catch (fallbackError) {
+            throw new Error("Preferred document model failed: " + error.message +
+              " Smaller local model '" + smaller + "' also failed: " + (fallbackError instanceof Error ? fallbackError.message : String(fallbackError)));
+          }
+        }
       });
-      if (artifact) return artifact;
+      if (artifact) {
+        if (fallbackModel) artifact.assistant += "\\n\\n*Created using lightweight local model " + fallbackModel + " after the preferred model lost its connection. Review technical details before sharing.*";
+        return artifact;
+      }
     } catch (error) {
       return { mode: "artifact-error", assistant: "I couldn’t generate that file: " + (error instanceof Error ? error.message : String(error)) };
     }
