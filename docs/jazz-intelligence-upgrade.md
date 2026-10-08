@@ -92,6 +92,19 @@ Document drafting now uses a shorter system prompt, 2,048-token context, 1,200 o
 
 **Windows Git warning:** User's local test branch also has a committed reminder improvement not yet on the GitHub upgrade branch. Back up that local branch, fetch, and use a normal `git merge --no-ff --no-edit origin/feature/jazz-intelligence-attachments-20261008` after checking the working tree, rather than `git reset --hard` or deleting untracked Piper/Whisper assets. Restart the local Jazz API after merging to load updated code.
 
+## October 8 web chat PDF fix — browser mode prefix root cause
+
+The same Windows API generated and downloaded a PDF from `/api/chat`, but a browser chat still showed `Mama 💻 I isolated the coding task`. Root cause: the `apps/web/public/assistant-mode-toggle.js` script prefixed browser messages with `[JAZZ_MODE:NORMAL]` or `[JAZZ_MODE:EVIL]`. The document detector expected `Create PDF...` at the beginning; the coding agent matched the later React keyword and took the task instead.
+
+**Fix on upgrade branch**:
+- The mode middleware now sends PDF/Word/Excel commands unchanged while preserving `assistantMode` metadata, normal/evil switches, and prefixed *real coding tasks*.
+- The backend document detector and coding agent also strip legacy mode envelopes defensively; even older browsers carrying the prefix reach artifact generation.
+- The React web chat sends document requests via the proven `POST /api/chat` route rather than leaving slow file creation on the text SSE stream; the existing chat renderer shows the clickable `/api/artifacts/{id}` download link.
+- Cache-busted `index.html` and the URL printed by `start-jazz.ps1`. The web DOM root advertises `data-ui-build="20261008-web-document-direct-v4"`; the API health advertises `routingBuild: 20261008-document-route-guard-v4`.
+- Automated tests exercise both prefixed browser modes through the real `/api/chat` and `/api/chat/stream` server endpoints and a simulated browser `fetch` wrapper, as well as the existing web build, coding and reminder tests. [GitHub Actions run #131 passed](https://github.com/karnameena/Jazz-AI-Assistant/actions/runs/37823375863).
+
+**Windows local upgrade**: The user has a local reminder-improvement merge not on the GitHub head. Use `git fetch origin feature/jazz-intelligence-attachments-20261008`, create a backup branch at local HEAD, and `git merge --no-ff --no-edit FETCH_HEAD` only when tracked files are clean. Do not reset/clean untracked Whisper/Piper assets. Restart from `Jazz-AI-Test`. Then run `.\verify-jazz-artifacts.ps1 -WebBaseUrl "http://localhost:5173"`, and reopen the **new web app** at `http://localhost:5173/?v=20261008-document-fix-v4` with a hard refresh. If the browser still shows old code, verify the address bar is actually localhost port 5173 and check `document.querySelector(".jazz-app")?.dataset.uiBuild` in DevTools; other hosted apps/ports require their own deployment.
+
 ## What is actually implemented
 
 - Ollama receives bounded, structured chat history **once**, without duplicating it in the system prompt. Fallback to Ollama retains history, and cloud-model compatibility is kept.
