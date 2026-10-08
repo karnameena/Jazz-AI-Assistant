@@ -1,3 +1,5 @@
+export const ROUTING_BUILD = "20261008-document-route-guard-v3";
+
 // Centralized routing for overlapping "create ... React ..." requests.
 // Document requests take precedence over coding-project keywords.
 import { detectArtifactIntent } from "./artifact-generation.mjs";
