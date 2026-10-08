@@ -208,7 +208,7 @@ export async function callOllama(message, systemInstruction, history = [], reque
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(chatPayload(model, systemInstruction, normalizedMessage, false, routed.mode, history, requestOptions))
-    }, Number(process.env.JAZZ_OLLAMA_TIMEOUT_MS || 120000));
+    }, Math.min(600000, Math.max(30000, Number(requestOptions.timeoutMs || process.env.JAZZ_OLLAMA_TIMEOUT_MS || 120000))));
   } catch (error) {
     invalidateModelOnTransportFailure();
     throw error;
