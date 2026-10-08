@@ -3,6 +3,9 @@ on:
   push:
     branches:
       - feature/jazz-intelligence-attachments-20261008
+  pull_request:
+    branches:
+      - feature/jazzwhatsapp-app
   workflow_dispatch:
 
 jobs:
