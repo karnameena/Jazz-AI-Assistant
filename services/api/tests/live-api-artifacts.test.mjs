@@ -97,7 +97,7 @@ test("live Jazz chat and streaming deliver real PDF/Excel, never the coding agen
         body:JSON.stringify({message:request,source:"typed",history:[]})
       });
       assert.equal(response.status,200,"HTTP status: " + response.status);
-      assert.equal(response.headers.get("x-jazz-routing-build"),"20261008-document-route-guard-v3");
+      assert.equal(response.headers.get("x-jazz-routing-build"),"20261008-document-route-guard-v4");
       const result = await response.json();
       assert.equal(result.mode,"artifact-generation",JSON.stringify(result));
       assert.ok(result.artifact?.url?.startsWith("/api/artifacts/"),JSON.stringify(result));
