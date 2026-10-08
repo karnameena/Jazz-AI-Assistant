@@ -358,6 +358,7 @@ async function localAssistantReply(message) {
       const artifact = await maybeGenerateArtifact(text, async draftPrompt => {
         const response = await callConfiguredLLM(draftPrompt, [], {
           maxTokens: Math.min(3200, Math.max(640, Number(process.env.JAZZ_DOCUMENT_MAX_TOKENS || 1600))),
+          timeoutMs: Math.min(600000, Math.max(120000, Number(process.env.JAZZ_DOCUMENT_TIMEOUT_MS || 360000))),
           preferredModels: ["qwen3:4b", "qwen2.5:3b", "llama3.2:3b", "qwen2.5:7b", "qwen3:8b", "qwen3:1.7b"],
           model: process.env.JAZZ_DOCUMENT_MODEL || ""
         });
