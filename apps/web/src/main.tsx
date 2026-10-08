@@ -82,11 +82,11 @@ async function apiJson(path: string, options?: RequestInit) {
   return data;
 }
 
-async function streamChat(message: string, onText: (chunk: string) => void, source: MessageSource = "typed") {
+async function streamChat(message: string, onText: (chunk: string) => void, source: MessageSource = "typed", history: Array<{ role: "user" | "assistant"; content: string }> = []) {
   const response = await fetch("/api/chat/stream", {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-    body: JSON.stringify({ message, source })
+    body: JSON.stringify({ message, source, history })
   });
   if (!response.ok || !response.body) throw new Error("Streaming API unavailable");
   const reader = response.body.getReader();
@@ -196,6 +196,11 @@ function App() {
 
     if (voiceModeRef.current) cancelSpeechQueue();
 
+    const recentHistory = messages
+      .filter(item => item.text.trim())
+      .slice(-12)
+      .map(item => ({ role: item.sender === "user" ? "user" as const : "assistant" as const, content: item.text }));
+
     setMessages(current => [...current, { id: Date.now(), sender: "user", text: value, time: nowTime() }]);
     setInput(""); setVoiceTranscript("");
     const replyId = Date.now() + Math.random();
@@ -206,14 +211,14 @@ function App() {
       await streamChat(value, chunk => {
         streamedReply += chunk;
         setMessages(current => current.map(item => item.id === replyId ? { ...item, text: item.text + chunk } : item));
-      }, source);
+      }, source, recentHistory);
       speechScheduled = shouldSpeakReply ? queueSpeech(streamedReply) : false;
     } catch {
       if (streamedReply.trim()) {
         speechScheduled = shouldSpeakReply ? queueSpeech(streamedReply) : false;
       } else {
         try {
-          const data = await apiJson("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: value, source }) });
+          const data = await apiJson("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: value, source, history: recentHistory }) });
           const reply = data.assistant || "Jazz is ready.";
           setMessages(current => current.map(item => item.id === replyId ? { ...item, text: reply } : item));
           speechScheduled = shouldSpeakReply ? queueSpeech(reply) : false;
