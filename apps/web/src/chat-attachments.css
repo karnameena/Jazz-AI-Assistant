@@ -27,3 +27,12 @@
   .jazz-attachment-tray { max-height: 110px; padding: 6px; gap: 5px; }
   .jazz-attachment-chip { max-width: min(190px,100%); }
 }
+
+.jazz-message-content .jazz-artifact-link {
+  display: inline-flex; align-items: center; gap: 6px; text-decoration: none;
+  background: rgba(72,149,255,.15); color: #b8ddff; border: 1px solid rgba(88,163,255,.30);
+  padding: 10px 14px; border-radius: 11px; font-weight: 700;
+  max-width: 100%; overflow-wrap: anywhere;
+}
+.jazz-message-content .jazz-artifact-link:hover { background: rgba(72,149,255,.24); }
+.jazz-message-content .jazz-safe-link { color: #8bc5ff; text-underline-offset: 3px; }
