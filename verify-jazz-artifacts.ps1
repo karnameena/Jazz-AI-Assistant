@@ -7,7 +7,7 @@ param(
   [string]$WebBaseUrl = "http://localhost:5173"
 )
 $ErrorActionPreference = "Stop"
-$expectedBuild = "20261008-document-route-guard-v3"
+$expectedBuild = "20261008-document-route-guard-v4"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Write-Host "Checking Jazz at $ApiBaseUrl" -ForegroundColor Cyan
 
@@ -50,7 +50,9 @@ if ($response.routingBuild -ne $expectedBuild -or -not $response.documentGenerat
 
 Write-Host "PASS: PDF requests are routed to the artifact generator on this API." -ForegroundColor Green
 Write-Host "Checking the actual /api/chat handler with a temporary Excel workbook..." -ForegroundColor Cyan
-$testText = "Create an Excel React expense tracker"
+# Validate the legacy web mode-prefix that previously routed document commands
+# into the isolated coding agent even though the normal routing test passed.
+$testText = "[JAZZ_MODE:NORMAL] Create an Excel React expense tracker"
 $payload = @{ message = $testText; source = "typed"; history = @() } | ConvertTo-Json -Depth 5 -Compress
 try {
   $chat = Invoke-RestMethod -Method Post -Uri ($ApiBaseUrl.TrimEnd("/") + "/api/chat") -ContentType "application/json" -Body $payload -TimeoutSec 30
@@ -59,20 +61,21 @@ try {
     Write-Host "This is not the expected document-generation path." -ForegroundColor Yellow
     exit 1
   }
-  Write-Host "PASS: Real /api/chat request generated a downloadable Excel artifact." -ForegroundColor Green
+  Write-Host "PASS: Real /api/chat Normal-mode-tagged request generated a downloadable Excel artifact." -ForegroundColor Green
 } catch {
   Write-Host ("FAIL: Real /api/chat smoke test failed: " + $_.Exception.Message) -ForegroundColor Red
   exit 1
 }
 
 try {
-  $stream = Invoke-WebRequest -UseBasicParsing -Method Post -Uri ($ApiBaseUrl.TrimEnd("/") + "/api/chat/stream") -ContentType "application/json" -Headers @{ Accept = "text/event-stream" } -Body $payload -TimeoutSec 30
+  $evilPayload = @{ message = "[JAZZ_MODE:EVIL] Create an Excel React expense tracker"; source = "typed"; history = @() } | ConvertTo-Json -Depth 5 -Compress
+  $stream = Invoke-WebRequest -UseBasicParsing -Method Post -Uri ($ApiBaseUrl.TrimEnd("/") + "/api/chat/stream") -ContentType "application/json" -Headers @{ Accept = "text/event-stream" } -Body $evilPayload -TimeoutSec 30
   $streamText = [string]$stream.Content
   if ($streamText -notmatch 'artifact-generation' -or $streamText -notmatch '/api/artifacts/') {
     Write-Host "FAIL: /api/chat/stream did not return a downloadable file." -ForegroundColor Red
     exit 1
   }
-  Write-Host "PASS: Real /api/chat/stream request also generated a file." -ForegroundColor Green
+  Write-Host "PASS: Real /api/chat/stream Evil-mode-tagged request also generated a file." -ForegroundColor Green
 } catch {
   Write-Host ("FAIL: Streaming chat smoke test failed: " + $_.Exception.Message) -ForegroundColor Red
   exit 1
