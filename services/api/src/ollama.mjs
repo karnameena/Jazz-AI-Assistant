@@ -104,12 +104,12 @@ function warmModelInBackground(model) {
   });
 }
 
-export async function ensureOllamaReady() {
+export async function ensureOllamaReady({ skipWarmup = false } = {}) {
   let status = await getOllamaStatus();
   if (status.ok) {
     const config = ollamaConfig();
     const normal = chooseModeModel(status.models, "normal", config);
-    if (normal) warmModelInBackground(normal);
+    if (normal && !skipWarmup) warmModelInBackground(normal);
     return status;
   }
   if (!startOllamaProcess()) return status;
@@ -120,28 +120,38 @@ export async function ensureOllamaReady() {
     if (status.ok) {
       const config = ollamaConfig();
       const normal = chooseModeModel(status.models, "normal", config);
-      if (normal) warmModelInBackground(normal);
+      if (normal && !skipWarmup) warmModelInBackground(normal);
       return status;
     }
   }
   return status;
 }
 
-export async function resolveModel(mode = "normal") {
+export async function resolveModel(mode = "normal", taskOptions = {}) {
   const config = ollamaConfig();
   let installed = cachedInstalledModels;
   if (!installed) {
-    const status = await ensureOllamaReady();
+    const status = await ensureOllamaReady({ skipWarmup: taskOptions.skipWarmup === true });
     if (!status.ok) throw new Error(`Ollama is not running at ${config.url}. Install/start Ollama or run start-jazz.ps1.`);
     installed = status.models;
   }
 
-  const selected = chooseModeModel(installed, mode, config);
+  // Task-specific selection is local-only. Respect explicit document choices,
+  // otherwise prefer installed 3B-class models for longer, higher-quality drafts.
+  // Normal conversation and Evil mode retain their existing model preferences.
+  const explicit = mode === "normal" ? String(taskOptions.model || "").trim() : "";
+  const preferred = mode === "normal" && Array.isArray(taskOptions.preferredModels)
+    ? taskOptions.preferredModels : [];
+  const selected = explicit
+    ? findInstalledModel(installed, explicit)
+    : (preferred.map(name => findInstalledModel(installed, name)).find(Boolean)
+      || chooseModeModel(installed, mode, config));
   if (selected) {
-    warmModelInBackground(selected);
+    if (!taskOptions.skipWarmup) warmModelInBackground(selected);
     return selected;
   }
 
+  if (explicit) throw new Error(`Local document model '${explicit}' is not installed. Run 'ollama pull ${explicit}' or unset JAZZ_DOCUMENT_MODEL to use an installed model.`);
   const requested = mode === "evil" ? config.evilModel : config.normalModel;
   throw new Error(`Ollama ${mode} model '${requested}' is not installed. Installed models: ${installed.join(", ") || "none"}.`);
 }
@@ -155,7 +165,7 @@ function chatPayload(model, systemInstruction, message, stream, mode, history = 
     model,
     think: false,
     stream,
-    keep_alive: config.keepAlive,
+    keep_alive: requestOptions.keepAlive || config.keepAlive,
     messages: [
       { role: "system", content: `${systemInstruction}${modeInstruction}` },
       ...history,
@@ -190,7 +200,7 @@ function invalidateModelOnTransportFailure() {
 export async function callOllama(message, systemInstruction, history = [], requestOptions = {}) {
   const config = ollamaConfig();
   const routed = extractModeAndMessage(message);
-  const model = await resolveModel(routed.mode);
+  const model = await resolveModel(routed.mode, requestOptions);
   const normalizedMessage = normalizeForBrain(routed.message);
   let response;
   try {
@@ -198,10 +208,22 @@ export async function callOllama(message, systemInstruction, history = [], reque
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(chatPayload(model, systemInstruction, normalizedMessage, false, routed.mode, history, requestOptions))
-    }, Number(process.env.JAZZ_OLLAMA_TIMEOUT_MS || 120000));
+    }, Math.min(600000, Math.max(30000, Number(requestOptions.timeoutMs || process.env.JAZZ_OLLAMA_TIMEOUT_MS || 120000))));
   } catch (error) {
     invalidateModelOnTransportFailure();
-    throw error;
+    // Node fetch masks ECONNRESET, ECONNREFUSED and Ollama runner crashes as
+    // "fetch failed". Keep the actual local cause and the model name visible.
+    const detail = [error?.cause?.code, error?.cause?.message]
+      .filter(Boolean).map(String).join(": ").slice(0, 220);
+    const timeout = error?.name === "AbortError" || error?.name === "TimeoutError";
+    const message = timeout
+      ? `Ollama model '${model}' did not respond before the local timeout (${config.url}).`
+      : `Ollama connection failed while running '${model}' at ${config.url}.`;
+    const diagnostic = new Error(message + (detail ? " Cause: " + detail + "." : "")
+      + " Check http://127.0.0.1:11434/api/tags, RAM usage and Ollama's server log.", { cause: error });
+    diagnostic.code = "OLLAMA_TRANSPORT";
+    diagnostic.model = model;
+    throw diagnostic;
   }
   if (!response.ok) {
     const detail = await response.text().catch(() => "");

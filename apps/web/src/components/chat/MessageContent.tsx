@@ -4,8 +4,13 @@ import { CodeBlock } from "./CodeBlock";
 import "./code-block.css";
 
 function InlineText({ text }: { text: string }) {
-  const parts = text.split(/(`[^`]+`|\*\*[^*]+\*\*)/g);
+  const parts = text.split(/(`[^`]+`|\*\*[^*]+\*\*|\[[^\]\n]{1,120}\]\((?:https?:\/\/[^\s)]+|\/api\/artifacts\/[0-9a-f-]{36})\))/g);
   return <>{parts.map((part, index) => {
+    const link = part.match(/^\[([^\]\n]+)\]\((https?:\/\/[^\s)]+|\/api\/artifacts\/[0-9a-f-]{36})\)$/);
+    if (link) {
+      const artifact = link[2].startsWith("/api/artifacts/");
+      return <a key={index} className={artifact ? "jazz-artifact-link" : "jazz-safe-link"} href={link[2]} target={artifact ? "_self" : "_blank"} rel="noopener noreferrer">{link[1]}{artifact ? " ↓" : ""}</a>;
+    }
     if (/^`[^`]+`$/.test(part)) return <code className="jazz-inline-code" key={index}>{part.slice(1, -1)}</code>;
     if (/^\*\*[^*]+\*\*$/.test(part)) return <strong key={index}>{part.slice(2, -2)}</strong>;
     return <React.Fragment key={index}>{part}</React.Fragment>;

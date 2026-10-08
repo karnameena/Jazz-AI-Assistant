@@ -1,0 +1,160 @@
+# Jazz AI – intelligence, attachments and artifacts upgrade
+
+This is an additive change to `feature/jazzwhatsapp-app`. It is developed and tested on the isolated `feature/jazz-intelligence-attachments-20261008` branch. Do not copy individual files into an older Jazz runtime: use the reviewed branch and install its workspace dependencies.
+
+## Open-source document and coding model routing (October 2026 fix)
+
+**Bug fixed:** A message like `Create a professional PDF report about React.js` used to match the broader "create React project" coding-agent pattern first. The chat handler now gives PDF/Word/Excel creation requests priority, so it produces a **real file** using the existing in-memory artifact generator. Ordinary requests to create/fix a React application still reach the isolated coding agent.
+
+**Use local Ollama, no paid API:**
+
+```powershell
+ollama list
+# Recommended general writing model for PCs with 8 GB RAM (install once):
+ollama pull qwen3:4b
+# Optional: smaller Apache-2.0 model if 4B is too slow:
+ollama pull qwen3:1.7b
+```
+
+The PDF/Word writer prefers already-installed 4B or 3B-class models, then the configured normal chat model. It never downloads a model implicitly. If you only have `qwen3:0.6b`, document generation can run, but writing quality and factual reliability are limited. For best results on an 8 GB/i3 PC, try `qwen3:4b` (Apache-2.0; approximately 2.5 GB download), accepting slower generation; a larger CPU model is **not** a ChatGPT-level intelligence guarantee.
+
+Optional PowerShell environment variables (set in the same terminal **before starting** Jazz):
+
+```powershell
+$env:JAZZ_FREE_ONLY="true"
+$env:JAZZ_DOCUMENT_MODEL="qwen3:4b"
+# Optional: stronger general chat and voice, but slower on CPU:
+$env:JAZZ_NORMAL_MODEL="qwen3:4b"
+$env:JAZZ_OLLAMA_MAX_TOKENS="900"
+$env:JAZZ_DOCUMENT_MAX_TOKENS="1600"
+$env:JAZZ_CODING_MODEL="auto"
+```
+
+Setting `JAZZ_NORMAL_MODEL=qwen3:4b` also changes normal Jazz conversation to the 4B model; this improves capacity but can make CPU-only voice replies noticeably slower. Omit it to preserve the previous fast voice/chat model. Restart Jazz after changing models.\n\nThe coding agent now defaults to `auto` (choose an installed local text model, prefer lightweight coders) rather than assuming an unavailable `qwen3-coder:30b`. **An explicitly configured coding model remains strict:** unset it or set `auto` if the model is unavailable. The coding agent still handles code tasks in an isolated workspace; it does not silently install dependencies, edit unrelated files, or call paid APIs.
+
+After updating the branch and running `pnpm install --no-frozen-lockfile`, restart the API and test **Create a professional PDF report about React.js**. The reply should contain a downloadable `.pdf` file, **not** an error about the 30B coding model. Download the file while the same API server is running; these URLs expire after 20 minutes. The generated document is a local-model draft and should still be fact-checked.
+
+## Verifying the exact server answering your chat
+
+The original `feature/jazzwhatsapp-app` server handles `Create a professional PDF report about React.js` as a coding request because document generation is absent there. The corrected implementation **must be running** on your selected API (local port 8797 or your remote Render/Cloudflare server). Updating the repository on GitHub does **not** redeploy a running Windows or cloud Node server.
+
+The corrected server identifies itself with `GET /api/routing/health`, `routingBuild: "20261008-document-route-guard-v3"` and sample route `type: "artifact", kind: "pdf"`. Check without modifying devices or settings:
+
+```powershell
+cd C:\Users\gunak\Downloads\Jazz-AI-Test
+git fetch origin
+git switch feature/jazz-intelligence-attachments-20261008
+git pull --ff-only origin feature/jazz-intelligence-attachments-20261008
+pnpm install --no-frozen-lockfile
+powershell -ExecutionPolicy Bypass -File .\start-jazz.ps1
+# In a second PowerShell window, read the live API version:
+powershell -ExecutionPolicy Bypass -File .\verify-jazz-artifacts.ps1
+# If your app is using another server, check that URL as well:
+# .\verify-jazz-artifacts.ps1 -ApiBaseUrl "https://YOUR-JAZZ-API.example"
+```
+
+If the check fails, your current chat is reaching the wrong/older backend or the updated API has not started. Check the actual server URL in Jazz Settings, restart/redeploy that backend, and repeat the read-only check. You can also inspect `http://127.0.0.1:8797/api/routing/health` in a browser. **Do not assume a model download or GitHub commit fixes an old server process.**
+
+The coding agent also has a hard guard: PDF/Word/Excel requests do not become coding tasks even when their subject mentions React or Android. Genuine `Create a React Todo application` continues to use the coding agent. Ollama document jobs may take longer on an i3/8 GB machine; `JAZZ_DOCUMENT_TIMEOUT_MS` defaults to 360000 ms (six minutes), independently of normal conversation timeout. This prevents premature server-side aborts but does not override a shorter timeout imposed by an external mobile client or reverse proxy.
+
+## Repeated coding-agent error even though routing health says PASS
+
+A static health route does **not** prove the chat request uses that backend. A separate Vite proxy, JazzWhatsApp hosted API, desktop client, or previously-opened tab may point elsewhere. The phrase `I isolated the coding task ... This operation was aborted` is emitted by the **coding agent**, not PDFKit or the document writer. If it appears after `GET /api/routing/health` passes, check the actual message request destination (browser DevTools → Network → `/api/chat/stream`, `/api/chat`, or `/api/jazzwhatsapp/message`).
+
+From an upgraded checkout run:
+```powershell
+.\verify-jazz-artifacts.ps1
+# When the URL in your browser is a different website, also specify it:
+.\verify-jazz-artifacts.ps1 -WebBaseUrl "https://YOUR-JAZZ-WEBSITE.example"
+# When your client points to a different API, check that API explicitly:
+.\verify-jazz-artifacts.ps1 -ApiBaseUrl "https://YOUR-JAZZ-API.example" -WebBaseUrl ""
+```
+This revised verifier sends an **actual** `Create an Excel React expense tracker` request through both `/api/chat` and `/api/chat/stream`, verifies each returns an artifact, and checks the local web proxy. It does not download a model or change user files. The actual PDF endpoint is separately covered by an API integration test using a mock loopback Ollama server. `X-Jazz-Routing-Build` and `X-Jazz-Api-Version` response headers identify the server that handled the request.
+
+The upgraded React web chat performs a lightweight version check only for PDF/Word/Excel requests. If that **specific web origin** is connected to an older API, it explains the mismatch rather than routing the request to the coding agent. Ordinary chat, Normal/Evil modes, Android actions, recovery and reminder paths are unaffected.
+
+## Local PDF inference on 8 GB Windows — `artifact-error: fetch failed`
+
+If `verify-jazz-artifacts.ps1` reports PASS for Excel routes but `Create a professional PDF report about React.js` returns `artifact-error: fetch failed`, **routing and Excel rendering are working**; the missing step is an Ollama text-generation response. Your installed model list does not prove that the model runner can successfully generate a long report.
+
+Diagnose **direct Ollama inference** (without touching Normal/Evil modes, ADB, or reminders):
+
+```powershell
+cd "$env:USERPROFILE\Downloads\Jazz-AI-Test"
+.\diagnose-jazz-ollama.ps1 -Model "qwen3:4b"
+# If the 4B model fails, check the already-installed smaller model too:
+.\diagnose-jazz-ollama.ps1 -Model "qwen3:0.6b"
+```
+
+Check Task Manager RAM use, `ollama ps`, and the Ollama logs (on Windows typically under `$env:LOCALAPPDATA\Ollama`) if the direct request fails. Do not reset Git or delete your Whisper/Piper models to work around an Ollama transport failure.
+
+Document drafting now uses a shorter system prompt, 2,048-token context, 1,200 output token default, 2-minute keep-alive, and suppresses background model warmup **only for that document task**. A genuine local Ollama transport error can trigger a one-time lower-memory `qwen3:0.6b` fallback (disable by setting `JAZZ_DOCUMENT_FALLBACK=false`, or choose another **installed** local model with `JAZZ_DOCUMENT_FALLBACK_MODEL`). The file reply explicitly discloses when the lightweight model was used; review accuracy before sending. The normal/evil models, unrelated chat token settings, Android commands, reminders and recovery are not changed by this fallback. It is not a paid API or a guaranteed recovery from a stopped Ollama service.
+
+**Windows Git warning:** User's local test branch also has a committed reminder improvement not yet on the GitHub upgrade branch. Back up that local branch, fetch, and use a normal `git merge --no-ff --no-edit origin/feature/jazz-intelligence-attachments-20261008` after checking the working tree, rather than `git reset --hard` or deleting untracked Piper/Whisper assets. Restart the local Jazz API after merging to load updated code.
+
+## October 8 web chat PDF fix — browser mode prefix root cause
+
+The same Windows API generated and downloaded a PDF from `/api/chat`, but a browser chat still showed `Mama 💻 I isolated the coding task`. Root cause: the `apps/web/public/assistant-mode-toggle.js` script prefixed browser messages with `[JAZZ_MODE:NORMAL]` or `[JAZZ_MODE:EVIL]`. The document detector expected `Create PDF...` at the beginning; the coding agent matched the later React keyword and took the task instead.
+
+**Fix on upgrade branch**:
+- The mode middleware now sends PDF/Word/Excel commands unchanged while preserving `assistantMode` metadata, normal/evil switches, and prefixed *real coding tasks*.
+- The backend document detector and coding agent also strip legacy mode envelopes defensively; even older browsers carrying the prefix reach artifact generation.
+- The React web chat sends document requests via the proven `POST /api/chat` route rather than leaving slow file creation on the text SSE stream; the existing chat renderer shows the clickable `/api/artifacts/{id}` download link.
+- Cache-busted `index.html` and the URL printed by `start-jazz.ps1`. The web DOM root advertises `data-ui-build="20261008-web-document-direct-v4"`; the API health advertises `routingBuild: 20261008-document-route-guard-v4`.
+- Automated tests exercise both prefixed browser modes through the real `/api/chat` and `/api/chat/stream` server endpoints and a simulated browser `fetch` wrapper, as well as the existing web build, coding and reminder tests. [GitHub Actions run #131 passed](https://github.com/karnameena/Jazz-AI-Assistant/actions/runs/37823375863).
+
+**Windows local upgrade**: The user has a local reminder-improvement merge not on the GitHub head. Use `git fetch origin feature/jazz-intelligence-attachments-20261008`, create a backup branch at local HEAD, and `git merge --no-ff --no-edit FETCH_HEAD` only when tracked files are clean. Do not reset/clean untracked Whisper/Piper assets. Restart from `Jazz-AI-Test`. Then run `.\verify-jazz-artifacts.ps1 -WebBaseUrl "http://localhost:5173"`, and reopen the **new web app** at `http://localhost:5173/?v=20261008-document-fix-v4` with a hard refresh. If the browser still shows old code, verify the address bar is actually localhost port 5173 and check `document.querySelector(".jazz-app")?.dataset.uiBuild` in DevTools; other hosted apps/ports require their own deployment.
+
+## What is actually implemented
+
+- Ollama receives bounded, structured chat history **once**, without duplicating it in the system prompt. Fallback to Ollama retains history, and cloud-model compatibility is kept.
+- The existing Jazz paperclip now opens a file picker. Up to 3 files (4 MiB each) can be selected, removed, and sent with text. The composer and panel layout remain intact. Images get local thumbnails.
+- The API analyzes supported attachments in memory with no persistent upload directory. Text, code, CSV and JSON are read as text; PDF, DOCX and XLSX use local parsers. PNG/JPEG/WebP use the **existing** Ollama vision handler rather than a text-only model.
+- Messages beginning with a creation request for PDF, Word/DOCX, or Excel/XLSX trigger actual file generation. Files are returned via cryptographically random download URLs; generated buffers are retained in process memory for up to 20 minutes or until evicted (maximum 12).
+- XLSX expense trackers include an actual SUM formula; default item trackers include multiplication and SUM formulas. Workbook export uses ExcelJS.
+- Explicit `remember ...` requests currently save to **session memory only**. They are **not persistent after restart**.
+- File links are rendered with an allowlisted Markdown-link parser in the existing message renderer.
+
+## File types
+
+Analysis: `.txt .md .csv .json .js .jsx .ts .tsx .html .css .pdf .docx .xlsx .png .jpg .jpeg .webp`.
+
+Legacy `.doc` and `.xls` are **not** supported by this new pipeline because secure local parsers were not added. Please convert them to DOCX/XLSX first.
+
+## Installation / smoke test (Windows)
+
+From the existing Jazz folder after checking out the reviewed branch (and preserving any local changes):
+
+```powershell
+pnpm install --no-frozen-lockfile
+pnpm --filter @jazz/api test
+pnpm --filter @jazz/web build
+powershell -ExecutionPolicy Bypass -File .\start-jazz.ps1
+```
+
+Try:
+- `Hey Jazz`
+- `What is React Query?`, then `How is it different from Redux Toolkit?`
+- Attach a small `.txt` or `.pdf` and ask for a summary
+- `Create a PDF report on React Query`
+- `Generate a Word letter about a project proposal`
+- `Create an Excel expense tracker`
+
+Check `GET /api/attachments/health` on port 8797 to confirm attachment limits.
+
+## Security and deployment
+
+This upgrade **does not add authentication** to the pre-existing shared API. If you expose port 8797 or the Vite proxy publicly (including via Cloudflare), use a separate authenticated gateway (for example, Cloudflare Access) before allowing remote clients. An opaque artifact URL is **not** a replacement for user authentication. Uploaded material is untrusted and is never executed. Its extracted text is passed to the configured LLM, so avoid attaching secrets to an untrusted cloud provider.
+
+Do not configure open public access and assume that MIME checks or an expiring link protect the API from abuse. Large or unusual Office files may still be expensive to parse; untrusted/public uploads need further isolation, malware scanning and quotas before production deployment.
+
+## Remaining work (not claimed complete)
+
+- Persistent, authenticated, per-conversation file storage and follow-up retrieval
+- Safe legacy DOC/XLS parsing, scanned-PDF OCR and advanced workbook/dashboard generation
+- Image **generation and editing** providers (the current implementation only supports image understanding via the existing vision provider)
+- Streaming upload percentages, drag/paste preview polish, stop-generation and cancellation
+- True concurrency/rate limiting, file access policies, durable downloads, and local Android/voice/recovery hardware regression testing
+- Piper Windows synthesis repair and server-switch/sign-out/voice regression coverage
+
+The automated Linux CI checks the Node syntax, API tests (including generated file signatures), React/Vite build, and selected JazzWhatsApp regression suites. Passing those checks **does not prove** that Piper, Android Companion, device recovery or Windows-specific runtime integrations work on the target PC.

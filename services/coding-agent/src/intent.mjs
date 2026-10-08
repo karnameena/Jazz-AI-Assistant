@@ -1,8 +1,25 @@
 function cleanMessage(message) {
   return String(message || "")
     .trim()
+    .replace(/^\[JAZZ_MODE:(?:NORMAL|EVIL)\]\s*/i, "")
     .replace(/^(?:hey\s+)?jazz[,:\-\s]*/i, "")
     .trim();
+}
+
+const DOCUMENT_ACTION = /^(?:(?:hey\s+)?jazz[,!]?\s*)?(?:please\s+)?(?:create|generate|make|prepare|write|export|build)\b/i;
+const DOCUMENT_TYPE = /\b(?:pdf|word|docx|excel|xlsx|spreadsheet)\b/i;
+const SOFTWARE_TARGET = /\b(?:app(?:lication)?|website|webapp|web\s+app|software|api|component|script|package|library|pdf\s+generator)\b/i;
+
+export function isDocumentCreationRequest(message) {
+  const text = cleanMessage(message);
+  // "Build a PDF generator application" is coding; "Create a PDF report
+  // about React.js" is document generation. Avoid routing by topic keyword.
+  // The topic of a report can itself be an app/API. Judge the requested
+  // output before subject clauses, not keywords inside the document topic.
+  const requestedOutput = text.split(/\b(?:about|on|regarding|covering|for)\b/i, 1)[0];
+  return DOCUMENT_ACTION.test(text)
+    && DOCUMENT_TYPE.test(requestedOutput.slice(0, 200))
+    && !SOFTWARE_TARGET.test(requestedOutput.slice(0, 200));
 }
 
 const STRONG_PATTERNS = [
@@ -29,6 +46,13 @@ const NON_CODING = [
 export function detectCodingIntent(message) {
   const text = cleanMessage(message);
   if (!text) return { matched: false, confidence: 0, text };
+  // Hard safety boundary: document/file creation is NOT a coding project,
+  // even when the document topic is React, TypeScript, JavaScript or Android.
+  // This guard lives inside the coding agent as defense in depth, independent
+  // of which server entry point calls detectCodingIntent.
+  if (isDocumentCreationRequest(text)) {
+    return { matched: false, confidence: 0, text, kind: null, delegatedTo: "artifact-generation" };
+  }
   if (NON_CODING.some(pattern => pattern.test(text)) && !/\b(create|build|fix|debug|code|project|app(?:lication)?)\b/i.test(text)) {
     return { matched: false, confidence: 0.02, text };
   }

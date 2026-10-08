@@ -276,6 +276,18 @@
           const localReply = localModeReply(cleanMessage);
           if (localReply) return makeLocalChatResponse(url, localReply);
 
+          // Critical: the backend routes Create PDF/Word/Excel commands before
+          // the coding agent. Do not prefix these with [JAZZ_MODE:NORMAL/EVIL]
+          // because older backend document parsers require a leading verb.
+          // Preserve assistantMode metadata and all other mode-dependent chat.
+          const documentCommand = /^(?:(?:hey\s+jazz[,!]?\s*)|(?:please\s+))*(?:create|generate|make|prepare|write|export|build)\b/i.test(cleanMessage)
+            && /\b(?:pdf|word|docx|excel|xlsx|spreadsheet)\b/i.test(cleanMessage.slice(0, 170));
+          if (documentCommand) {
+            payload.message = cleanMessage;
+            payload.assistantMode = currentMode;
+            return baseFetch(input, { ...init, body: JSON.stringify(payload) });
+          }
+
           const prefix = currentMode === "evil" ? "[JAZZ_MODE:EVIL]" : "[JAZZ_MODE:NORMAL]";
           payload.message = `${prefix} ${cleanMessage}`.trim();
           payload.assistantMode = currentMode;

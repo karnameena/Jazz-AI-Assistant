@@ -5,11 +5,16 @@
   "type": "module",
   "scripts": {
     "dev": "node src/server.mjs",
-    "test": "node tests/utterance-normalizer.test.mjs",
+    "test": "node tests/utterance-normalizer.test.mjs && node --test tests/response-context.test.mjs tests/attachments-artifacts.test.mjs tests/creation-routing.test.mjs ../coding-agent/src/intent.test.mjs",
     "tts:check": "node -e \"import('./src/tts.mjs').then(async m => { const c=m.ttsConfig(); console.log(c); }).catch(e => { console.error(e); process.exit(1); })\""
   },
   "dependencies": {
     "ws": "^8.18.3",
-    "@huggingface/transformers": "^4.3.0"
+    "@huggingface/transformers": "^4.3.0",
+    "exceljs": "^4.4.0",
+    "mammoth": "^1.9.0",
+    "pdfjs-dist": "^4.10.38",
+    "pdfkit": "^0.16.0",
+    "docx": "^9.5.1"
   }
 }
