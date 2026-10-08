@@ -44,7 +44,7 @@ export async function getCodingModelStatus() {
   const cfg = codingConfig();
   if (cfg.provider !== "ollama") return { ok: false, provider: cfg.provider, error: "Only the local Ollama coding provider is enabled in this build." };
   try {
-    const data = await fetchJson(`${cfg.ollamaUrl}/api/tags`, {}, 3000);
+    const data = await fetchJson(`${cfg.ollamaUrl}/api/tags`, {}, 8000);
     const models = Array.isArray(data?.models) ? data.models.map(item => item?.name).filter(Boolean) : [];
     const selected = chooseInstalledCodingModel(models, cfg.model);
     const error = selected ? null : (cfg.model !== "auto"
@@ -70,7 +70,9 @@ export async function getCodingModelStatus() {
       installed: false,
       models: [],
       recommendation: cfg.smallerModelRecommendation,
-      error: error instanceof Error ? error.message : String(error)
+      error: error?.name === "AbortError"
+        ? "Local Ollama did not respond to the model list within 8 seconds. Start Ollama and check system memory/CPU load; no paid API was used."
+        : error instanceof Error ? error.message : String(error)
     };
   }
 }
