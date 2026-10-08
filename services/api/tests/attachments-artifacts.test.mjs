@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {Readable} from "node:stream";
 import {analyzeAttachments, attachmentLimits, readAttachmentJson} from "../src/attachment-analysis.mjs";
-import {detectArtifactIntent, getArtifact, maybeGenerateArtifact} from "../src/artifact-generation.mjs";
+import {cleanDocumentContent, detectArtifactIntent, getArtifact, maybeGenerateArtifact} from "../src/artifact-generation.mjs";
 
 function attached(name, value, mime = "text/plain") {
   return {name, dataUrl: "data:" + mime + ";base64," + Buffer.from(value).toString("base64")};
@@ -68,4 +68,19 @@ test("PDF and Word generator return actual file signatures", async () => {
     if(kind==="PDF")assert.equal(item.buffer.toString("ascii",0,5),"%PDF-");
     else assert.equal(item.buffer.toString("ascii",0,2),"PK");
   }
+});
+
+test("only final Qwen answer is exported, not planning text with a closing think tag", async () => {
+  const sample = "We are writing one short paragraph about React.js and its components.\n" +
+    "Let's draft a concise introduction.\n</think>\n" +
+    "# Executive Summary\nReact.js is a JavaScript library for user interfaces.";
+  assert.equal(cleanDocumentContent(sample), "# Executive Summary\nReact.js is a JavaScript library for user interfaces.");
+  assert.equal(cleanDocumentContent("<think>Plan first</think>\n# Overview\nReact components."), "# Overview\nReact components.");
+  assert.equal(cleanDocumentContent("<think>Unfinished planning"), "");
+  assert.equal(cleanDocumentContent("# Introduction\nA clean final report."), "# Introduction\nA clean final report.");
+
+  const generated = await maybeGenerateArtifact("Create a PDF report about React.js", async () => sample);
+  assert.equal(generated.mode, "artifact-generation");
+  const item = getArtifact(generated.artifact.url.split("/").pop());
+  assert.equal(item.buffer.toString("ascii", 0, 5), "%PDF-");
 });
