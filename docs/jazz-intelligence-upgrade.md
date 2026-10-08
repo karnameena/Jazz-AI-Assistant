@@ -11,18 +11,18 @@ This is an additive change to `feature/jazzwhatsapp-app`. It is developed and te
 ```powershell
 ollama list
 # Recommended general writing model for PCs with 8 GB RAM (install once):
-ollama pull qwen2.5:3b
-# Optional, only for better code-planning tasks:
-ollama pull qwen2.5-coder:3b
+ollama pull qwen3:4b
+# Optional: smaller Apache-2.0 model if 4B is too slow:
+ollama pull qwen3:1.7b
 ```
 
-The PDF/Word writer prefers already-installed 3B-class models, then the configured normal chat model. It never downloads a model implicitly. If you only have `qwen3:0.6b`, document generation can run, but writing quality and factual reliability are limited. For best results on an 8 GB/i3 PC, use `qwen2.5:3b`, accepting slower generation; a larger CPU model is **not** a ChatGPT-level intelligence guarantee.
+The PDF/Word writer prefers already-installed 4B or 3B-class models, then the configured normal chat model. It never downloads a model implicitly. If you only have `qwen3:0.6b`, document generation can run, but writing quality and factual reliability are limited. For best results on an 8 GB/i3 PC, try `qwen3:4b` (Apache-2.0; approximately 2.5 GB download), accepting slower generation; a larger CPU model is **not** a ChatGPT-level intelligence guarantee.
 
 Optional PowerShell environment variables (set in the same terminal **before starting** Jazz):
 
 ```powershell
 $env:JAZZ_FREE_ONLY="true"
-$env:JAZZ_DOCUMENT_MODEL="qwen2.5:3b"
+$env:JAZZ_DOCUMENT_MODEL="qwen3:4b"
 $env:JAZZ_DOCUMENT_MAX_TOKENS="1600"
 $env:JAZZ_CODING_MODEL="auto"
 ```
