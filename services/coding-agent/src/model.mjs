@@ -16,22 +16,50 @@ async function fetchJson(url, options = {}, timeoutMs = 120000) {
   }
 }
 
+const PREFERRED_LOCAL_MODELS = [
+  "qwen2.5-coder:3b", "qwen2.5:3b", "qwen3:4b", "llama3.2:3b",
+  "qwen2.5-coder:1.5b", "qwen3:1.7b", "qwen2.5-coder:7b",
+  "qwen2.5:7b", "qwen3:8b", "qwen3:0.6b"
+];
+
+function matchInstalled(models, desired) {
+  return models.find(name => name === desired || name.startsWith(desired + ":")) || null;
+}
+
+// Never call a paid provider. With "auto", reuse a local model the user
+// already downloaded. Explicit model choices remain strict and never silently
+// switch. Exclude embedding-only models from generative chat.
+export function chooseInstalledCodingModel(models, requested = "auto") {
+  const usable = (Array.isArray(models) ? models : []).filter(name =>
+    typeof name === "string" && !/embed|nomic|mxbai|bge-|all-minilm/i.test(name));
+  if (requested && requested !== "auto") return matchInstalled(usable, requested);
+  for (const candidate of PREFERRED_LOCAL_MODELS) {
+    const found = matchInstalled(usable, candidate);
+    if (found) return found;
+  }
+  return usable[0] || null;
+}
+
 export async function getCodingModelStatus() {
   const cfg = codingConfig();
   if (cfg.provider !== "ollama") return { ok: false, provider: cfg.provider, error: "Only the local Ollama coding provider is enabled in this build." };
   try {
     const data = await fetchJson(`${cfg.ollamaUrl}/api/tags`, {}, 3000);
     const models = Array.isArray(data?.models) ? data.models.map(item => item?.name).filter(Boolean) : [];
-    const installed = models.some(name => name === cfg.model || name.startsWith(`${cfg.model}:`));
+    const selected = chooseInstalledCodingModel(models, cfg.model);
+    const error = selected ? null : (cfg.model !== "auto"
+      ? `Coding model '${cfg.model}' is not installed. Set JAZZ_CODING_MODEL=auto to reuse an installed local model or run 'ollama pull ${cfg.smallerModelRecommendation}'.`
+      : `No local generative model is installed. Run 'ollama pull ${cfg.smallerModelRecommendation}' and retry. No paid API is needed.`);
     return {
-      ok: installed,
+      ok: Boolean(selected),
       provider: "ollama",
       url: cfg.ollamaUrl,
-      model: cfg.model,
-      installed,
+      model: selected || cfg.model,
+      configuredModel: cfg.model,
+      installed: Boolean(selected),
       models,
-      recommendation: installed ? null : cfg.smallerModelRecommendation,
-      error: installed ? null : `Coding model '${cfg.model}' is not installed. Install it explicitly or set JAZZ_CODING_MODEL to an installed smaller coding model. Suggested lighter fallback: '${cfg.smallerModelRecommendation}'. Jazz will not silently switch to a paid API.`
+      recommendation: selected ? null : cfg.smallerModelRecommendation,
+      error
     };
   } catch (error) {
     return {
@@ -56,7 +84,7 @@ export async function askCodingModel({ system, user }) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: cfg.model,
+      model: status.model,
       stream: false,
       think: false,
       messages: [
@@ -72,5 +100,5 @@ export async function askCodingModel({ system, user }) {
   }, 300000);
   const text = typeof data?.message?.content === "string" ? data.message.content.trim() : "";
   if (!text) throw new Error("Coding model returned no text.");
-  return { text, model: cfg.model, provider: "ollama" };
+  return { text, model: status.model, provider: "ollama" };
 }
