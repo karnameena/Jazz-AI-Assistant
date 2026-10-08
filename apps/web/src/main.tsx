@@ -115,7 +115,35 @@ async function streamChat(message: string, onText: (chunk: string) => void, sour
   return full;
 }
 
-const UI_BUILD = "20261008-chat-attachments-v2";
+const UI_BUILD = "20261008-chat-artifact-route-v3";
+const EXPECTED_ROUTING_BUILD = "20261008-document-route-guard-v3";
+
+/** Only document-generation commands need this preflight. Other chat/device
+ * workflows are left unchanged. The frontend must not silently send these
+ * prompts to an old backend that turns them into coding-agent tasks. */
+function isRequestedDocument(message: string) {
+  return /^(?:(?:hey\\s+jazz[,!]?[\\s,]*)|(?:please\\s+))*\\b(?:create|generate|make|prepare|write|export|build)\\b/i.test(message.trim())
+    && /\\b(?:pdf|word|docx|excel|xlsx|spreadsheet)\\b/i.test(message.slice(0, 170));
+}
+async function documentRoutingWarning(message: string): Promise<string | null> {
+  if (!isRequestedDocument(message)) return null;
+  try {
+    const response = await fetch("/api/routing/health", { cache: "no-store" });
+    if (!response.ok) throw new Error("routing health endpoint missing (" + response.status + ")");
+    const status = await response.json();
+    const isExpected = status?.routingBuild === EXPECTED_ROUTING_BUILD && status?.documentGeneration === true;
+    if (isExpected) return null;
+    throw new Error("routing build " + (status?.routingBuild || "unknown"));
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "version check failed";
+    return "**Jazz document creation is blocked because this chat is connected to an older or different API.**\\n\\n"
+      + "Reason: " + reason + ".\\n\\n"
+      + "This chat uses the API at the current website origin. Check the website URL and run "
+      + "`verify-jazz-artifacts.ps1 -WebBaseUrl <your-web-url>` from the upgraded test project. "
+      + "Update or switch the backend serving this site, then retry. No coding agent was run.";
+  }
+}
+
 const ATTACHMENT_FORMATS = /\.(pdf|docx|xlsx|txt|md|csv|json|js|jsx|ts|tsx|html|css|png|jpe?g|webp)$/i;
 const ATTACHMENT_LIMIT_BYTES = 4 * 1024 * 1024;
 
@@ -266,10 +294,17 @@ function App() {
         setMessages(current => current.map(item => item.id === replyId ? {...item, text: streamedReply} : item));
         setSelectedFiles([]);
       } else {
-        await streamChat(value, chunk => {
-          streamedReply += chunk;
-          setMessages(current => current.map(item => item.id === replyId ? { ...item, text: item.text + chunk } : item));
-        }, source, recentHistory);
+        // A real document request must not reach a stale backend as a coding task.
+        const routeWarning = await documentRoutingWarning(value);
+        if (routeWarning) {
+          streamedReply = routeWarning;
+          setMessages(current => current.map(item => item.id === replyId ? { ...item, text: routeWarning } : item));
+        } else {
+          await streamChat(value, chunk => {
+            streamedReply += chunk;
+            setMessages(current => current.map(item => item.id === replyId ? { ...item, text: item.text + chunk } : item));
+          }, source, recentHistory);
+        }
       }
       speechScheduled = shouldSpeakReply ? queueSpeech(streamedReply) : false;
     } catch (error) {
