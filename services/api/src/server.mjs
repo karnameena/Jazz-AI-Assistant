@@ -13,6 +13,7 @@ import { jazzSystemPrompt, localPersonalityReply } from "./jazz-personality.mjs"
 import { getFreeModeStatus, resolveLlmProvider } from "./free-mode.mjs";
 import { contextStatus } from "./conversation-context.mjs";
 import { prepareResponseContext } from "./response-context.mjs";
+import { analyzeAttachments, attachmentLimits, readAttachmentJson } from "./attachment-analysis.mjs";
 import { getCodingAgentHealth, getCodingTask, handleCodingIntent, listCodingTasks } from "../../coding-agent/src/index.mjs";
 import {
   callReminderNow,
@@ -548,6 +549,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && req.url === "/api/brain-health") return sendJson(res, 200, { ok: true, version: VERSION, provider: resolveLlmProvider(), freeMode: getFreeModeStatus(), ollama: await getOllamaStatus() });
     if (req.method === "GET" && req.url === "/api/free-mode/health") return sendJson(res, 200, { ok: true, freeMode: getFreeModeStatus() });
     if (req.method === "GET" && req.url === "/api/context/health") return sendJson(res, 200, { ok: true, context: contextStatus() });
+    if (req.method === "GET" && pathname === "/api/attachments/health") return sendJson(res, 200, { ok: true, attachmentLimits });
     if (req.method === "GET" && req.url === "/api/web-rag/health") return sendJson(res, 200, { ok: true, webRag: await getWebRagStatus() });
     if (req.method === "GET" && req.url === "/api/tts-health") return sendJson(res, 200, { ok: true, version: VERSION, tts: await getTtsStatus() });
     if (req.method === "GET" && req.url === "/api/voip/health") return sendJson(res, 200, { ok: true, voip: await getVoipHealth() });
@@ -616,6 +618,12 @@ const server = http.createServer(async (req, res) => {
       if (script.requiresConfirmation && input.approved !== true) return sendJson(res, 403, { ok: false, error: "Explicit confirmation is required", status: "confirmation_required" });
       const result = await sendAndroidScript(deviceId, scriptName, input.args && typeof input.args === "object" ? input.args : {});
       return sendJson(res, result.ok === false ? 503 : 200, result);
+    }
+
+    if (req.method === "POST" && pathname === "/api/attachments/analyze") {
+      const input = await readAttachmentJson(req);
+      const result = await analyzeAttachments(input, { answerImage, callConfiguredLLM });
+      return sendJson(res, 200, { ok: true, version: VERSION, ...result });
     }
 
     if (req.method === "POST" && req.url === "/api/chat/stream") {
