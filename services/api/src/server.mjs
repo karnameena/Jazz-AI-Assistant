@@ -15,6 +15,7 @@ import { contextStatus } from "./conversation-context.mjs";
 import { prepareResponseContext } from "./response-context.mjs";
 import { analyzeAttachments, attachmentLimits, readAttachmentJson } from "./attachment-analysis.mjs";
 import { getArtifact, maybeGenerateArtifact } from "./artifact-generation.mjs";
+import { routeCreationIntent } from "./creation-routing.mjs";
 import { getCodingAgentHealth, getCodingTask, handleCodingIntent, listCodingTasks } from "../../coding-agent/src/index.mjs";
 import {
   callReminderNow,
@@ -278,11 +279,11 @@ async function callOpenAICompatibleLLM(message, systemInstruction) {
   return { text, model };
 }
 
-async function callConfiguredLLM(message, conversationContext = "") {
+async function callConfiguredLLM(message, conversationContext = "", requestOptions = {}) {
   const provider = resolveLlmProvider();
   const context = prepareResponseContext(systemPrompt(), conversationContext);
 
-  if (provider === "ollama") return callOllama(message, context.ollamaPrompt, context.history);
+  if (provider === "ollama") return callOllama(message, context.ollamaPrompt, context.history, requestOptions);
 
   try {
     if (provider === "gemini") return await callGemini(message, context.legacyPrompt);
@@ -290,7 +291,7 @@ async function callConfiguredLLM(message, conversationContext = "") {
   } catch (primaryError) {
     if (process.env.JAZZ_OLLAMA_FALLBACK === "false") throw primaryError;
     console.warn(`[Jazz] ${provider} unavailable; falling back to local Ollama — ${primaryError instanceof Error ? primaryError.message : String(primaryError)}`);
-    return callOllama(message, context.ollamaPrompt, context.history);
+    return callOllama(message, context.ollamaPrompt, context.history, requestOptions);
   }
 }
 
@@ -349,18 +350,27 @@ async function localAssistantReply(message) {
   const reminder = await handleVoipReminderCommand(text);
   if (reminder) return reminder;
 
+  // "Create a PDF report about React.js" is a document, NOT a React app project.
+  // Route concrete file requests before the broader coding-agent keyword matcher.
+  const creationRoute = routeCreationIntent(text);
+  if (creationRoute?.type === "artifact") {
+    try {
+      const artifact = await maybeGenerateArtifact(text, async draftPrompt => {
+        const response = await callConfiguredLLM(draftPrompt, [], {
+          maxTokens: Math.min(3200, Math.max(640, Number(process.env.JAZZ_DOCUMENT_MAX_TOKENS || 1600))),
+          preferredModels: ["qwen2.5:3b", "qwen3:4b", "llama3.2:3b", "qwen2.5:7b", "qwen3:8b", "qwen3:1.7b"],
+          model: process.env.JAZZ_DOCUMENT_MODEL || ""
+        });
+        return response.text;
+      });
+      if (artifact) return artifact;
+    } catch (error) {
+      return { mode: "artifact-error", assistant: "I couldn’t generate that file: " + (error instanceof Error ? error.message : String(error)) };
+    }
+  }
+
   const coding = await handleCodingIntent(text);
   if (coding) return coding;
-
-  try {
-    const artifact = await maybeGenerateArtifact(text, async draftPrompt => {
-      const response = await callConfiguredLLM(draftPrompt);
-      return response.text;
-    });
-    if (artifact) return artifact;
-  } catch (error) {
-    return { mode: "artifact-error", assistant: "I couldn’t generate that file: " + (error instanceof Error ? error.message : String(error)) };
-  }
 
   // Fresh/current questions and explicit web searches are handled before the
   // Android generic "search ..." fallback. Narrow Web-RAG intent detection keeps
