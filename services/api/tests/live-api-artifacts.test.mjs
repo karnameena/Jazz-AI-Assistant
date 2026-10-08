@@ -85,7 +85,12 @@ test("live Jazz chat and streaming deliver real PDF/Excel, never the coding agen
     const health = await (await fetch(url + "/api/routing/health")).json();
     assert.equal(health.samples["Create a professional PDF report about React.js"].type,"artifact");
 
-    for (const request of ["Create a professional PDF report about React.js", "Create an Excel React expense tracker"]) {
+    for (const request of [
+      "Create a professional PDF report about React.js",
+      "[JAZZ_MODE:NORMAL] Create a professional PDF report about React.js",
+      "[JAZZ_MODE:EVIL] Create a professional PDF report about React.js",
+      "Create an Excel React expense tracker"
+    ]) {
       const response = await fetch(url + "/api/chat", {
         method:"POST",
         headers:{"Content-Type":"application/json"},
@@ -108,7 +113,7 @@ test("live Jazz chat and streaming deliver real PDF/Excel, never the coding agen
 
     const streamed = await fetch(url + "/api/chat/stream", {
       method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({message:"Create a professional PDF report about React.js",source:"typed",history:[]})
+      body:JSON.stringify({message:"[JAZZ_MODE:NORMAL] Create a professional PDF report about React.js",source:"typed",history:[]})
     });
     assert.equal(streamed.status,200);
     const body = await streamed.text();
