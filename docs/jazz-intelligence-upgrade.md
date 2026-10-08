@@ -34,6 +34,29 @@ Setting `JAZZ_NORMAL_MODEL=qwen3:4b` also changes normal Jazz conversation to th
 
 After updating the branch and running `pnpm install --no-frozen-lockfile`, restart the API and test **Create a professional PDF report about React.js**. The reply should contain a downloadable `.pdf` file, **not** an error about the 30B coding model. Download the file while the same API server is running; these URLs expire after 20 minutes. The generated document is a local-model draft and should still be fact-checked.
 
+## Verifying the exact server answering your chat
+
+The original `feature/jazzwhatsapp-app` server handles `Create a professional PDF report about React.js` as a coding request because document generation is absent there. The corrected implementation **must be running** on your selected API (local port 8797 or your remote Render/Cloudflare server). Updating the repository on GitHub does **not** redeploy a running Windows or cloud Node server.
+
+The corrected server identifies itself with `GET /api/routing/health`, `routingBuild: "20261008-document-route-guard-v3"` and sample route `type: "artifact", kind: "pdf"`. Check without modifying devices or settings:
+
+```powershell
+cd C:\Users\gunak\Downloads\Jazz-AI-Test
+git fetch origin
+git switch feature/jazz-intelligence-attachments-20261008
+git pull --ff-only origin feature/jazz-intelligence-attachments-20261008
+pnpm install --no-frozen-lockfile
+powershell -ExecutionPolicy Bypass -File .\start-jazz.ps1
+# In a second PowerShell window, read the live API version:
+powershell -ExecutionPolicy Bypass -File .\verify-jazz-artifacts.ps1
+# If your app is using another server, check that URL as well:
+# .\verify-jazz-artifacts.ps1 -ApiBaseUrl "https://YOUR-JAZZ-API.example"
+```
+
+If the check fails, your current chat is reaching the wrong/older backend or the updated API has not started. Check the actual server URL in Jazz Settings, restart/redeploy that backend, and repeat the read-only check. You can also inspect `http://127.0.0.1:8797/api/routing/health` in a browser. **Do not assume a model download or GitHub commit fixes an old server process.**
+
+The coding agent also has a hard guard: PDF/Word/Excel requests do not become coding tasks even when their subject mentions React or Android. Genuine `Create a React Todo application` continues to use the coding agent. Ollama document jobs may take longer on an i3/8 GB machine; `JAZZ_DOCUMENT_TIMEOUT_MS` defaults to 360000 ms (six minutes), independently of normal conversation timeout. This prevents premature server-side aborts but does not override a shorter timeout imposed by an external mobile client or reverse proxy.
+
 ## What is actually implemented
 
 - Ollama receives bounded, structured chat history **once**, without duplicating it in the system prompt. Fallback to Ollama retains history, and cloud-model compatibility is kept.
