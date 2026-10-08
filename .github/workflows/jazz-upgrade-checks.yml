@@ -25,6 +25,9 @@ jobs:
           node --check services/api/src/response-context.mjs
           node --check services/api/src/attachment-analysis.mjs
           node --check services/api/src/artifact-generation.mjs
+          node --check services/api/src/creation-routing.mjs
+          node --check services/coding-agent/src/model.mjs
+          node --check services/coding-agent/src/config.mjs
       - name: Run API behavior tests
         run: pnpm --filter @jazz/api test
       - name: Build existing Jazz web interface
