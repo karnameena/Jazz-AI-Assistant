@@ -2,6 +2,35 @@
 
 This is an additive change to `feature/jazzwhatsapp-app`. It is developed and tested on the isolated `feature/jazz-intelligence-attachments-20261008` branch. Do not copy individual files into an older Jazz runtime: use the reviewed branch and install its workspace dependencies.
 
+## Open-source document and coding model routing (October 2026 fix)
+
+**Bug fixed:** A message like `Create a professional PDF report about React.js` used to match the broader "create React project" coding-agent pattern first. The chat handler now gives PDF/Word/Excel creation requests priority, so it produces a **real file** using the existing in-memory artifact generator. Ordinary requests to create/fix a React application still reach the isolated coding agent.
+
+**Use local Ollama, no paid API:**
+
+```powershell
+ollama list
+# Recommended general writing model for PCs with 8 GB RAM (install once):
+ollama pull qwen2.5:3b
+# Optional, only for better code-planning tasks:
+ollama pull qwen2.5-coder:3b
+```
+
+The PDF/Word writer prefers already-installed 3B-class models, then the configured normal chat model. It never downloads a model implicitly. If you only have `qwen3:0.6b`, document generation can run, but writing quality and factual reliability are limited. For best results on an 8 GB/i3 PC, use `qwen2.5:3b`, accepting slower generation; a larger CPU model is **not** a ChatGPT-level intelligence guarantee.
+
+Optional PowerShell environment variables (set in the same terminal **before starting** Jazz):
+
+```powershell
+$env:JAZZ_FREE_ONLY="true"
+$env:JAZZ_DOCUMENT_MODEL="qwen2.5:3b"
+$env:JAZZ_DOCUMENT_MAX_TOKENS="1600"
+$env:JAZZ_CODING_MODEL="auto"
+```
+
+The coding agent now defaults to `auto` (choose an installed local text model, prefer lightweight coders) rather than assuming an unavailable `qwen3-coder:30b`. **An explicitly configured coding model remains strict:** unset it or set `auto` if the model is unavailable. The coding agent still handles code tasks in an isolated workspace; it does not silently install dependencies, edit unrelated files, or call paid APIs.
+
+After updating the branch and running `pnpm install --no-frozen-lockfile`, restart the API and test **Create a professional PDF report about React.js**. The reply should contain a downloadable `.pdf` file, **not** an error about the 30B coding model. Download the file while the same API server is running; these URLs expire after 20 minutes. The generated document is a local-model draft and should still be fact-checked.
+
 ## What is actually implemented
 
 - Ollama receives bounded, structured chat history **once**, without duplicating it in the system prompt. Fallback to Ollama retains history, and cloud-model compatibility is kept.
