@@ -1,6 +1,7 @@
 function cleanMessage(message) {
   return String(message || "")
     .trim()
+    .replace(/^\[JAZZ_MODE:(?:NORMAL|EVIL)\]\s*/i, "")
     .replace(/^(?:hey\s+)?jazz[,:\-\s]*/i, "")
     .trim();
 }
