@@ -11,7 +11,7 @@ const MAX_ARTIFACT_BYTES = 7 * 1024 * 1024;
 // Older Jazz browser builds prefix chat commands with the Normal/Evil mode.
 // That wrapper is transport metadata, not part of the requested document.
 export function stripAssistantModeEnvelope(raw) {
-  return String(raw || "").trim().replace(/^\\[JAZZ_MODE:(?:NORMAL|EVIL)\\]\\s*/i, "").trim();
+  return String(raw || "").trim().replace(/^\[JAZZ_MODE:(?:NORMAL|EVIL)\]\s*/i, "").trim();
 }
 
 export function detectArtifactIntent(raw) {
