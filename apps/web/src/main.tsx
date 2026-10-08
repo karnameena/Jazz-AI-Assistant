@@ -12,6 +12,7 @@ import { TelegramPanel } from "./TelegramPanel";
 import { MessageContent } from "./components/chat/MessageContent";
 import "./styles.css";
 import "./chat-overrides.css";
+import "./chat-attachments.css";
 
 interface Message { id: number; sender: "user" | "jazz"; text: string; time: string; }
 interface ReminderItem { id: string; title: string; time: string; }
@@ -114,7 +115,42 @@ async function streamChat(message: string, onText: (chunk: string) => void, sour
   return full;
 }
 
-const UI_BUILD = "20261008-chat-structure-v1";
+const UI_BUILD = "20261008-chat-attachments-v2";
+const ATTACHMENT_FORMATS = /\.(pdf|docx|xlsx|txt|md|csv|json|js|jsx|ts|tsx|html|css|png|jpe?g|webp)$/i;
+const ATTACHMENT_LIMIT_BYTES = 4 * 1024 * 1024;
+
+function fileDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Cannot read " + file.name));
+    reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("File reading failed"));
+    reader.readAsDataURL(file);
+  });
+}
+async function analyzeChatAttachments(message: string, files: File[], history: Array<{role: "user" | "assistant"; content: string}>) {
+  const attachments = await Promise.all(files.map(async file => ({name: file.name, dataUrl: await fileDataUrl(file)})));
+  return apiJson("/api/attachments/analyze", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({message, history, attachments})
+  });
+}
+function fileSizeLabel(bytes: number) { return bytes < 1024 ? bytes + " B" : (bytes / 1024 / 1024).toFixed(2) + " MB"; }
+
+function SelectedAttachment({file, remove}: {file: File; remove: () => void}) {
+  const [preview, setPreview] = useState("");
+  useEffect(() => {
+    if (!file.type.startsWith("image/")) return;
+    const url = URL.createObjectURL(file);
+    setPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+  return <div className="jazz-attachment-chip">
+    {preview ? <img src={preview} alt="" /> : <FileText size={18} />}
+    <span><strong title={file.name}>{file.name}</strong><small>{fileSizeLabel(file.size)}</small></span>
+    <button type="button" onClick={remove} title={"Remove " + file.name} aria-label={"Remove " + file.name}><X size={14} /></button>
+  </div>;
+}
 
 function App() {
   const [messages, setMessages] = useState<Message[]>(() => {
@@ -124,6 +160,8 @@ function App() {
   const [reminders, setReminders] = useState<ReminderItem[]>([]);
   const [devices, setDevices] = useState<DeviceItem[]>([]);
   const [input, setInput] = useState(() => readStoredString(DRAFT_STORAGE_KEY, ""));
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [uploadStatus, setUploadStatus] = useState("");
   const [activeMode, setActiveMode] = useState(() => readStoredString(MODE_STORAGE_KEY, "AI Chat"));
   const [activeNav, setActiveNav] = useState(() => readStoredString(NAV_STORAGE_KEY, "Chat"));
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -146,6 +184,7 @@ function App() {
   const speechQueueRef = useRef<Promise<void>>(Promise.resolve());
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const profileInputRef = useRef<HTMLInputElement | null>(null);
+  const attachmentInputRef = useRef<HTMLInputElement | null>(null);
   const sendInFlightRef = useRef(false);
   const lastSubmissionRef = useRef<{ value: string; at: number } | null>(null);
   const greeting = greetingFor(dayMode);
@@ -185,9 +224,20 @@ function App() {
     queueSpeech(text);
   };
 
+  const addSelectedFiles = (files: File[]) => {
+    const invalid = files.find(file => !ATTACHMENT_FORMATS.test(file.name) || file.size > ATTACHMENT_LIMIT_BYTES || file.size === 0);
+    if (invalid) {
+      setToast("Unsupported file or over 4 MB: " + invalid.name);
+      return;
+    }
+    setSelectedFiles(current => [...current, ...files].slice(0, 3));
+    if (files.length > 3) setToast("Up to 3 files can be selected.");
+  };
+
   const sendMessage = async (valueOverride?: string, source: MessageSource = "typed") => {
     const value = (valueOverride ?? input).trim();
-    if (!value || sendInFlightRef.current) return;
+    const fileBatch = source === "typed" ? selectedFiles : [];
+    if ((!value && !fileBatch.length) || sendInFlightRef.current) return;
     const now = Date.now();
     if (lastSubmissionRef.current?.value === value && now - lastSubmissionRef.current.at < 1800) return;
     lastSubmissionRef.current = { value, at: now };
@@ -201,19 +251,33 @@ function App() {
       .slice(-12)
       .map(item => ({ role: item.sender === "user" ? "user" as const : "assistant" as const, content: item.text }));
 
-    setMessages(current => [...current, { id: Date.now(), sender: "user", text: value, time: nowTime() }]);
+    const displayText = value + (fileBatch.length ? "\n" + fileBatch.map(file => "📎 " + file.name).join("\n") : "");
+    setMessages(current => [...current, { id: Date.now(), sender: "user", text: displayText, time: nowTime() }]);
     setInput(""); setVoiceTranscript("");
     const replyId = Date.now() + Math.random();
     setMessages(current => [...current, { id: replyId, sender: "jazz", text: "", time: nowTime() }]);
     let streamedReply = "";
     let speechScheduled = false;
     try {
-      await streamChat(value, chunk => {
-        streamedReply += chunk;
-        setMessages(current => current.map(item => item.id === replyId ? { ...item, text: item.text + chunk } : item));
-      }, source, recentHistory);
+      if (fileBatch.length) {
+        setUploadStatus("Reading and analyzing attachments…");
+        const result = await analyzeChatAttachments(value, fileBatch, recentHistory);
+        streamedReply = result.assistant || "Jazz could not extract an answer from that file.";
+        setMessages(current => current.map(item => item.id === replyId ? {...item, text: streamedReply} : item));
+        setSelectedFiles([]);
+      } else {
+        await streamChat(value, chunk => {
+          streamedReply += chunk;
+          setMessages(current => current.map(item => item.id === replyId ? { ...item, text: item.text + chunk } : item));
+        }, source, recentHistory);
+      }
       speechScheduled = shouldSpeakReply ? queueSpeech(streamedReply) : false;
-    } catch {
+    } catch (error) {
+      if (fileBatch.length) {
+        const reply = error instanceof Error ? error.message : "Attachment analysis failed.";
+        setMessages(current => current.map(item => item.id === replyId ? { ...item, text: "I couldn't analyze the attachment: " + reply } : item));
+        setInput(value);
+      } else
       if (streamedReply.trim()) {
         speechScheduled = shouldSpeakReply ? queueSpeech(streamedReply) : false;
       } else {
@@ -229,6 +293,7 @@ function App() {
         }
       }
     } finally {
+      setUploadStatus("");
       sendInFlightRef.current = false;
       if (shouldSpeakReply && voiceModeRef.current && !speechScheduled) void voiceRef.current?.start();
     }
@@ -452,7 +517,10 @@ function App() {
       <div className="dashboard-scroll"><div className={`dashboard-grid ${rightPanelOpen ? "with-right-panel" : "without-right-panel"}`}>
         <section className="center-column">
           <div className="mode-tabs">{["AI Chat", "Code Assistant", "Web Search", "Summarize", "Creative"].map((tab, i) => <button key={tab} className={activeMode === tab ? "active" : ""} onClick={() => setActiveMode(tab)}>{i === 0 ? <Bot /> : i === 1 ? <Code2 /> : i === 2 ? <Search /> : i === 3 ? <FileText /> : <Sparkles />}{tab}</button>)}</div>
-          <section className="chat-panel"><div className="chat-panel-glow" /><div className="chat-messages" ref={messagesRef}>{messages.map(message => <ChatMessage key={message.id} message={message} />)}</div>{voiceMode && voiceState === "listening" && <VoiceListeningBubble transcript={voiceTranscript} />}<div className="composer-wrap"><div className="composer"><button className="composer-icon"><Paperclip size={18} /></button><input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === "Enter" && void sendMessage()} placeholder={voiceState === "listening" ? "Listening…" : voiceMode ? "Voice mode on — type or speak..." : "Type a message or use the microphone..."} /><button className={`composer-icon ${voiceMode ? "voice-on" : ""}`} onClick={toggleVoice} title={voiceMode ? "Turn voice replies off" : "Turn voice replies on"}><Mic size={18} /></button></div><button className="send-button" onClick={() => void sendMessage()}><Send size={19} /></button></div><div className="suggestion-row"><Suggestion label="Summarize this page" icon={<FileText />} onClick={() => setInput("Summarize this page")} /><Suggestion label="Remind me at 8 PM" icon={<Timer />} onClick={setReminder} /><Suggestion label="Show my tasks" icon={<Check />} onClick={() => addJazzMessage("Your current dashboard shows 12 of 18 tasks completed.")} /><Suggestion label="Open WhatsApp" icon={<Webhook />} onClick={() => preferredAndroid && void runAndroidCommand(preferredAndroid, "launch_app", { packageName: "com.whatsapp" })} /><Suggestion label="Today’s agenda" icon={<CalendarDays />} onClick={openCalendar} /></div></section>
+          <section className="chat-panel"><div className="chat-panel-glow" /><div className="chat-messages" ref={messagesRef}>{messages.map(message => <ChatMessage key={message.id} message={message} />)}</div>{voiceMode && voiceState === "listening" && <VoiceListeningBubble transcript={voiceTranscript} />}<div className="composer-wrap" onDragOver={e => e.preventDefault()} onDrop={e => {e.preventDefault(); addSelectedFiles(Array.from(e.dataTransfer.files));}}>
+            {(selectedFiles.length > 0 || uploadStatus) && <div className="jazz-attachment-tray" aria-live="polite">{selectedFiles.map((file, i) => <SelectedAttachment key={file.name + i} file={file} remove={() => setSelectedFiles(current => current.filter((_, j) => i !== j))} />)}{uploadStatus && <span className="jazz-upload-status">{uploadStatus}</span>}</div>}
+            <input ref={attachmentInputRef} type="file" hidden multiple accept=".pdf,.docx,.xlsx,.txt,.md,.csv,.json,.js,.jsx,.ts,.tsx,.html,.css,.png,.jpg,.jpeg,.webp" onChange={e => {addSelectedFiles(Array.from(e.target.files || []));e.target.value = "";}} />
+            <div className="composer"><button type="button" className="composer-icon" title="Attach files" aria-label="Attach files" onClick={() => attachmentInputRef.current?.click()}><Paperclip size={18} /></button><input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === "Enter" && void sendMessage()} placeholder={voiceState === "listening" ? "Listening…" : voiceMode ? "Voice mode on — type or speak..." : "Type a message or use the microphone..."} /><button className={`composer-icon ${voiceMode ? "voice-on" : ""}`} onClick={toggleVoice} title={voiceMode ? "Turn voice replies off" : "Turn voice replies on"}><Mic size={18} /></button></div><button className="send-button" onClick={() => void sendMessage()}><Send size={19} /></button></div><div className="suggestion-row"><Suggestion label="Summarize this page" icon={<FileText />} onClick={() => setInput("Summarize this page")} /><Suggestion label="Remind me at 8 PM" icon={<Timer />} onClick={setReminder} /><Suggestion label="Show my tasks" icon={<Check />} onClick={() => addJazzMessage("Your current dashboard shows 12 of 18 tasks completed.")} /><Suggestion label="Open WhatsApp" icon={<Webhook />} onClick={() => preferredAndroid && void runAndroidCommand(preferredAndroid, "launch_app", { packageName: "com.whatsapp" })} /><Suggestion label="Today’s agenda" icon={<CalendarDays />} onClick={openCalendar} /></div></section>
           {showFeatures && <section className="feature-card"><div className="section-heading"><div><span className="heading-icon"><Sparkles size={16} /></span><strong>Powerful Features</strong></div></div><div className="feature-grid"><Feature icon={<Bot />} title="AI Agents" sub="Autonomous task" badge="NEW" /><Feature icon={<Webhook />} title="Automation" sub="Smart workflows" /><Feature icon={<FileText />} title="Knowledge" sub="Your knowledge base" /><Feature icon={<Code2 />} title="Code Assistant" sub="Write & debug code" /><Feature icon={<FileText />} title="File Analyzer" sub="Analyze any file" /><Feature icon={<Search />} title="Web Search" sub="Real-time results" /><Feature icon={<Mic />} title="Voice Control" sub="Hands-free control" /><Feature icon={<ImagePlus />} title="Image Generation" sub="Create with AI" /></div></section>}
         </section>
         {rightPanelOpen && <aside className="right-column">
