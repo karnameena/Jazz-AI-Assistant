@@ -1,0 +1,57 @@
+# Jazz AI – intelligence, attachments and artifacts upgrade
+
+This is an additive change to `feature/jazzwhatsapp-app`. It is developed and tested on the isolated `feature/jazz-intelligence-attachments-20261008` branch. Do not copy individual files into an older Jazz runtime: use the reviewed branch and install its workspace dependencies.
+
+## What is actually implemented
+
+- Ollama receives bounded, structured chat history **once**, without duplicating it in the system prompt. Fallback to Ollama retains history, and cloud-model compatibility is kept.
+- The existing Jazz paperclip now opens a file picker. Up to 3 files (4 MiB each) can be selected, removed, and sent with text. The composer and panel layout remain intact. Images get local thumbnails.
+- The API analyzes supported attachments in memory with no persistent upload directory. Text, code, CSV and JSON are read as text; PDF, DOCX and XLSX use local parsers. PNG/JPEG/WebP use the **existing** Ollama vision handler rather than a text-only model.
+- Messages beginning with a creation request for PDF, Word/DOCX, or Excel/XLSX trigger actual file generation. Files are returned via cryptographically random download URLs; generated buffers are retained in process memory for up to 20 minutes or until evicted (maximum 12).
+- XLSX expense trackers include an actual SUM formula; default item trackers include multiplication and SUM formulas. Workbook export uses ExcelJS.
+- Explicit `remember ...` requests currently save to **session memory only**. They are **not persistent after restart**.
+- File links are rendered with an allowlisted Markdown-link parser in the existing message renderer.
+
+## File types
+
+Analysis: `.txt .md .csv .json .js .jsx .ts .tsx .html .css .pdf .docx .xlsx .png .jpg .jpeg .webp`.
+
+Legacy `.doc` and `.xls` are **not** supported by this new pipeline because secure local parsers were not added. Please convert them to DOCX/XLSX first.
+
+## Installation / smoke test (Windows)
+
+From the existing Jazz folder after checking out the reviewed branch (and preserving any local changes):
+
+```powershell
+pnpm install --no-frozen-lockfile
+pnpm --filter @jazz/api test
+pnpm --filter @jazz/web build
+powershell -ExecutionPolicy Bypass -File .\start-jazz.ps1
+```
+
+Try:
+- `Hey Jazz`
+- `What is React Query?`, then `How is it different from Redux Toolkit?`
+- Attach a small `.txt` or `.pdf` and ask for a summary
+- `Create a PDF report on React Query`
+- `Generate a Word letter about a project proposal`
+- `Create an Excel expense tracker`
+
+Check `GET /api/attachments/health` on port 8797 to confirm attachment limits.
+
+## Security and deployment
+
+This upgrade **does not add authentication** to the pre-existing shared API. If you expose port 8797 or the Vite proxy publicly (including via Cloudflare), use a separate authenticated gateway (for example, Cloudflare Access) before allowing remote clients. An opaque artifact URL is **not** a replacement for user authentication. Uploaded material is untrusted and is never executed. Its extracted text is passed to the configured LLM, so avoid attaching secrets to an untrusted cloud provider.
+
+Do not configure open public access and assume that MIME checks or an expiring link protect the API from abuse. Large or unusual Office files may still be expensive to parse; untrusted/public uploads need further isolation, malware scanning and quotas before production deployment.
+
+## Remaining work (not claimed complete)
+
+- Persistent, authenticated, per-conversation file storage and follow-up retrieval
+- Safe legacy DOC/XLS parsing, scanned-PDF OCR and advanced workbook/dashboard generation
+- Image **generation and editing** providers (the current implementation only supports image understanding via the existing vision provider)
+- Streaming upload percentages, drag/paste preview polish, stop-generation and cancellation
+- True concurrency/rate limiting, file access policies, durable downloads, and local Android/voice/recovery hardware regression testing
+- Piper Windows synthesis repair and server-switch/sign-out/voice regression coverage
+
+The automated Linux CI checks the Node syntax, API tests (including generated file signatures), React/Vite build, and selected JazzWhatsApp regression suites. Passing those checks **does not prove** that Piper, Android Companion, device recovery or Windows-specific runtime integrations work on the target PC.
