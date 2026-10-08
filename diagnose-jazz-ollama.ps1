@@ -20,26 +20,12 @@ if ($names -notcontains $Model) {
   Write-Host ("FAIL: Model '" + $Model + "' was not found in /api/tags.") -ForegroundColor Red
   exit 1
 }
-Write-Host "Running a short 2048-context generation request..." -ForegroundColor Cyan
-$payload = @{
-  model = $Model
-  stream = $false
-  think = $false
-  keep_alive = "1m"
-  messages = @(@{ role = "user"; content = "In one short paragraph, explain React.js and its components." })
-  options = @{ num_ctx = 2048; num_predict = 128 }
-} | ConvertTo-Json -Depth 12 -Compress
-
-try {
-  $result = Invoke-RestMethod -Method Post -Uri ($api + "/api/chat") -ContentType "application/json" -Body $payload -TimeoutSec 240
-  $answer = [string]$result.message.content
-  if (!$answer.Trim()) { throw "Ollama returned an empty message." }
-  Write-Host ("PASS: Ollama generated " + $answer.Length + " characters with " + $Model) -ForegroundColor Green
-  Write-Host $answer
-} catch {
-  Write-Host ("FAIL: Ollama model generation failed: " + $_.Exception.Message) -ForegroundColor Red
-  Write-Host "The PDF generator cannot use this model until it can answer a short /api/chat request." -ForegroundColor Yellow
-  Write-Host "Check available memory in Task Manager and look for Ollama runner exits in its Windows logs." -ForegroundColor Yellow
+Write-Host "Checking actual Node.js fetch with a short 2048-context request..." -ForegroundColor Cyan
+$scriptFile = Join-Path $PSScriptRoot "services\\api\\scripts\\diagnose-ollama.mjs"
+if (!(Test-Path $scriptFile)) { throw "Node Ollama diagnostic script is missing: $scriptFile" }
+& node $scriptFile $Model $api
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "The JavaScript Ollama connection failed. Check Task Manager memory and Ollama server logs." -ForegroundColor Red
   exit 1
 }
 Write-Host "This checks direct Ollama inference, not final PDF rendering or remote JazzWhatsApp." -ForegroundColor DarkYellow
