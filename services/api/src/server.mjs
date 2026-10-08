@@ -376,7 +376,7 @@ async function localAssistantReply(message) {
 
   if (/^(?:what(?:'s| is)\s+)?(?:the\s+)?(?:current\s+)?time(?:\s+is\s+it)?(?:\s+in\s+india)?[?.! ]*$/i.test(text)) return { assistant: `Mama ⏰ the current time in India is ${getCurrentTime()}.` };
   if (/\b(where are you|where r u|where are u|where're you)\b/i.test(text)) return { assistant: "Right here with you, Mama 👋😎 Jazz is online and ready." };
-  const remember = text.match(/^(?:hey\\s+jazz[, ]*)?(?:please\\s+)?remember(?:\\s+that)?\\s+(.{2,1000})[.!]?$/i);
+  const remember = text.match(/^(?:hey\s+jazz[, ]*)?(?:please\s+)?remember(?:\s+that)?\s+(.{2,1000})[.!]?$/i);
   if (remember) {
     const item = { id: crypto.randomUUID(), content: remember[1].trim(), createdAt: new Date().toISOString() };
     memories.push(item);
