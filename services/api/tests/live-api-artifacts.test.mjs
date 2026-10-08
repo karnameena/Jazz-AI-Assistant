@@ -126,7 +126,7 @@ test("live Jazz chat and streaming deliver real PDF/Excel, never the coding agen
     });
     const waData = await waReply.json();
     assert.equal(waReply.status,200,JSON.stringify(waData));
-    assert.match(waData.assistant?.text||"",/\\[Download .+\\]\\(\\/api\\/artifacts\\//);
+    assert.match(waData.assistant?.text||"",/\[Download .+\]\(\/api\/artifacts\//);
     assert.doesNotMatch(waData.assistant.text,/coding task|model is not ready|This operation was aborted/i);
   } finally {
     if (child && child.exitCode === null) {
