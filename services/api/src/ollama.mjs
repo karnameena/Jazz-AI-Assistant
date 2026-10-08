@@ -127,7 +127,7 @@ export async function ensureOllamaReady() {
   return status;
 }
 
-export async function resolveModel(mode = "normal") {
+export async function resolveModel(mode = "normal", taskOptions = {}) {
   const config = ollamaConfig();
   let installed = cachedInstalledModels;
   if (!installed) {
@@ -136,12 +136,22 @@ export async function resolveModel(mode = "normal") {
     installed = status.models;
   }
 
-  const selected = chooseModeModel(installed, mode, config);
+  // Task-specific selection is local-only. Respect explicit document choices,
+  // otherwise prefer installed 3B-class models for longer, higher-quality drafts.
+  // Normal conversation and Evil mode retain their existing model preferences.
+  const explicit = mode === "normal" ? String(taskOptions.model || "").trim() : "";
+  const preferred = mode === "normal" && Array.isArray(taskOptions.preferredModels)
+    ? taskOptions.preferredModels : [];
+  const selected = explicit
+    ? findInstalledModel(installed, explicit)
+    : (preferred.map(name => findInstalledModel(installed, name)).find(Boolean)
+      || chooseModeModel(installed, mode, config));
   if (selected) {
     warmModelInBackground(selected);
     return selected;
   }
 
+  if (explicit) throw new Error(`Local document model '${explicit}' is not installed. Run 'ollama pull ${explicit}' or unset JAZZ_DOCUMENT_MODEL to use an installed model.`);
   const requested = mode === "evil" ? config.evilModel : config.normalModel;
   throw new Error(`Ollama ${mode} model '${requested}' is not installed. Installed models: ${installed.join(", ") || "none"}.`);
 }
@@ -190,7 +200,7 @@ function invalidateModelOnTransportFailure() {
 export async function callOllama(message, systemInstruction, history = [], requestOptions = {}) {
   const config = ollamaConfig();
   const routed = extractModeAndMessage(message);
-  const model = await resolveModel(routed.mode);
+  const model = await resolveModel(routed.mode, requestOptions);
   const normalizedMessage = normalizeForBrain(routed.message);
   let response;
   try {
