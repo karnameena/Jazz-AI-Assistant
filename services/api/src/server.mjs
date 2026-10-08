@@ -50,8 +50,11 @@ const GEMINI_FALLBACKS = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-fl
 function sendJson(res, status, payload) {
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.setHeader("X-Jazz-Routing-Build", ROUTING_BUILD);
+  res.setHeader("X-Jazz-Api-Version", VERSION);
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.setHeader("Access-Control-Expose-Headers", "X-Jazz-Routing-Build, X-Jazz-Api-Version");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
   res.end(JSON.stringify(payload));
 }
@@ -62,6 +65,7 @@ function sendAudio(res, status, buffer) {
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.setHeader("Access-Control-Expose-Headers", "X-Jazz-Routing-Build, X-Jazz-Api-Version");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
   res.end(buffer);
 }
@@ -69,11 +73,14 @@ function sendAudio(res, status, buffer) {
 function sendSseHeaders(res) {
   res.statusCode = 200;
   res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+  res.setHeader("X-Jazz-Routing-Build", ROUTING_BUILD);
+  res.setHeader("X-Jazz-Api-Version", VERSION);
   res.setHeader("Cache-Control", "no-cache, no-transform");
   res.setHeader("Connection", "keep-alive");
   res.setHeader("X-Accel-Buffering", "no");
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.setHeader("Access-Control-Expose-Headers", "X-Jazz-Routing-Build, X-Jazz-Api-Version");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
   res.flushHeaders?.();
 }
