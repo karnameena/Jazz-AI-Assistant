@@ -405,7 +405,7 @@ async function localAssistantReply(message) {
         }
       });
       if (artifact) {
-        if (fallbackModel) artifact.assistant += "\\n\\n*Created using lightweight local model " + fallbackModel + " after the preferred model lost its connection. Review technical details before sharing.*";
+        if (fallbackModel) artifact.assistant += "\n\n*Created using lightweight local model " + fallbackModel + " after the preferred model lost its connection. Review technical details before sharing.*";
         return artifact;
       }
     } catch (error) {
