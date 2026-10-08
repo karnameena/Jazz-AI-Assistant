@@ -174,7 +174,7 @@ export async function maybeGenerateArtifact(message, generateText) {
       "and bullet lists. Aim for approximately 650–950 useful words when the topic supports it; do not " +
       "pad with repetitive text. Be technically accurate, distinguish uncertainty and do not invent sources, " +
       "statistics or personal details. Do not claim the file has already been generated. Return ONLY the " +
-      "document body, no commentary, XML or code fences around the entire response.\\n\\nUser request: " + message;
+      "document body, no commentary, XML or code fences around the entire response.\n\nUser request: " + message;
     const content = String(await generateText(prompt) || "").trim();
     if (!content) throw new Error("The local model returned no document content.");
     buffer = kind === "pdf" ? await renderPdf(title, content) : await renderDocx(title, content);
