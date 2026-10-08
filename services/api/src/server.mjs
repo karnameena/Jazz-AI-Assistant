@@ -642,6 +642,8 @@ const server = http.createServer(async (req, res) => {
         documentModel: "ollama-or-configured-provider",
         samples: {
           "Create a professional PDF report about React.js": routeCreationIntent("Create a professional PDF report about React.js"),
+          "[JAZZ_MODE:NORMAL] Create a professional PDF report about React.js": routeCreationIntent("[JAZZ_MODE:NORMAL] Create a professional PDF report about React.js"),
+          "[JAZZ_MODE:EVIL] Create a professional PDF report about React.js": routeCreationIntent("[JAZZ_MODE:EVIL] Create a professional PDF report about React.js"),
           "Create a React todo application": routeCreationIntent("Create a React todo application")
         }
       });
