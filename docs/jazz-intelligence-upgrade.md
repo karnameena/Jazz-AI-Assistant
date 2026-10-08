@@ -73,6 +73,25 @@ This revised verifier sends an **actual** `Create an Excel React expense tracker
 
 The upgraded React web chat performs a lightweight version check only for PDF/Word/Excel requests. If that **specific web origin** is connected to an older API, it explains the mismatch rather than routing the request to the coding agent. Ordinary chat, Normal/Evil modes, Android actions, recovery and reminder paths are unaffected.
 
+## Local PDF inference on 8 GB Windows — `artifact-error: fetch failed`
+
+If `verify-jazz-artifacts.ps1` reports PASS for Excel routes but `Create a professional PDF report about React.js` returns `artifact-error: fetch failed`, **routing and Excel rendering are working**; the missing step is an Ollama text-generation response. Your installed model list does not prove that the model runner can successfully generate a long report.
+
+Diagnose **direct Ollama inference** (without touching Normal/Evil modes, ADB, or reminders):
+
+```powershell
+cd "$env:USERPROFILE\Downloads\Jazz-AI-Test"
+.\diagnose-jazz-ollama.ps1 -Model "qwen3:4b"
+# If the 4B model fails, check the already-installed smaller model too:
+.\diagnose-jazz-ollama.ps1 -Model "qwen3:0.6b"
+```
+
+Check Task Manager RAM use, `ollama ps`, and the Ollama logs (on Windows typically under `$env:LOCALAPPDATA\Ollama`) if the direct request fails. Do not reset Git or delete your Whisper/Piper models to work around an Ollama transport failure.
+
+Document drafting now uses a shorter system prompt, 2,048-token context, 1,200 output token default, 2-minute keep-alive, and suppresses background model warmup **only for that document task**. A genuine local Ollama transport error can trigger a one-time lower-memory `qwen3:0.6b` fallback (disable by setting `JAZZ_DOCUMENT_FALLBACK=false`, or choose another **installed** local model with `JAZZ_DOCUMENT_FALLBACK_MODEL`). The file reply explicitly discloses when the lightweight model was used; review accuracy before sending. The normal/evil models, unrelated chat token settings, Android commands, reminders and recovery are not changed by this fallback. It is not a paid API or a guaranteed recovery from a stopped Ollama service.
+
+**Windows Git warning:** User's local test branch also has a committed reminder improvement not yet on the GitHub upgrade branch. Back up that local branch, fetch, and use a normal `git merge --no-ff --no-edit origin/feature/jazz-intelligence-attachments-20261008` after checking the working tree, rather than `git reset --hard` or deleting untracked Piper/Whisper assets. Restart the local Jazz API after merging to load updated code.
+
 ## What is actually implemented
 
 - Ollama receives bounded, structured chat history **once**, without duplicating it in the system prompt. Fallback to Ollama retains history, and cloud-model compatibility is kept.
