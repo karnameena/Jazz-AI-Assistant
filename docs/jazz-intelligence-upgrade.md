@@ -23,11 +23,14 @@ Optional PowerShell environment variables (set in the same terminal **before sta
 ```powershell
 $env:JAZZ_FREE_ONLY="true"
 $env:JAZZ_DOCUMENT_MODEL="qwen3:4b"
+# Optional: stronger general chat and voice, but slower on CPU:
+$env:JAZZ_NORMAL_MODEL="qwen3:4b"
+$env:JAZZ_OLLAMA_MAX_TOKENS="900"
 $env:JAZZ_DOCUMENT_MAX_TOKENS="1600"
 $env:JAZZ_CODING_MODEL="auto"
 ```
 
-The coding agent now defaults to `auto` (choose an installed local text model, prefer lightweight coders) rather than assuming an unavailable `qwen3-coder:30b`. **An explicitly configured coding model remains strict:** unset it or set `auto` if the model is unavailable. The coding agent still handles code tasks in an isolated workspace; it does not silently install dependencies, edit unrelated files, or call paid APIs.
+Setting `JAZZ_NORMAL_MODEL=qwen3:4b` also changes normal Jazz conversation to the 4B model; this improves capacity but can make CPU-only voice replies noticeably slower. Omit it to preserve the previous fast voice/chat model. Restart Jazz after changing models.\n\nThe coding agent now defaults to `auto` (choose an installed local text model, prefer lightweight coders) rather than assuming an unavailable `qwen3-coder:30b`. **An explicitly configured coding model remains strict:** unset it or set `auto` if the model is unavailable. The coding agent still handles code tasks in an isolated workspace; it does not silently install dependencies, edit unrelated files, or call paid APIs.
 
 After updating the branch and running `pnpm install --no-frozen-lockfile`, restart the API and test **Create a professional PDF report about React.js**. The reply should contain a downloadable `.pdf` file, **not** an error about the 30B coding model. Download the file while the same API server is running; these URLs expire after 20 minutes. The generated document is a local-model draft and should still be fact-checked.
 
