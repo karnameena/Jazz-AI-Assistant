@@ -14,6 +14,7 @@ import { getFreeModeStatus, resolveLlmProvider } from "./free-mode.mjs";
 import { contextStatus } from "./conversation-context.mjs";
 import { prepareResponseContext } from "./response-context.mjs";
 import { analyzeAttachments, attachmentLimits, readAttachmentJson } from "./attachment-analysis.mjs";
+import { getArtifact, maybeGenerateArtifact } from "./artifact-generation.mjs";
 import { getCodingAgentHealth, getCodingTask, handleCodingIntent, listCodingTasks } from "../../coding-agent/src/index.mjs";
 import {
   callReminderNow,
@@ -352,6 +353,16 @@ async function localAssistantReply(message) {
   const coding = await handleCodingIntent(text);
   if (coding) return coding;
 
+  try {
+    const artifact = await maybeGenerateArtifact(text, async draftPrompt => {
+      const response = await callConfiguredLLM(draftPrompt);
+      return response.text;
+    });
+    if (artifact) return artifact;
+  } catch (error) {
+    return { mode: "artifact-error", assistant: "I couldn’t generate that file: " + (error instanceof Error ? error.message : String(error)) };
+  }
+
   // Fresh/current questions and explicit web searches are handled before the
   // Android generic "search ..." fallback. Narrow Web-RAG intent detection keeps
   // WhatsApp/device search commands on their existing Android path.
@@ -511,6 +522,20 @@ const server = http.createServer(async (req, res) => {
     const requestUrl = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
     const pathname = requestUrl.pathname;
     if (await jazzWhatsApp.handle(req, res, requestUrl, parseJson, sendJson)) return;
+
+    const artifactMatch = pathname.match(/^\/api\/artifacts\/([0-9a-f-]{36})$/);
+    if (req.method === "GET" && artifactMatch) {
+      const artifact = getArtifact(artifactMatch[1]);
+      if (!artifact) return sendJson(res, 404, {ok:false,error:"File unavailable or link expired."});
+      res.writeHead(200, {
+        "Content-Type": artifact.mime,
+        "Content-Length": artifact.buffer.length,
+        "Content-Disposition": 'attachment; filename="' + artifact.filename + '"',
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff"
+      });
+      return res.end(artifact.buffer);
+    }
 
     const audioMatch = pathname.match(/^\/api\/reminders\/([^/]+)\/audio\.wav$/);
     if (req.method === "GET" && audioMatch) {
