@@ -30,4 +30,4 @@ jobs:
       - name: Build existing Jazz web interface
         run: pnpm --filter @jazz/web build
       - name: Run JazzWhatsApp shared API tests
-        run: node --test services/api/src/jazzwhatsapp/reply-quality.test.mjs services/api/src/jazzwhatsapp/vision.test.mjs
+        run: node --test services/api/src/jazzwhatsapp/*.test.mjs
