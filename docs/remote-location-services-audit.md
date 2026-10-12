@@ -13,6 +13,16 @@
 
 These files are **on a separate GitHub branch only** and are not installed on the user's real phone. No Location Services write permission was introduced and no global toggle was activated.
 
+## Validation results
+
+- **Passed:** Node 24 backend syntax check.
+- **Passed:** authenticated Lost Mode integration test covering OFFLINE, ON, OFF, UNKNOWN, unauthorized browser request, unsupported control action rejection, and unchanged Ring Device queue.
+- **Passed:** Lost Mode React Vite production build.
+- **Not built:** Android Companion debug APK. CI attempted an Android build with the verified Gradle 9.6.0 / AGP 9.4 combination. First the existing `gradle-wrapper.jar` was missing; then the generated icon source-set needs compatibility mode; after addressing these in CI only, dependency resolution on GitHub runner failed while fetching multiple public Maven coordinates. No APK artifact was created.
+- **Not tested:** real Android OEM device / remote global Location toggling. No Location ON/OFF controller exists in this branch.
+
+Build logs: https://github.com/karnameena/Jazz-AI-Assistant/actions/runs/38219364168
+
 ## Deployment / rollback
 
 Deploy the Lost Mode backend branch using its existing environment and database; the additive 002 migration runs on startup. Deploy `apps/lost-mode-web` using its existing Vite build and `VITE_API_BASE_URL`. Update the Android Companion with an APK built from this branch **only after checking signing compatibility**. Uninstalling/reinstalling a differently signed debug APK could erase stored pairing, so never replace the existing installed app blindly.
