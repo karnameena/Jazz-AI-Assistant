@@ -324,6 +324,20 @@ function sameCommandArgs(type, leftJson, rightArgs) {
   }
 }
 
+// Only Location Services commands expire; all existing recovery TTL behavior
+// stays untouched. A command must never execute after a lost phone reconnects late.
+function expireLocationCommands(deviceDbId) {
+  const deadline = sqliteUtcTimestamp(Date.now() - LOCATION_COMMAND_TTL_MS);
+  const expired = db.prepare(`SELECT id,type FROM recovery_commands WHERE device_id=? AND status='pending' AND type IN ('location_enable','location_disable','location_status') AND created_at<?`).all(deviceDbId, deadline);
+  if (!expired.length) return;
+  const update = db.prepare("UPDATE recovery_commands SET status='expired',completed_at=CURRENT_TIMESTAMP,leased_until=NULL WHERE id=? AND status='pending'");
+  const row = db.prepare("SELECT user_id FROM devices WHERE id=?").get(deviceDbId);
+  for (const command of expired) {
+    update.run(command.id);
+    audit(row?.user_id ?? null, deviceDbId, command.type.toUpperCase(), "EXPIRED");
+  }
+}
+
 function existingPendingCommand(deviceDbId, mapped) {
   if (!DEDUPE_COMMANDS.has(mapped.type)) return null;
   const rows = db.prepare("SELECT id,args_json,leased_until FROM recovery_commands WHERE device_id=? AND type=? AND status='pending' ORDER BY created_at ASC LIMIT 12")
