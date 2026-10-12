@@ -30,7 +30,10 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      - uses: android-actions/setup-android@v3
+      - name: Check preinstalled Android SDK
+        run: |
+          echo "Android SDK: $ANDROID_HOME"
+          test -d "$ANDROID_HOME/platforms/android-34"
       - name: Build existing Android Companion debug APK
         working-directory: apps/android-companion
         run: |
