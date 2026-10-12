@@ -81,9 +81,66 @@ test("authenticated Lost Mode heartbeat reports real location toggle status with
   assert.equal(response.response.device.locationServices,"UNKNOWN");
   const unauthorized=await json("GET","/api/devices/"+id);
   assert.equal(unauthorized.status,401);
-  const unsupportedAction=await json("POST","/api/devices/"+id+"/actions",
-    {action:"LOCATION_ENABLE"},ownerHeaders);
-  assert.equal(unsupportedAction.status,400,"Do not advertise an unimplemented remote setter");
-  const existing=await json("POST","/api/devices/"+id+"/actions",{action:"RING_DEVICE"},ownerHeaders);
+  const deviceHeaders={"Authorization":"Bearer "+token,"X-Jazz-Lost-Device-Id":"test-companion"};
+  const actions="/api/devices/"+id+"/actions";
+  const queued=await json("POST",actions,{action:"LOCATION_ENABLE"},ownerHeaders);
+  assert.equal(queued.status,202);
+  const enableId=queued.response.commandId;
+  assert.ok(enableId);
+  const duplicate=await json("POST",actions,{action:"LOCATION_ENABLE"},ownerHeaders);
+  assert.equal(duplicate.response.commandId,enableId,"Duplicate should coalesce");
+  assert.equal(duplicate.response.deduplicated,true);
+  const conflict=await json("POST",actions,{action:"LOCATION_DISABLE"},ownerHeaders);
+  assert.equal(conflict.status,409,"Opposite pending command must be rejected");
+  let progress=await json("GET","/api/devices/"+id+"/commands/"+enableId,undefined,ownerHeaders);
+  assert.equal(progress.response.status,"PENDING","Queuing must not imply success");
+  const next=await json("GET","/android/device/commands/next",undefined,deviceHeaders);
+  assert.equal(next.response.command.type,"location_enable");
+  assert.equal(next.response.command.id,enableId);
+  assert.ok(next.response.command.expiresAtMs>Date.now());
+  const failed=await json("POST","/android/device/commands/"+enableId+"/result",{
+    deviceId:"test-companion",result:{ok:false,confirmed:false,status:"DEVICE_OWNER_REQUIRED",locationServices:"OFF",error:"Not provisioned"}
+  },deviceHeaders);
+  assert.equal(failed.status,200);
+  progress=await json("GET","/api/devices/"+id+"/commands/"+enableId,undefined,ownerHeaders);
+  assert.equal(progress.response.status,"FAILED");
+  assert.equal(progress.response.confirmed,false);
+  const retry=await json("POST","/android/device/commands/"+enableId+"/result",{
+    deviceId:"test-companion",result:{ok:true,confirmed:true,status:"CONFIRMED",locationServices:"ON"}
+  },deviceHeaders);
+  assert.equal(retry.response.deduplicated,true,"Replay must not overwrite a failed result");
+
+  const off=await json("POST",actions,{action:"LOCATION_DISABLE"},ownerHeaders);
+  assert.equal(off.status,202);
+  const offId=off.response.commandId;
+  const deliver=await json("GET","/android/device/commands/next",undefined,deviceHeaders);
+  assert.equal(deliver.response.command.type,"location_disable");
+  const reported=await json("POST","/android/device/commands/"+offId+"/result",{
+    deviceId:"test-companion",result:{ok:true,confirmed:true,status:"CONFIRMED",locationServices:"OFF",timestamp:Date.now()}
+  },deviceHeaders);
+  assert.equal(reported.status,200);
+  progress=await json("GET","/api/devices/"+id+"/commands/"+offId,undefined,ownerHeaders);
+  assert.equal(progress.response.status,"CONFIRMED");
+  assert.equal(progress.response.result.locationServices,"OFF");
+  response=await status();
+  assert.equal(response.response.device.locationServices,"OFF");
+
+  const stale=await json("POST",actions,{action:"LOCATION_ENABLE"},ownerHeaders);
+  assert.equal(stale.status,202);
+  const expiredId=stale.response.commandId;
+  const directDb=new DatabaseSync(dbfile);
+  directDb.prepare("UPDATE recovery_commands SET created_at=? WHERE id=?")
+    .run("2026-01-01 00:00:00",expiredId);
+  directDb.close();
+  progress=await json("GET","/api/devices/"+id+"/commands/"+expiredId,undefined,ownerHeaders);
+  assert.equal(progress.response.status,"EXPIRED");
+  const late=await json("POST","/android/device/commands/"+expiredId+"/result",{
+    deviceId:"test-companion",result:{ok:true,confirmed:true,locationServices:"ON"}
+  },deviceHeaders);
+  assert.equal(late.status,409,"Expired commands must never apply late success");
+
+  const unauthCommand=await json("GET","/api/devices/"+id+"/commands/"+offId);
+  assert.equal(unauthCommand.status,401);
+  const existing=await json("POST",actions,{action:"RING_DEVICE"},ownerHeaders);
   assert.equal(existing.status,202,"Existing ring device command must still queue");
 });
