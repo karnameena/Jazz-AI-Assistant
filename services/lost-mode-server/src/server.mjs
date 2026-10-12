@@ -204,6 +204,10 @@ function stateFor(deviceDbId) {
   return { ...row, online: Boolean(lastSeenMs && Date.now() - lastSeenMs <= ONLINE_WINDOW_MS) };
 }
 
+function locationServicesState(value) {
+  return value === "ON" || value === "OFF" ? value : "UNKNOWN";
+}
+
 function publicDevice(row) {
   const state = stateFor(row.id) || {};
   return {
@@ -217,6 +221,8 @@ function publicDevice(row) {
     charging: Boolean(state.charging),
     network: state.network || "UNKNOWN",
     lastSeen: sqliteUtcToIso(state.last_seen),
+    locationServices: state.online ? locationServicesState(state.location_services_status) : "OFFLINE",
+    locationServicesLastConfirmed: state.location_services_timestamp || null,
     location: state.latitude == null ? null : {
       latitude: state.latitude,
       longitude: state.longitude,
@@ -336,9 +342,12 @@ function updateStateFromHeartbeat(device, input) {
   const status = input.status && typeof input.status === "object" ? input.status : {};
   const loc = input.lastKnownLocation?.ok ? input.lastKnownLocation : null;
   db.prepare(`UPDATE device_state SET mode=?,battery=?,charging=?,network=?,online=1,last_seen=CURRENT_TIMESTAMP,
-    latitude=COALESCE(?,latitude),longitude=COALESCE(?,longitude),accuracy_meters=COALESCE(?,accuracy_meters),location_timestamp=COALESCE(?,location_timestamp),updated_at=CURRENT_TIMESTAMP WHERE device_id=?`)
+    latitude=COALESCE(?,latitude),longitude=COALESCE(?,longitude),accuracy_meters=COALESCE(?,accuracy_meters),location_timestamp=COALESCE(?,location_timestamp),location_services_status=?,location_services_timestamp=?,updated_at=CURRENT_TIMESTAMP WHERE device_id=?`)
     .run(input.mode || "NORMAL_MODE", status.battery ?? null, status.charging ? 1 : 0, status.network || "UNKNOWN",
-      loc?.latitude ?? null, loc?.longitude ?? null, loc?.accuracyMeters ?? null, loc?.timestamp ?? null, device.id);
+      loc?.latitude ?? null, loc?.longitude ?? null, loc?.accuracyMeters ?? null, loc?.timestamp ?? null,
+      locationServicesState(status.locationServices),
+      locationServicesState(status.locationServices) === "UNKNOWN" ? null : (Number(status.locationServicesTimestamp) || Date.now()),
+      device.id);
 }
 
 function updateStateFromResult(device, command, result) {
@@ -347,9 +356,12 @@ function updateStateFromResult(device, command, result) {
     const status = result.status || {};
     const loc = result.lastKnownLocation?.ok ? result.lastKnownLocation : null;
     db.prepare(`UPDATE device_state SET mode=?,battery=?,charging=?,network=?,last_seen=CURRENT_TIMESTAMP,
-      latitude=COALESCE(?,latitude),longitude=COALESCE(?,longitude),accuracy_meters=COALESCE(?,accuracy_meters),location_timestamp=COALESCE(?,location_timestamp),updated_at=CURRENT_TIMESTAMP WHERE device_id=?`)
+      latitude=COALESCE(?,latitude),longitude=COALESCE(?,longitude),accuracy_meters=COALESCE(?,accuracy_meters),location_timestamp=COALESCE(?,location_timestamp),location_services_status=?,location_services_timestamp=?,updated_at=CURRENT_TIMESTAMP WHERE device_id=?`)
       .run(result.mode || "NORMAL_MODE", status.battery ?? null, status.charging ? 1 : 0, status.network || "UNKNOWN",
-        loc?.latitude ?? null, loc?.longitude ?? null, loc?.accuracyMeters ?? null, loc?.timestamp ?? null, device.id);
+        loc?.latitude ?? null, loc?.longitude ?? null, loc?.accuracyMeters ?? null, loc?.timestamp ?? null,
+      locationServicesState(status.locationServices),
+      locationServicesState(status.locationServices) === "UNKNOWN" ? null : (Number(status.locationServicesTimestamp) || Date.now()),
+      device.id);
   }
   if (command.type === "device_location" && result.ok) {
     db.prepare(`UPDATE device_state SET latitude=?,longitude=?,accuracy_meters=?,location_timestamp=?,battery=COALESCE(?,battery),network=COALESCE(?,network),last_seen=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE device_id=?`)
