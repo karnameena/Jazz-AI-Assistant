@@ -40,6 +40,8 @@ jobs:
       - name: Build existing Android Companion debug APK
         working-directory: apps/android-companion
         run: gradle :app:assembleDebug --no-daemon -Pandroid.sourceset.disallowProvider=false
+      - name: Verify APK includes a valid Jazz launcher PNG
+        run: python3 apps/android-companion/tests/verify-launcher-icon.py
       - uses: actions/upload-artifact@v4
         with:
           name: jazz-android-companion-location-status-debug
