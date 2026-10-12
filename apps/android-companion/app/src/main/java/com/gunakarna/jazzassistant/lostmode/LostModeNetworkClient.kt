@@ -55,7 +55,7 @@ class LostModeNetworkClient(private val context: Context) {
             }
 
             val type = command.optString("type")
-            if (type !in setOf("device_status", "device_location", "ring_device", "recovery_photo", "set_recovery_mode", "play_voice_message")) {
+            if (type !in setOf("device_status", "device_location", "ring_device", "recovery_photo", "set_recovery_mode", "play_voice_message", "location_status", "location_enable", "location_disable")) {
                 val rejected = JSONObject().put("ok", false).put("status", "COMMAND_NOT_ALLOWED")
                 postResult(commandId, rejected)
                 processed += 1

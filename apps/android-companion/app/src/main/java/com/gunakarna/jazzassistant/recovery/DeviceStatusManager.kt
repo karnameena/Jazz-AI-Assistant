@@ -4,6 +4,9 @@ import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.location.LocationManager
+import android.os.Build
+import android.provider.Settings
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.BatteryManager
@@ -44,6 +47,20 @@ class DeviceStatusManager(private val context: Context) {
             else -> "BATTERY"
         }
 
+        val locationServices = try {
+            val globalLocation = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+            @Suppress("DEPRECATION")
+            val enabled = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                globalLocation.isLocationEnabled
+            } else {
+                Settings.Secure.getInt(context.contentResolver, Settings.Secure.LOCATION_MODE, 0) != 0
+            }
+            if (enabled) "ON" else "OFF"
+        } catch (_: Exception) {
+            "UNKNOWN"
+        }
+        val locationServicesTimestamp = System.currentTimeMillis()
+
         val power = context.getSystemService(Context.POWER_SERVICE) as PowerManager
         val ignoringBatteryOptimizations = power.isIgnoringBatteryOptimizations(context.packageName)
         val accessibilityEnabled = isJazzAccessibilityEnabled()
@@ -58,6 +75,8 @@ class DeviceStatusManager(private val context: Context) {
             .put("internetCapability", hasInternetCapability)
             .put("networkValidated", validated)
             .put("network", networkType)
+            .put("locationServices", locationServices)
+            .put("locationServicesTimestamp", locationServicesTimestamp)
             .put("batteryOptimizationIgnored", ignoringBatteryOptimizations)
             .put("accessibilityEnabled", accessibilityEnabled)
             .put("accessibilityConnected", accessibilityConnected)

@@ -1,0 +1,47 @@
+name: Jazz Lost Mode Location Status Checks
+on:
+  pull_request:
+    paths:
+      - "apps/android-companion/**"
+      - "apps/lost-mode-web/**"
+      - "services/lost-mode-server/**"
+      - ".github/workflows/jazz-lostmode-location-checks.yml"
+  workflow_dispatch:
+
+jobs:
+  status-web-and-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install pnpm and dependencies
+        run: |
+          corepack enable
+          pnpm install --no-frozen-lockfile
+      - name: Validate lost-mode backend syntax
+        run: node --check services/lost-mode-server/src/server.mjs
+      - name: Verify authenticated location-status reports and existing ring command
+        run: node --test services/lost-mode-server/tests/location-services-readback.test.mjs
+      - name: Build existing Lost Mode web interface
+        run: pnpm --filter @jazz/lost-mode-web build
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Check preinstalled Android SDK
+        run: |
+          echo "Android SDK: $ANDROID_HOME"
+          test -d "$ANDROID_HOME/platforms/android-34"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.6.0"
+      - name: Build existing Android Companion debug APK
+        working-directory: apps/android-companion
+        run: gradle :app:assembleDebug --no-daemon -Pandroid.sourceset.disallowProvider=false
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jazz-android-companion-location-status-debug
+          path: apps/android-companion/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error

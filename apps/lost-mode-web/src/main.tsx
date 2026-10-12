@@ -50,6 +50,8 @@ type Device = {
   charging?: boolean;
   network: string;
   lastSeen: string | null;
+  locationServices?: "ON" | "OFF" | "UNKNOWN" | "OFFLINE";
+  locationServicesLastConfirmed?: number | null;
   mode: string;
   location: LocationState | null;
   photo: PhotoState | null;
@@ -233,6 +235,9 @@ function App() {
   const [msg, setMsg] = useState("");
   const [activeCount, setActiveCount] = useState(0);
   const [voiceOpen, setVoiceOpen] = useState(false);
+  const [locationBusy, setLocationBusy] = useState(false);
+  const [locationFeedback, setLocationFeedback] = useState("");
+
   const actionLocks = useRef(new Set<string>());
 
   async function load() {
@@ -329,6 +334,48 @@ function App() {
     } finally {
       actionLocks.current.delete(key);
       setActiveCount(actionLocks.current.size);
+    }
+  }
+
+  async function locationControl(enabled: boolean) {
+    if (!selected || locationBusy) return;
+    const selectedAtStart = selected;
+    const desired = enabled ? "ON" : "OFF";
+    setLocationBusy(true);
+    setLocationFeedback("Sending owner-authorized Location Services " + desired + " request…");
+    try {
+      const queued = await api(`/api/devices/${selectedAtStart}/actions`, {
+        method: "POST",
+        body: JSON.stringify({ action: enabled ? "LOCATION_ENABLE" : "LOCATION_DISABLE" })
+      });
+      if (!queued.commandId) throw new Error("The Lost Mode server returned no command ID.");
+      setLocationFeedback(queued.deduplicated
+        ? "A matching request was already queued. Checking the phone's confirmed result…"
+        : "Command queued. Awaiting confirmation from your paired Android Companion…");
+      let completed = false;
+      for (let attempt = 0; attempt < 75; attempt += 1) {
+        await new Promise(resolve => window.setTimeout(resolve, 1400));
+        const data = await api(`/api/devices/${selectedAtStart}/commands/${encodeURIComponent(queued.commandId)}`);
+        if (data.confirmed && data.status === "CONFIRMED" && data.result?.locationServices === desired) {
+          setLocationFeedback("Device confirmed: Location Services " + desired + ".");
+          await refresh(selectedAtStart);
+          completed = true;
+          break;
+        }
+        if (["FAILED", "EXPIRED"].includes(data.status)) {
+          setLocationFeedback("Command " + data.status + ": " + (data.result?.error || data.result?.status || "The device did not confirm the requested state."));
+          completed = true;
+          break;
+        }
+        if (data.status === "DEVICE_OFFLINE" && attempt % 7 === 0) {
+          setLocationFeedback("Device offline. Command is queued, not successful; it will expire if the phone cannot reconnect.");
+        }
+      }
+      if (!completed) setLocationFeedback("No device confirmation yet. The command may still be pending; refresh the device status to check.");
+    } catch (error) {
+      setLocationFeedback(error instanceof Error ? error.message : "Location Services request failed.");
+    } finally {
+      setLocationBusy(false);
     }
   }
 
@@ -449,6 +496,49 @@ function App() {
               <button disabled={isActionBusy("RECOVERY_PHOTO", { camera: "rear" })} onClick={() => action("RECOVERY_PHOTO", { camera: "rear" })}><Camera /><div><strong>Back Camera</strong><span>{isActionBusy("RECOVERY_PHOTO", { camera: "rear" }) ? "Capturing…" : "Request recovery photo"}</span></div></button>
               <button className="critical-action" disabled={isActionBusy("SET_RECOVERY_MODE", { enabled: true })} onClick={() => action("SET_RECOVERY_MODE", { enabled: true })}><ShieldCheck /><div><strong>Enable Lost Mode</strong><span>Secure recovery state</span></div></button>
               <button className="voice-toggle" aria-expanded={voiceOpen} aria-controls="recovery-voice-panel" onClick={() => setVoiceOpen(open => !open)}><Mic /><div><strong>Voice Input</strong><span>Remote recovery voice broadcast</span></div></button>
+            </section>
+
+            <section className="glass-panel" aria-label="Device Location Services" style={{ padding: 22, marginTop: 20 }}>
+              <div className="card-heading">
+                <div><span className="eyebrow">DEVICE SYSTEM SETTINGS</span><h2>Location Services</h2></div>
+                <MapPin size={22} />
+              </div>
+              <div className="location-meta">
+                <div>
+                  <span>Current status</span>
+                  <strong>{!device.online ? "Device Offline" : device.locationServices || "Unknown"}</strong>
+                </div>
+                <div>
+                  <span>Last device-confirmed status</span>
+                  <strong>{formatTime(device.locationServicesLastConfirmed)}</strong>
+                </div>
+              </div>
+              <p style={{ opacity: 0.75, margin: "12px 0" }}>
+                Reported by the enrolled Android Companion during its last authenticated heartbeat.
+                Global Location Services status is different from Jazz's own location permission.
+              </p>
+              <div className="card-actions">
+                <button className="primary-button" disabled={locationBusy}
+                  onClick={() => void locationControl(true)}>
+                  <MapPin size={17} /> Turn ON Location
+                </button>
+                <button className="secondary-button" disabled={locationBusy}
+                  onClick={() => void locationControl(false)}>
+                  <MapPin size={17} /> Turn OFF Location
+                </button>
+                <button className="secondary-button" disabled={locationBusy || isActionBusy("DEVICE_STATUS") || !device.online}
+                  onClick={() => action("DEVICE_STATUS")}>
+                  <RefreshCw size={17} /> Refresh Status
+                </button>
+              </div>
+              {locationFeedback && <div role="status" aria-live="polite" className="command-banner" style={{ marginTop: 12 }}>
+                {locationBusy && <RefreshCw size={16} className="spin" />}
+                <span>{locationFeedback}</span>
+              </div>}
+              <p style={{ opacity: 0.7, fontSize: 12 }}>
+                Remote ON/OFF requires local owner opt-in and Android Enterprise device-owner privileges.
+                Queued commands do not mean that Location Services changed.
+              </p>
             </section>
 
             {voiceOpen && <VoiceInput

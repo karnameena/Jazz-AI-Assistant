@@ -13,6 +13,7 @@ class RecoveryCommandExecutor(private val context: Context) {
     private val cameraManager = RecoveryCameraManager(context)
     private val voiceMessageManager = RecoveryVoiceMessageManager(context)
     private val securityManager = RecoverySecurityManager(context)
+    private val ownerLocation = OwnerLocationController(context)
 
     fun execute(command: JSONObject): JSONObject {
         val type = command.optString("type")
@@ -26,6 +27,19 @@ class RecoveryCommandExecutor(private val context: Context) {
                 .put("status", statusManager.snapshot())
                 .put("locationHistory", locationManager.encryptedHistory())
                 .also { locationManager.cachedLocation()?.let { cached -> it.put("lastKnownLocation", cached) } }
+            "location_status" -> ownerLocation.currentState()
+            "location_enable", "location_disable" -> {
+                val requestedAt = command.optLong("createdAtMs", 0L)
+                val expiry = command.optLong("expiresAtMs", 0L)
+                val now = System.currentTimeMillis()
+                if (expiry <= 0L || expiry < now || (requestedAt > 0L && requestedAt > now + 60_000L)) {
+                    JSONObject().put("ok", false).put("confirmed", false)
+                        .put("status", "EXPIRED")
+                        .put("error", "Expired or invalid remote Location Services command.")
+                } else {
+                    ownerLocation.execute(type == "location_enable", command.optString("id"))
+                }
+            }
             "device_location" -> locationManager.currentLocation()
                 .put("deviceId", securityManager.deviceId())
                 .put("deviceName", securityManager.deviceName())
