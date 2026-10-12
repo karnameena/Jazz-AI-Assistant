@@ -34,11 +34,12 @@ jobs:
         run: |
           echo "Android SDK: $ANDROID_HOME"
           test -d "$ANDROID_HOME/platforms/android-34"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.6.0"
       - name: Build existing Android Companion debug APK
         working-directory: apps/android-companion
-        run: |
-          chmod +x gradlew
-          ./gradlew :app:assembleDebug --no-daemon
+        run: gradle :app:assembleDebug --no-daemon
       - uses: actions/upload-artifact@v4
         with:
           name: jazz-android-companion-location-status-debug
