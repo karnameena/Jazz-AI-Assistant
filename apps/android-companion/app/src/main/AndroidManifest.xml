@@ -41,6 +41,20 @@
             </intent-filter>
         </activity>
 
+        <!-- Provisioned Android Enterprise device-owner receiver. No ownership is
+             acquired by installation and no existing Jazz component is changed. -->
+        <receiver
+            android:name=".recovery.JazzLocationAdminReceiver"
+            android:permission="android.permission.BIND_DEVICE_ADMIN"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+            </intent-filter>
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/jazz_location_device_admin" />
+        </receiver>
+
         <activity
             android:name=".lostmode.LostModeSetupActivity"
             android:exported="false"
