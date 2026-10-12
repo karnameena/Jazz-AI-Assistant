@@ -21,8 +21,11 @@ const DEVICE_AUTH_CACHE_TTL_MS = 5 * 60_000;
 const LOGIN_WINDOW_MS = 15 * 60_000;
 const LOGIN_USER_LIMIT = 8;
 const LOGIN_IP_LIMIT = 30;
-const ALLOWED_COMMANDS = new Set(["DEVICE_STATUS", "GET_LOCATION", "RING_DEVICE", "RECOVERY_PHOTO", "SET_RECOVERY_MODE", "PLAY_VOICE_MESSAGE"]);
-const DEDUPE_COMMANDS = new Set(["device_status", "device_location", "recovery_photo"]);
+const ALLOWED_COMMANDS = new Set(["DEVICE_STATUS", "GET_LOCATION", "RING_DEVICE", "RECOVERY_PHOTO", "SET_RECOVERY_MODE", "PLAY_VOICE_MESSAGE", "LOCATION_STATUS", "LOCATION_ENABLE", "LOCATION_DISABLE"]);
+const LOCATION_COMMANDS = new Set(["location_status", "location_enable", "location_disable"]);
+const LOCATION_WRITE_COMMANDS = new Set(["location_enable", "location_disable"]);
+const LOCATION_COMMAND_TTL_MS = 120_000;
+const DEDUPE_COMMANDS = new Set(["device_status", "device_location", "recovery_photo", "location_status", "location_enable", "location_disable"]);
 const loginAttempts = new Map();
 const invalidDeviceAttempts = new Map();
 const deviceAuthCache = new Map();
@@ -296,6 +299,9 @@ function validateVoiceArgs(args = {}) {
 function mapCommand(type, args = {}) {
   switch (type) {
     case "DEVICE_STATUS": return { type: "device_status", args: {} };
+    case "LOCATION_STATUS": return { type: "location_status", args: {} };
+    case "LOCATION_ENABLE": return { type: "location_enable", args: {} };
+    case "LOCATION_DISABLE": return { type: "location_disable", args: {} };
     case "GET_LOCATION": return { type: "device_location", args: {} };
     case "RING_DEVICE": return { type: "ring_device", args: { durationMs: Math.min(60_000, Math.max(5_000, Number(args.durationMs || 30_000))) } };
     case "RECOVERY_PHOTO": return { type: "recovery_photo", args: { camera: args.camera === "rear" ? "rear" : "front" } };
