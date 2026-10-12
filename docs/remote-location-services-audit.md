@@ -1,6 +1,24 @@
 # Jazz Lost Mode — Remote Location Services upgrade audit
 
-**Status: audited, not implemented.** This document is an implementation boundary and source map. No APK, web bundle, service endpoint, or on-device location toggle has been built or tested.
+**Status: read-only Location Services reporting implemented; remote ON/OFF not implemented.** This document captures the compatibility boundary and changed files. This upgrade does not remotely enable or disable Android's global Location Services setting.
+
+## Additive changes on this branch
+
+- `apps/android-companion/app/src/main/java/com/gunakarna/jazzassistant/recovery/DeviceStatusManager.kt`: reads `LocationManager.isLocationEnabled()` (API 28+) or legacy location mode (API 26–27). Reports ON, OFF or UNKNOWN in the existing device-status snapshot. It never changes settings.
+- `services/lost-mode-server/migrations/002_location_service_readback.sql`: adds two nullable-compatible columns to existing `device_state` rows; no changes to existing account or command schema.
+- `services/lost-mode-server/src/server.mjs`: persists sanitized ON/OFF/UNKNOWN reports from existing authenticated device heartbeats and status-result messages. Existing owner-authenticated `GET /api/devices/:id` exposes last confirmed status and timestamp. Offline devices show OFFLINE rather than stale ON.
+- `apps/lost-mode-web/src/main.tsx`: a separate Location Services status area and refresh action using the existing `DEVICE_STATUS` command, without replacing existing map, ring, photo, or recovery UI.
+- `services/lost-mode-server/tests/location-services-readback.test.mjs`: integration tests of owner authentication, readback ON/OFF/UNKNOWN, offline handling and the unchanged ring command.
+- `.github/workflows/jazz-lostmode-location-checks.yml`: automated web, backend and Android debug build checks; existing repo lacks Android `gradle-wrapper.jar`, so CI installs a compatible version of Gradle.
+
+These files are **on a separate GitHub branch only** and are not installed on the user's real phone. No Location Services write permission was introduced and no global toggle was activated.
+
+## Deployment / rollback
+
+Deploy the Lost Mode backend branch using its existing environment and database; the additive 002 migration runs on startup. Deploy `apps/lost-mode-web` using its existing Vite build and `VITE_API_BASE_URL`. Update the Android Companion with an APK built from this branch **only after checking signing compatibility**. Uninstalling/reinstalling a differently signed debug APK could erase stored pairing, so never replace the existing installed app blindly.
+
+To roll back the web/mobile code, use the pre-upgrade branch and the existing signed mobile release; do not drop the newly added SQLite columns if existing readback data matters. Do not reset other local branches or delete user Whisper/Piper/paired credential data.
+
 
 ## Verified repository paths (2026-10-12)
 
