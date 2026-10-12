@@ -4,6 +4,9 @@ import android.app.Activity
 import android.os.Bundle
 import android.text.InputType
 import android.widget.Button
+import android.widget.CheckBox
+import android.app.admin.DevicePolicyManager
+import com.gunakarna.jazzassistant.recovery.OwnerLocationController
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -14,6 +17,8 @@ class LostModeSetupActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val security = LostModeSecurityManager(this)
+        val locationControl = OwnerLocationController(this)
+        val managedPolicy = getSystemService(DEVICE_POLICY_SERVICE) as DevicePolicyManager
         if (security.isConfigured()) {
             LostModeHeartbeatWorker.schedule(this)
             LostModeForegroundService.start(this)
@@ -63,6 +68,25 @@ class LostModeSetupActivity : Activity() {
                         }
                     }.start()
                 }
+            })
+            addView(TextView(this@LostModeSetupActivity).apply {
+                text = "Optional: remote global Location Services control (Android Enterprise device-owner only). " +
+                    "This may change the phone's global Location switch while locked. It never bypasses Android permissions; " +
+                    "it is not enabled automatically. Only enable on a phone you enrolled and manage."
+                setPadding(0, 18, 0, 8)
+            })
+            addView(CheckBox(this@LostModeSetupActivity).apply {
+                text = "Allow my enrolled Jazz Lost Mode account to request Location Services ON/OFF"
+                isChecked = locationControl.ownerOptedIn()
+                setOnCheckedChangeListener { _, checked ->
+                    locationControl.setOwnerOptIn(checked)
+                    status.text = if (checked) "Opt-in saved locally. Device-owner authorization is also required." else "Remote global Location Services control disabled locally."
+                }
+            })
+            addView(TextView(this@LostModeSetupActivity).apply {
+                text = "Android device owner: " +
+                    if (managedPolicy.isDeviceOwnerApp(packageName)) "AVAILABLE" else "NOT PROVISIONED — remote ON/OFF will return DEVICE_OWNER_REQUIRED"
+                setPadding(0, 8, 0, 16)
             })
             addView(status)
         }
