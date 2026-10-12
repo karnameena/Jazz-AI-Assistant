@@ -50,7 +50,15 @@ class OwnerLocationController(private val context: Context) {
         } catch (error: Exception) {
             return failure(currentState(), "UNSUPPORTED", "This device cannot change global Location Services using its device-owner API.")
         }
-        val updated = currentState()
+        var updated = currentState()
+        repeat(8) {
+            if (updated.optString("locationServices") == desired) return@repeat
+            try { Thread.sleep(250L) } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return failure(updated, "UNSUPPORTED", "Interrupted while confirming Location Services.")
+            }
+            updated = currentState()
+        }
         if (updated.optString("locationServices") != desired) {
             return failure(updated, "UNSUPPORTED", "Android did not confirm the requested Location Services setting.")
         }
