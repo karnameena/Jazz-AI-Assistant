@@ -50,6 +50,8 @@ type Device = {
   charging?: boolean;
   network: string;
   lastSeen: string | null;
+  locationServices?: "ON" | "OFF" | "UNKNOWN" | "OFFLINE";
+  locationServicesLastConfirmed?: number | null;
   mode: string;
   location: LocationState | null;
   photo: PhotoState | null;
@@ -449,6 +451,33 @@ function App() {
               <button disabled={isActionBusy("RECOVERY_PHOTO", { camera: "rear" })} onClick={() => action("RECOVERY_PHOTO", { camera: "rear" })}><Camera /><div><strong>Back Camera</strong><span>{isActionBusy("RECOVERY_PHOTO", { camera: "rear" }) ? "Capturing…" : "Request recovery photo"}</span></div></button>
               <button className="critical-action" disabled={isActionBusy("SET_RECOVERY_MODE", { enabled: true })} onClick={() => action("SET_RECOVERY_MODE", { enabled: true })}><ShieldCheck /><div><strong>Enable Lost Mode</strong><span>Secure recovery state</span></div></button>
               <button className="voice-toggle" aria-expanded={voiceOpen} aria-controls="recovery-voice-panel" onClick={() => setVoiceOpen(open => !open)}><Mic /><div><strong>Voice Input</strong><span>Remote recovery voice broadcast</span></div></button>
+            </section>
+
+            <section className="glass-panel" aria-label="Device Location Services" style={{ padding: 22, marginTop: 20 }}>
+              <div className="card-heading">
+                <div><span className="eyebrow">DEVICE SYSTEM SETTINGS</span><h2>Location Services</h2></div>
+                <MapPin size={22} />
+              </div>
+              <div className="location-meta">
+                <div>
+                  <span>Current status</span>
+                  <strong>{!device.online ? "Device Offline" : device.locationServices || "Unknown"}</strong>
+                </div>
+                <div>
+                  <span>Last device-confirmed status</span>
+                  <strong>{formatTime(device.locationServicesLastConfirmed)}</strong>
+                </div>
+              </div>
+              <p style={{ opacity: 0.75, margin: "12px 0" }}>
+                Reported by the enrolled Android Companion during its last authenticated heartbeat.
+                Global Location Services status is different from Jazz's own location permission.
+              </p>
+              <div className="card-actions">
+                <button className="secondary-button" disabled={isActionBusy("DEVICE_STATUS") || !device.online}
+                  onClick={() => action("DEVICE_STATUS")}>
+                  <RefreshCw size={17} /> Refresh device status
+                </button>
+              </div>
             </section>
 
             {voiceOpen && <VoiceInput
