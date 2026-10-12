@@ -141,6 +141,17 @@ test("authenticated Lost Mode heartbeat reports real location toggle status with
 
   const unauthCommand=await json("GET","/api/devices/"+id+"/commands/"+offId);
   assert.equal(unauthCommand.status,401);
+  const separateDb=new DatabaseSync(dbfile);
+  separateDb.prepare("INSERT INTO users(username,password_hash) VALUES(?,?)")
+    .run("other-owner",hashSecret("OtherOwnerPassword123!"));
+  separateDb.close();
+  const other=await json("POST","/api/auth/login",{username:"other-owner",password:"OtherOwnerPassword123!"});
+  assert.equal(other.status,200);
+  const otherHeaders={Cookie:other.cookie.split(";")[0]};
+  const forbidden=await json("GET","/api/devices/"+id+"/commands/"+offId,undefined,otherHeaders);
+  assert.equal(forbidden.status,404,"Commands must not be visible to another owner");
+  const forbiddenAction=await json("POST",actions,{action:"LOCATION_ENABLE"},otherHeaders);
+  assert.equal(forbiddenAction.status,404,"Another account must not command this device");
   const existing=await json("POST",actions,{action:"RING_DEVICE"},ownerHeaders);
   assert.equal(existing.status,202,"Existing ring device command must still queue");
 });
