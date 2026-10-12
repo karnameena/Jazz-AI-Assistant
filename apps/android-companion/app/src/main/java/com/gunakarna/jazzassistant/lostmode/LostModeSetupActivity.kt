@@ -85,7 +85,7 @@ class LostModeSetupActivity : Activity() {
             })
             addView(TextView(this@LostModeSetupActivity).apply {
                 text = "Android device owner: " +
-                    if (managedPolicy.isDeviceOwnerApp(packageName)) "AVAILABLE" else "NOT PROVISIONED — remote ON/OFF will return DEVICE_OWNER_REQUIRED"
+                    (if (managedPolicy.isDeviceOwnerApp(packageName)) "AVAILABLE" else "NOT PROVISIONED — remote ON/OFF will return DEVICE_OWNER_REQUIRED")
                 setPadding(0, 8, 0, 16)
             })
             addView(status)
