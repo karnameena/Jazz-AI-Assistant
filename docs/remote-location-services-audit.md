@@ -1,6 +1,6 @@
 # Jazz Lost Mode — Location Services remote commands
 
-**Status (2026-10-12): command implementation committed in an isolated draft branch. Backend simulated-device tests and Lost Mode frontend production build passed; Android APK and actual managed-device tests are NOT confirmed.**
+**Status (2026-10-12): command implementation committed in an isolated draft branch. Backend simulated-device tests, Lost Mode frontend production build, and Android debug APK build passed; real-device tests are NOT confirmed.**
 
 ## Source-of-truth architecture
 
@@ -31,7 +31,7 @@ Do not try to provision device-owner status on a production/personal mobile if i
 ## Tests and build status
 
 - **Passed on GitHub Actions:** Lost Mode backend Node syntax check, owner login/heartbeat/reporting/queue/result integration test including authenticated command polling, duplicates, pending-vs-confirmed, opposite-direction conflict, failed device-owner case, confirmed result, expiry, cross-account denial, unchanged RING_DEVICE command, and Vite Lost Mode web production build.
-- **Android APK:** no verified artifact yet. Existing Gradle wrapper JAR is absent in the repo. CI uses preinstalled SDK, Gradle 9.6 with AGP 9.4 and a compatibility flag for the existing generated Jazz icon; Maven dependency resolution on the runner has failed. No APK should be claimed unless an actual debug assembly succeeds.
+- **Android APK:** CI [run 38221773348](https://github.com/karnameena/Jazz-AI-Assistant/actions/runs/38221773348) succeeded using Gradle 9.6/AGP 9.4 and uploaded `jazz-android-companion-location-status-debug` (ZIP containing `app-debug.apk`). Extracted debug APK size: 5,177,814 bytes. Earlier builds had Gradle wrapper and Maven resolution problems, but this run completed successfully. Debug signing may differ from the existing user's installed APK; do not uninstall or replace the paired app blindly.
 - **Phone:** no owner-enrolled physical Android phone or ADB device was connected. The real global toggle, Android OEM behavior, and on-lock-screen delivery remain unverified.
 
 ## Building and deployment
