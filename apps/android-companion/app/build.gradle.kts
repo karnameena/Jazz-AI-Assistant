@@ -1,5 +1,3 @@
-import java.util.Base64
-
 plugins {
     id("com.android.application")
 }
@@ -22,7 +20,10 @@ android {
     }
 }
 
-val jazzIconSource = layout.projectDirectory.file("src/main/jazz-icon.base64")
+// Use the full-size, checked-in Jazz branding image. The previous
+// src/main/jazz-icon.base64 data was truncated and produced an invalid JPEG
+// that Android could not display as the launcher icon.
+val jazzIconSource = layout.projectDirectory.file("../jazz-icon.png")
 val generatedJazzIconRes = layout.buildDirectory.dir("generated/jazzIcon/res")
 val generateJazzIcon by tasks.registering {
     inputs.file(jazzIconSource)
@@ -30,8 +31,13 @@ val generateJazzIcon by tasks.registering {
     doLast {
         val drawableDir = generatedJazzIconRes.get().dir("drawable-nodpi").asFile
         drawableDir.mkdirs()
-        val encoded = jazzIconSource.asFile.readText().filterNot(Char::isWhitespace)
-        drawableDir.resolve("jazz_icon.jpg").writeBytes(Base64.getDecoder().decode(encoded))
+        val source = jazzIconSource.asFile
+        val header = source.inputStream().use { it.readNBytes(8) }
+        val pngSignature = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)
+        check(header.contentEquals(pngSignature)) { "The checked-in Jazz launcher icon must be a valid PNG." }
+        // Remove corrupt output from earlier incremental builds before copying.
+        drawableDir.resolve("jazz_icon.jpg").delete()
+        source.copyTo(drawableDir.resolve("jazz_icon.png"), overwrite = true)
     }
 }
 
