@@ -506,6 +506,17 @@ const server = http.createServer(async (req, res) => {
       const mapped = mapCommand(action, body.args || {});
       if (!mapped) return json(req, res, 400, { ok: false, error: action === "PLAY_VOICE_MESSAGE" ? "Invalid or oversized recovery voice message" : "Invalid recovery action arguments" });
 
+      if (LOCATION_COMMANDS.has(mapped.type)) {
+        expireLocationCommands(row.id);
+        if (LOCATION_WRITE_COMMANDS.has(mapped.type)) {
+          const conflict = db.prepare(`SELECT id,type FROM recovery_commands WHERE device_id=? AND status='pending' AND type IN ('location_enable','location_disable') AND type<>? LIMIT 1`)
+            .get(row.id, mapped.type);
+          if (conflict) {
+            audit(session.user_id, row.id, action, "CONFLICT");
+            return json(req, res, 409, { ok: false, error: "An opposite Location Services command is already pending. Refresh its result before changing direction." });
+          }
+        }
+      }
       const existing = existingPendingCommand(row.id, mapped);
       if (existing) {
         audit(session.user_id, row.id, action, "COALESCED");
@@ -522,6 +533,32 @@ const server = http.createServer(async (req, res) => {
         .run(id, row.id, mapped.type, JSON.stringify(mapped.args));
       audit(session.user_id, row.id, action, "QUEUED");
       return json(req, res, 202, { ok: true, commandId: id, status: "QUEUED", deduplicated: false });
+    }
+
+    // Result is read only by the authenticated owner of the enrolled device.
+    // Browser never treats HTTP 202 queue acceptance as a successful toggle.
+    const locationResultMatch = path.match(/^\/api\/devices\/(\d+)\/commands\/([a-f0-9-]{36})$/i);
+    if (req.method === "GET" && locationResultMatch) {
+      const session = requireSession(req, res); if (!session) return;
+      const row = ownerDevice(session.user_id, locationResultMatch[1]);
+      if (!row) return json(req, res, 404, { ok: false, error: "Device not found" });
+      expireLocationCommands(row.id);
+      const command = db.prepare("SELECT * FROM recovery_commands WHERE id=? AND device_id=?").get(locationResultMatch[2], row.id);
+      if (!command || !LOCATION_COMMANDS.has(command.type)) return json(req, res, 404, { ok: false, error: "Command not found" });
+      const outcome = command.result_json ? JSON.parse(command.result_json) : null;
+      const desired = command.type === "location_enable" ? "ON" : command.type === "location_disable" ? "OFF" : null;
+      const confirmed = command.status === "done" && outcome?.ok === true &&
+        (desired ? outcome.confirmed === true && outcome.locationServices === desired :
+          ["ON","OFF"].includes(outcome.locationServices));
+      const state = stateFor(row.id);
+      const status = confirmed ? "CONFIRMED" :
+        command.status === "expired" ? "EXPIRED" :
+        command.status === "done" ? "FAILED" :
+        state?.online ? "PENDING" : "DEVICE_OFFLINE";
+      return json(req, res, 200, { ok: true, commandId: command.id, status,
+        confirmed, command: command.type, result: outcome,
+        createdAt: sqliteUtcToIso(command.created_at),
+        completedAt: sqliteUtcToIso(command.completed_at) });
     }
 
     const auditMatch = path.match(/^\/api\/devices\/(\d+)\/audit$/);
