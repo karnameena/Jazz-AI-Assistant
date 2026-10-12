@@ -125,6 +125,18 @@ test("authenticated Lost Mode heartbeat reports real location toggle status with
   response=await status();
   assert.equal(response.response.device.locationServices,"OFF");
 
+  const statusQuery=await json("POST",actions,{action:"LOCATION_STATUS"},ownerHeaders);
+  assert.equal(statusQuery.status,202);
+  const queryId=statusQuery.response.commandId;
+  const query=await json("GET","/android/device/commands/next",undefined,deviceHeaders);
+  assert.equal(query.response.command.type,"location_status");
+  await json("POST","/android/device/commands/"+queryId+"/result",{
+    deviceId:"test-companion",result:{ok:true,locationServices:"OFF",timestamp:Date.now()}
+  },deviceHeaders);
+  const queryResult=await json("GET","/api/devices/"+id+"/commands/"+queryId,undefined,ownerHeaders);
+  assert.equal(queryResult.response.status,"CONFIRMED");
+  assert.equal(queryResult.response.result.locationServices,"OFF");
+
   const stale=await json("POST",actions,{action:"LOCATION_ENABLE"},ownerHeaders);
   assert.equal(stale.status,202);
   const expiredId=stale.response.commandId;
