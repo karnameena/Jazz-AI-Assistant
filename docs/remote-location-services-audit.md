@@ -9,7 +9,7 @@
 - `.../DeviceLocationManager.kt`: existing fused position acquisition, fallback and history.
 - `.../RecoverySecurityManager.kt`: **separate** recovery relay credential flow; do not confuse with Lost Mode credential flow.
 - `.../lostmode/LostModeSetupActivity.kt`: owner-facing HTTPS enrollment settings; appropriate place for explicit local opt-in.
-- `.../lostmode/LostModeSecurityManager.kt`, `LostModeNetworkClient.kt`: dedicated Lost Mode credentials/transport; inspect and preserve before any implementation.
+- `.../lostmode/LostModeSecurityManager.kt`, `LostModeNetworkClient.kt`: dedicated Lost Mode credentials/transport. **Verified:** `LostModeNetworkClient.syncOnce()` checks a second client-side allowlist (`device_status`, `device_location`, `ring_device`, `recovery_photo`, `set_recovery_mode`, `play_voice_message`) and delegates allowed operations to `RecoveryCommandExecutor`. Any future command must be included in that allowlist, without weakening the existing list.
 - `apps/android-companion/app/src/main/AndroidManifest.xml`: location runtime permissions exist; WRITE_SECURE_SETTINGS is **not** currently declared.
 - `apps/android-companion/app/build.gradle.kts`: `applicationId=com.gunakarna.jazzassistant`, min SDK 26, compile/target SDK 34.
 - `services/lost-mode-server/src/server.mjs`: **actual authenticated** Lost Mode website API, owner/device authorization, command allowlist, device queue and audit.
