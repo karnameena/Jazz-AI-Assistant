@@ -1,0 +1,46 @@
+name: Jazz ADB Location Build (isolated)
+on:
+  push:
+    branches:
+      - feature/jazz-adb-location-build-20261013
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out review branch
+        uses: actions/checkout@v4
+      - name: Configure Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Check Android SDK 34
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          test -d "$ANDROID_HOME/platforms/android-34"
+      - name: Configure Gradle without broken wrapper
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.6.0'
+      - name: Build the opt-in Jazz debug APK
+        working-directory: apps/android-companion
+        run: gradle :app:assembleDebug --no-daemon -Pandroid.sourceset.disallowProvider=false
+      - name: Confirm build output and manifest permission
+        run: |
+          test -s apps/android-companion/app/build/outputs/apk/debug/app-debug.apk
+          grep -q 'android.permission.WRITE_SECURE_SETTINGS' apps/android-companion/app/src/main/AndroidManifest.xml
+          grep -q 'hasSecureSettingsPermission' apps/android-companion/app/src/main/java/com/gunakarna/jazzassistant/recovery/OwnerLocationController.kt
+          echo 'APK built; special permission declared; no APK was installed anywhere.'
+      - name: Upload APK for owner review
+        uses: actions/upload-artifact@v4
+        with:
+          name: Jazz-Android-ADB-Location-debug-unsigned-for-existing-install
+          path: apps/android-companion/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
