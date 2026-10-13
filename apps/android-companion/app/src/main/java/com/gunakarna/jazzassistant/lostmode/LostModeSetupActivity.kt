@@ -70,7 +70,7 @@ class LostModeSetupActivity : Activity() {
                 }
             })
             addView(TextView(this@LostModeSetupActivity).apply {
-                text = "Optional: remote global Location Services control (Android Enterprise device-owner only). " +
+                text = "Optional: remote global Location Services control (Android Enterprise device-owner or manually ADB-granted WRITE_SECURE_SETTINGS). " +
                     "This may change the phone's global Location switch while locked. It never bypasses Android permissions; " +
                     "it is not enabled automatically. Only enable on a phone you enrolled and manage."
                 setPadding(0, 18, 0, 8)
@@ -80,13 +80,18 @@ class LostModeSetupActivity : Activity() {
                 isChecked = locationControl.ownerOptedIn()
                 setOnCheckedChangeListener { _, checked ->
                     locationControl.setOwnerOptIn(checked)
-                    status.text = if (checked) "Opt-in saved locally. Device-owner authorization is also required." else "Remote global Location Services control disabled locally."
+                    status.text = if (checked) "Opt-in saved locally. Remote ON/OFF also requires device-owner or secure-settings authorization." else "Remote global Location Services control disabled locally."
                 }
             })
             addView(TextView(this@LostModeSetupActivity).apply {
                 text = "Android device owner: " +
                     (if (managedPolicy.isDeviceOwnerApp(packageName)) "AVAILABLE" else "NOT PROVISIONED — remote ON/OFF will return DEVICE_OWNER_REQUIRED")
                 setPadding(0, 8, 0, 16)
+            })
+            addView(TextView(this@LostModeSetupActivity).apply {
+                text = "ADB secure settings: " +
+                    (if (locationControl.hasSecureSettingsPermission()) "GRANTED" else "NOT GRANTED")
+                setPadding(0, 0, 0, 8)
             })
             addView(status)
         }
