@@ -104,7 +104,13 @@ class RecoveryNetworkClient(private val context: Context) {
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = method
             connectTimeout = 8_000
-            readTimeout = 25_000
+            // Camera startup plus private-object upload can exceed the normal
+            // heartbeat timeout. The server lease is extended for photo commands.
+            readTimeout = if (
+                method == "POST" &&
+                path.startsWith("/android/device/commands/") &&
+                path.endsWith("/result")
+            ) 60_000 else 25_000
             doInput = true
             useCaches = false
             setRequestProperty("Accept", "application/json")
