@@ -4,13 +4,13 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.Bundle
-import android.view.Gravity
 import android.view.WindowManager
-import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
+import androidx.camera.core.Preview
+import androidx.camera.view.PreviewView
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import java.io.File
@@ -18,13 +18,14 @@ import java.io.FileOutputStream
 import java.util.concurrent.Executors
 
 class RecoveryCaptureActivity : ComponentActivity() {
+    private lateinit var previewView: PreviewView
     private val processingExecutor = Executors.newSingleThreadExecutor()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Keep the owner-authorized capture visibly indicated. The screen does not
-        // unlock the phone or bypass Android camera permission / OS restrictions.
+        // Keep the actual camera preview visible during owner-authorized recovery.
+        // This does not unlock the phone or bypass Android camera permission / OS restrictions.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
@@ -37,17 +38,11 @@ class RecoveryCaptureActivity : ComponentActivity() {
         }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-        val camera = intent.getStringExtra("camera") ?: "front"
-        val cameraLabel = if (camera == "rear") "Back" else "Front"
-        setContentView(TextView(this).apply {
-            text = "Jazz Recovery\n\nCapturing photo with the $cameraLabel camera…"
-            textSize = 18f
-            gravity = Gravity.CENTER
-            setPadding(28, 28, 28, 28)
-            setTextColor(android.graphics.Color.WHITE)
-            setBackgroundColor(android.graphics.Color.rgb(10, 15, 32))
-        })
-        startCapture(camera)
+        previewView = PreviewView(this).apply {
+            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+        }
+        setContentView(previewView)
+        startCapture(intent.getStringExtra("camera") ?: "front")
     }
 
     private fun startCapture(camera: String) {
@@ -56,16 +51,13 @@ class RecoveryCaptureActivity : ComponentActivity() {
             try {
                 val provider = providerFuture.get()
                 val selector = if (camera == "rear") CameraSelector.DEFAULT_BACK_CAMERA else CameraSelector.DEFAULT_FRONT_CAMERA
+                val preview = Preview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
                 val imageCapture = ImageCapture.Builder()
                     .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
                     .setJpegQuality(78)
                     .build()
-
-                // A remote recovery still photo does not need a live preview stream.
-                // Binding only ImageCapture reduces camera startup work and avoids
-                // waiting for a PreviewView surface before taking the requested photo.
                 provider.unbindAll()
-                provider.bindToLifecycle(this, selector, imageCapture)
+                provider.bindToLifecycle(this, selector, preview, imageCapture)
 
                 val dir = File(filesDir, "recovery-photos").apply { mkdirs() }
                 val file = File(dir, "recovery-${camera}-${System.currentTimeMillis()}.jpg")
@@ -75,6 +67,8 @@ class RecoveryCaptureActivity : ComponentActivity() {
                     ContextCompat.getMainExecutor(this),
                     object : ImageCapture.OnImageSavedCallback {
                         override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
+                            // Large-image decode/resize/write is kept off the main thread
+                            // so camera callbacks and the visible capture UI remain responsive.
                             processingExecutor.execute {
                                 try {
                                     compressIfNeeded(file)
