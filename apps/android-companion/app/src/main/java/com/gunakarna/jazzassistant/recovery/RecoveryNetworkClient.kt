@@ -68,7 +68,21 @@ class RecoveryNetworkClient(private val context: Context) {
                 return@retryNetwork JSONObject().put("ok", false).put("status", "INVALID_COMMAND")
             }
 
+            val commandStartedAt = System.currentTimeMillis()
+            val isPhoto = typeIsPhoto(command)
+            if (isPhoto) {
+                Log.i(
+                    "JazzRecoveryPhoto",
+                    "command_received commandId=$commandId camera=${command.optJSONObject("args")?.optString("camera", "front") ?: "front"}"
+                )
+            }
             val result = executor.execute(command)
+            if (isPhoto) {
+                Log.i(
+                    "JazzRecoveryPhoto",
+                    "capture_completed commandId=$commandId ok=${result.optBoolean("ok")} durationMs=${System.currentTimeMillis() - commandStartedAt}"
+                )
+            }
             val resultBody = JSONObject()
                 .put("deviceId", security.deviceId())
                 .put("result", result)
