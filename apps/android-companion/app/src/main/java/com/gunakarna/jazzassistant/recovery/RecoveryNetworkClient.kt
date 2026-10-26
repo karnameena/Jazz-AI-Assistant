@@ -123,12 +123,18 @@ class RecoveryNetworkClient(private val context: Context) {
             stream.write(bytes)
             stream.fd.sync()
         }
-        if (target.exists() && !target.delete()) {
+        if (target.exists()) {
+            // Preserve the first durable payload for this command. A repeated
+            // command result must not overwrite a photo already queued for upload.
             temporary.delete()
-            throw IllegalStateException("Could not replace pending recovery photo upload.")
+            Log.w("JazzRecoveryPhoto", "duplicate_photo_payload_preserved commandId=$commandId")
+            return
         }
         if (!temporary.renameTo(target)) {
+            // Another sync worker may have persisted the same command concurrently.
+            // Keep its file if present; otherwise surface the filesystem failure.
             temporary.delete()
+            if (target.exists()) return
             throw IllegalStateException("Could not save pending recovery photo upload.")
         }
         Log.i("JazzRecoveryPhoto", "photo_upload_queued commandId=$commandId bytes=${bytes.size}")
