@@ -127,7 +127,8 @@ class RecoveryNetworkClient(private val context: Context) {
         val body = JSONObject(file.readText(StandardCharsets.UTF_8))
         val payloadBytes = file.length()
         val acknowledgement = request("POST", "/android/device/commands/$commandId/result", body)
-        val saved = acknowledgement.optBoolean("photoAvailable") || acknowledgement.optBoolean("deduplicated")
+        val saved = acknowledgement.optBoolean("photoAvailable") ||
+            (acknowledgement.optBoolean("deduplicated") && !acknowledgement.has("photoAvailable"))
         // A successful HTTP response with photoAvailable=false is an explicit
         // backend rejection/failure, not a successful upload. It is terminal for
         // this command (the dashboard will report FAILED), so don't retry it forever.
