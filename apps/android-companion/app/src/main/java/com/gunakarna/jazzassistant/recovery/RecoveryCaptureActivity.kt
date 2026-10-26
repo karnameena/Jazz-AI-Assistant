@@ -10,22 +10,21 @@ import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
-import androidx.camera.view.PreviewView
 import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import java.io.File
 import java.io.FileOutputStream
-import java.util.concurrent.Executors
 
 class RecoveryCaptureActivity : ComponentActivity() {
     private lateinit var previewView: PreviewView
-    private val processingExecutor = Executors.newSingleThreadExecutor()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Keep the actual camera preview visible during owner-authorized recovery.
-        // This does not unlock the phone or bypass Android camera permission / OS restrictions.
+        // Recovery capture may be requested while the device is locked. This does not
+        // unlock the phone; it only permits this owner-authorized activity to appear
+        // over the keyguard when the OS/OEM allows it.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
@@ -67,18 +66,9 @@ class RecoveryCaptureActivity : ComponentActivity() {
                     ContextCompat.getMainExecutor(this),
                     object : ImageCapture.OnImageSavedCallback {
                         override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
-                            // Large-image decode/resize/write is kept off the main thread
-                            // so camera callbacks and the visible capture UI remain responsive.
-                            processingExecutor.execute {
-                                try {
-                                    compressIfNeeded(file)
-                                    RecoveryCameraManager.completeCapture(file, camera)
-                                } catch (e: Exception) {
-                                    RecoveryCameraManager.completeCapture(null, camera, e.message)
-                                } finally {
-                                    runOnUiThread { finishAndRemoveTask() }
-                                }
-                            }
+                            compressIfNeeded(file)
+                            RecoveryCameraManager.completeCapture(file, camera)
+                            finishAndRemoveTask()
                         }
 
                         override fun onError(exception: ImageCaptureException) {
@@ -96,7 +86,6 @@ class RecoveryCaptureActivity : ComponentActivity() {
 
     override fun onDestroy() {
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        processingExecutor.shutdownNow()
         super.onDestroy()
     }
 
