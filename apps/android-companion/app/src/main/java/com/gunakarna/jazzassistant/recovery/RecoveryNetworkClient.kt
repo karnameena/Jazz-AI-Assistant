@@ -88,7 +88,13 @@ class RecoveryNetworkClient(private val context: Context) {
                 .put("result", result)
             if (typeIsPhoto(command) && result.optBoolean("ok") && result.has("imageBase64")) {
                 persistPendingPhotoResult(commandId, resultBody)
-                flushPendingPhotoResult(commandId, File(pendingPhotoDirectory(), "$commandId.json"))
+                try {
+                    flushPendingPhotoResult(commandId, File(pendingPhotoDirectory(), "$commandId.json"))
+                } catch (e: Exception) {
+                    // The durable local queue owns the retry now. Do not rerun the
+                    // camera command or block unrelated recovery commands on storage.
+                    Log.w("JazzRecoveryPhoto", "photo_upload_pending_retry commandId=$commandId reason=${e.javaClass.simpleName}")
+                }
             } else {
                 request("POST", "/android/device/commands/$commandId/result", resultBody)
             }
@@ -133,7 +139,17 @@ class RecoveryNetworkClient(private val context: Context) {
         directory.listFiles()
             ?.filter { it.isFile && it.name.matches(Regex("^[a-fA-F0-9-]{36}\\.json$")) }
             ?.sortedBy { it.lastModified() }
-            ?.forEach { file -> flushPendingPhotoResult(file.nameWithoutExtension, file) }
+            ?.forEach { file ->
+                try {
+                    flushPendingPhotoResult(file.nameWithoutExtension, file)
+                } catch (e: Exception) {
+                    // Keep this private queue file and continue with other commands.
+                    Log.w(
+                        "JazzRecoveryPhoto",
+                        "photo_upload_retry_pending commandId=${file.nameWithoutExtension} reason=${e.javaClass.simpleName}"
+                    )
+                }
+            }
     }
 
     private fun flushPendingPhotoResult(commandId: String, file: File) {
