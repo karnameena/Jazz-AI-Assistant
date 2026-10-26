@@ -1,6 +1,7 @@
 package com.gunakarna.jazzassistant.recovery
 
 import android.content.Context
+import android.util.Log
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -9,6 +10,8 @@ import java.net.SocketTimeoutException
 import java.net.URL
 import java.net.UnknownHostException
 import java.nio.charset.StandardCharsets
+import java.io.File
+import java.io.FileOutputStream
 
 class RecoveryNetworkClient(private val context: Context) {
     private val security = RecoverySecurityManager(context)
@@ -44,6 +47,12 @@ class RecoveryNetworkClient(private val context: Context) {
             locationManager.cachedLocation()?.let { heartbeat.put("lastKnownLocation", it) }
             request("POST", "/android/device/heartbeat", heartbeat)
 
+            // Retry already-captured photos before asking for another command.
+            // The payload is persisted in app-private storage before network I/O,
+            // so a transient server/network failure or process restart does not
+            // force another camera capture or discard the image bytes.
+            flushPendingPhotoResults()
+
             val next = request(
                 "GET",
                 "/android/device/commands/next?deviceId=${encode(security.deviceId())}",
@@ -63,13 +72,74 @@ class RecoveryNetworkClient(private val context: Context) {
             val resultBody = JSONObject()
                 .put("deviceId", security.deviceId())
                 .put("result", result)
-            request("POST", "/android/device/commands/$commandId/result", resultBody)
+            if (typeIsPhoto(command) && result.optBoolean("ok") && result.has("imageBase64")) {
+                persistPendingPhotoResult(commandId, resultBody)
+                flushPendingPhotoResult(commandId, File(pendingPhotoDirectory(), "$commandId.json"))
+            } else {
+                request("POST", "/android/device/commands/$commandId/result", resultBody)
+            }
             JSONObject()
                 .put("ok", true)
                 .put("status", "COMMAND_EXECUTED")
                 .put("network", deviceStatus.optString("network", "UNKNOWN"))
                 .put("commandId", commandId)
                 .put("result", result)
+        }
+    }
+
+    private fun typeIsPhoto(command: JSONObject): Boolean =
+        command.optString("type") == "recovery_photo"
+
+    private fun pendingPhotoDirectory(): File =
+        File(context.filesDir, "recovery-photo-pending").apply { mkdirs() }
+
+    private fun persistPendingPhotoResult(commandId: String, body: JSONObject) {
+        require(commandId.matches(Regex("^[a-fA-F0-9-]{36}$"))) { "Invalid recovery command ID." }
+        val directory = pendingPhotoDirectory()
+        val target = File(directory, "$commandId.json")
+        val temporary = File(directory, ".$commandId.tmp")
+        val bytes = body.toString().toByteArray(StandardCharsets.UTF_8)
+        FileOutputStream(temporary).use { stream ->
+            stream.write(bytes)
+            stream.fd.sync()
+        }
+        if (target.exists() && !target.delete()) {
+            temporary.delete()
+            throw IllegalStateException("Could not replace pending recovery photo upload.")
+        }
+        if (!temporary.renameTo(target)) {
+            temporary.delete()
+            throw IllegalStateException("Could not save pending recovery photo upload.")
+        }
+        Log.i("JazzRecoveryPhoto", "photo_upload_queued commandId=$commandId bytes=${bytes.size}")
+    }
+
+    private fun flushPendingPhotoResults() {
+        val directory = pendingPhotoDirectory()
+        directory.listFiles()
+            ?.filter { it.isFile && it.name.matches(Regex("^[a-fA-F0-9-]{36}\\.json$")) }
+            ?.sortedBy { it.lastModified() }
+            ?.forEach { file -> flushPendingPhotoResult(file.nameWithoutExtension, file) }
+    }
+
+    private fun flushPendingPhotoResult(commandId: String, file: File) {
+        val startedAt = System.currentTimeMillis()
+        val body = JSONObject(file.readText(StandardCharsets.UTF_8))
+        val payloadBytes = file.length()
+        val acknowledgement = request("POST", "/android/device/commands/$commandId/result", body)
+        val saved = acknowledgement.optBoolean("photoAvailable") || acknowledgement.optBoolean("deduplicated")
+        // A successful HTTP response with photoAvailable=false is an explicit
+        // backend rejection/failure, not a successful upload. It is terminal for
+        // this command (the dashboard will report FAILED), so don't retry it forever.
+        if (file.exists() && !file.delete()) {
+            Log.w("JazzRecoveryPhoto", "photo_upload_acknowledged_but_queue_cleanup_failed commandId=$commandId")
+        }
+        Log.i(
+            "JazzRecoveryPhoto",
+            "photo_upload_acknowledged commandId=$commandId saved=$saved payloadBytes=$payloadBytes durationMs=${System.currentTimeMillis() - startedAt}"
+        )
+        if (!saved) {
+            Log.e("JazzRecoveryPhoto", "photo_upload_not_persisted commandId=$commandId")
         }
     }
 
