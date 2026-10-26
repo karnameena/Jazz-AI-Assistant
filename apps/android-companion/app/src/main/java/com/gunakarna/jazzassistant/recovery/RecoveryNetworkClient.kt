@@ -14,6 +14,13 @@ import java.io.File
 import java.io.FileOutputStream
 
 class RecoveryNetworkClient(private val context: Context) {
+    companion object {
+        // Service scheduler and WorkManager can overlap. Serialize syncs across
+        // client instances so two camera commands cannot overwrite the singleton
+        // capture latch or process different results out of order.
+        private val syncLock = Any()
+    }
+
     private val security = RecoverySecurityManager(context)
     private val statusManager = DeviceStatusManager(context)
     private val locationManager = DeviceLocationManager(context)
@@ -22,7 +29,11 @@ class RecoveryNetworkClient(private val context: Context) {
 
     fun isConfigured(): Boolean = security.serverUrl().isNotBlank()
 
-    fun syncOnce(): JSONObject {
+    fun syncOnce(): JSONObject = synchronized(syncLock) {
+        syncOnceLocked()
+    }
+
+    private fun syncOnceLocked(): JSONObject {
         if (!isConfigured()) {
             return JSONObject()
                 .put("ok", false)
